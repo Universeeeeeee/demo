@@ -1,0 +1,6 @@
+qtpy
+dayu_widgets
+numpy
+pyqtgraph
+PyQt5
+opencv-python

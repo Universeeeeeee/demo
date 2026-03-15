@@ -1,0 +1,14 @@
+{
+    "rows": 1,
+    "cols": 96,
+    "spacing_cm": 1.04,
+    "debounce_ms": 12.0,
+    "smooth_window_ms": 20.0,
+    "touch_ratio_threshold": 0.30,
+    "lift_ratio_threshold": 0.12,
+    "min_event_interval_ms": 80.0,
+    "confirm_samples": 2,
+    "min_contact_duration_ms": 120.0,
+    "min_flight_duration_ms": 100.0,
+    "min_cycle_interval_ms": 280.0
+}
