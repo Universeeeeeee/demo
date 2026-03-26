@@ -12,6 +12,8 @@ import importlib
 import os
 import time
 
+from openpyxl import Workbook
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QThread, Qt
 from qtpy.QtGui import QTextCursor, QTextBlockFormat
@@ -21,17 +23,22 @@ from dayu_widgets.text_edit import MTextEdit
 from dayu_widgets import dayu_theme
 from dayu_widgets.qt import application
 
-# 直接从 start_test.py 导入 UsbWorker
+# 导入 UsbWorker 和检测器
 try:
-    from .start_test import UsbWorker
+    from .usb_worker import UsbWorker
     from .single_leg_hop_npz_parser import SingleFootDetector, LedFrame, FootEvent
     from .gait_npz_parser import ClusterTracker, extract_clusters, LedFrame as GaitLedFrame
     from .camera import Camera
+    from .extra_parameter import compute_extra_parameters
 except ImportError:
-    from start_test import UsbWorker
+    from usb_worker import UsbWorker
     from single_leg_hop_npz_parser import SingleFootDetector, LedFrame, FootEvent
     from gait_npz_parser import ClusterTracker, extract_clusters, LedFrame as GaitLedFrame
     from camera import Camera
+    try:
+        from extra_parameter import compute_extra_parameters
+    except ImportError:
+        def compute_extra_parameters(*args, **kwargs): return {}
 
 # pyqtgraph 可选导入
 try:
@@ -48,6 +55,33 @@ except Exception:
 
 G = 9.81  # 重力加速度
 
+
+from dataclasses import dataclass, field
+from typing import Optional, List
+
+@dataclass
+class ContactState:
+    contact_id: int
+    track_id: Optional[int] = None
+    status: str = "candidate"  # candidate | confirmed | lost | lifted
+    first_seen_time: float = 0.0
+    last_seen_time: float = 0.0
+    touch_time: Optional[float] = None
+    lift_time: Optional[float] = None
+    seen_count: int = 0
+    miss_count: int = 0
+    centroid_at_touch: Optional[float] = None
+    latest_centroid: Optional[float] = None
+    centroid_history: List[float] = field(default_factory=list)
+    cluster_length_at_touch: Optional[float] = None
+    latest_cluster_length: Optional[float] = None
+    foot_label: Optional[str] = None   # "A" / "B" / None
+    label_confidence: float = 0.0
+    step_length: Optional[float] = None
+    stride_time: Optional[float] = None
+    velocity: Optional[float] = None
+    contact_duration: Optional[float] = None
+    matched_this_frame: bool = False
 
 class RealTimeGaitWidget(QtWidgets.QWidget):
     """
@@ -83,12 +117,36 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         self.contact_times = []
         
         # 步态分析专用数据
-        self.stride_lengths = []  # 步幅 (cm)
+        self.stride_lengths = []  # 步长 (cm)
         self.velocities = []  # 步速 (cm/s)
-        self._current_foot = "A"  # 交替 A/B
         self._foot_a_support_times = []  # Foot A 支撑时间
         self._foot_b_support_times = []  # Foot B 支撑时间
-        self._foot_touch_time = {"A": None, "B": None}  # 各脚触地时间
+        self._foot_history = {"A": {}, "B": {}}  # 各脚历史数据
+        self._prev_cycle_data = {}  # 上一周期数据
+        self._latest_extra_metrics = {}  # 最新的额外指标
+        self._extra_metrics_history = [] # 历史额外指标
+
+        # 触地驱动的高阶代理指标（仅用于结束汇总，不实时显示）
+        self._touch_extra_history = []
+        self._last_touch_velocity_for_acc = None
+        self._last_touch_time_for_acc = None
+        
+        # 新版 Contact-Based Tracker 数据
+        self._gait_armed = False
+        self._no_contact_stable_frames = 0
+        self._arm_frames = 10
+        self._foot_lift_time = {"A": None, "B": None}
+        
+        self._next_contact_id = 1
+        self._active_contacts = {}       # contact_id -> ContactState
+        self._completed_contacts = []    # list[ContactState]
+        self._last_confirmed_touch_time = 0.0
+        self._last_confirmed_touch_centroid = None
+        self._foot_contact_queue = []    # 保存已确认、未离地的 contact_id，按 touch_time 排序
+        
+        self._contact_confirm_frames = 8      # 连续观测帧数确认触地（降敏：5 -> 8）
+        self._contact_lift_miss_frames = 10   # 连续丢失帧数确认离地（降敏：5 -> 10）
+        self._min_step_interval = 0.5         # 最小步态间隔限制（降敏：0.3 -> 0.5）
         
         # ===== 性能优化: UI 节流 =====
         self._last_ui_update = 0.0  # 上次 UI 更新时间
@@ -137,6 +195,10 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         
         # 时间基准
         self._start_time = None
+
+        # ---- 数据导出缓存 ----
+        self._export_frames = []       # list of list[int], 每帧 96 位
+        self._export_timestamps = []   # list of float, 相对时间戳
 
         self._init_ui()
         self._apply_global_style()
@@ -331,7 +393,7 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
                 self.plot_widget_cadence.setLabel('bottom', '跳跃次数')
         else:
             if _PG_AVAILABLE:
-                self.plot_widget.setLabel('left', '步幅 (cm)')
+                self.plot_widget.setLabel('left', '步长 (cm)')
                 self.plot_widget.setLabel('bottom', '步数')
                 self.plot_widget_cadence.setLabel('left', '步速 (cm/s)')
                 self.plot_widget_cadence.setLabel('bottom', '步数')
@@ -350,19 +412,33 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         self.air_times = []
         self.contact_times = []
         # 步态分析专用数据重置
-        self.stride_lengths = []
-        self.velocities = []
-        self._current_foot = "A"
-        self._foot_a_support_times = []
-        self._foot_b_support_times = []
-        self._foot_touch_time = {"A": None, "B": None}
-        # ClusterTracker 状态重置（含去抖）
-        self._prev_cluster_count = 0
-        self._confirmed_cluster_count = 0
-        self._touch_streak = 0
-        self._lift_streak = 0
-        self._pending_clusters = []
-        self._last_valid_step_time = 0.0
+        self.stride_lengths.clear()
+        self.velocities.clear()
+        self._foot_a_support_times.clear()
+        self._foot_b_support_times.clear()
+        self._foot_history = {"A": {}, "B": {}}
+        self._prev_cycle_data = {}
+        self._latest_extra_metrics = {}
+        self._extra_metrics_history.clear()
+
+        # 重置触地驱动高阶代理指标
+        self._touch_extra_history.clear()
+        self._last_touch_velocity_for_acc = None
+        self._last_touch_time_for_acc = None
+        
+        # 重置 Contact-Based Tracker 状态
+        self._gait_armed = False
+        self._no_contact_stable_frames = 0
+        self._arm_frames = 10
+        self._foot_lift_time = {"A": None, "B": None}
+        
+        self._next_contact_id = 1
+        self._active_contacts.clear()
+        self._completed_contacts.clear()
+        self._foot_contact_queue.clear()
+        self._last_confirmed_touch_time = 0.0
+        self._last_confirmed_touch_centroid = None
+        self._prev_touch_time_for_step = 0.0
         
         # ===== 性能优化: 重置 UI 节流状态 =====
         self._last_ui_update = 0.0
@@ -409,6 +485,10 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         # 重置状态
         self._reset_analysis_state()
         self._start_time = time.perf_counter()
+
+        # 重置导出缓存
+        self._export_frames.clear()
+        self._export_timestamps.clear()
         
         # 根据模式初始化检测器/追踪器
         if self.current_mode == "纵跳":
@@ -470,7 +550,7 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         实时处理 LED 帧
         
         纵跳模式: 使用 SingleFootDetector.consume()
-        步态分析模式: 使用 ClusterTracker.update() 进行多簇追踪
+        步态分析模式: 使用 ClusterTracker 进行多簇追踪
         
         重要: USB 位图语义需要反转以匹配 NPZ 解析器:
         - USB 原始: 1 = LED 亮 (未遮挡)
@@ -486,6 +566,10 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         # 计算当前帧的时间戳
         current_time = time.perf_counter()
         timestamp = current_time - self._start_time if self._start_time else 0
+
+        # 记录到导出缓存（保存原始 bits，即反转后的）
+        self._export_frames.append(list(bits))
+        self._export_timestamps.append(timestamp)
         
         if self.current_mode == "纵跳":
             # 纵跳模式: 使用 SingleFootDetector
@@ -527,165 +611,276 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
             self.last_lift_time = ev.time
         self._update_display(ev)
 
-    def _process_gait_event(self, ev: FootEvent):
-        """
-        处理步态事件 - 增强版，跟踪 Foot A/B 和支撑时间
-        """
-        if ev.kind.lower() == "touch":
-            self.touch_count += 1
-            
-            # 交替脚标识
-            if self.touch_count % 2 == 1:
-                self._current_foot = "A"
-            else:
-                self._current_foot = "B"
-            
-            # 记录该脚触地时间
-            self._foot_touch_time[self._current_foot] = ev.time
-            
-            # 计算步长和步速
-            if self.last_touch_time is not None and self._last_strike_centroid is not None:
-                step_length = abs(ev.centroid_cm - self._last_strike_centroid) if ev.centroid_cm else 0
-                step_time = ev.time - self.last_touch_time
-                velocity = step_length / step_time if step_time > 0 else 0
-                
-                if step_length > 0:
-                    self.stride_lengths.append(step_length)
-                    self.velocities.append(velocity)
-                    self._update_charts(step_length, velocity, None)
-            
-            self.last_touch_time = ev.time
-            self._last_strike_centroid = ev.centroid_cm
-            
-        elif ev.kind.lower() == "lift":
-            self.lift_count += 1
-            
-            # 修复：直接使用当前脚 (self._current_foot) 计算支撑时间
-            # 支撑时间 = 同一只脚从触地到离地的时间间隔
-            target_foot = self._current_foot
-            touch_time = self._foot_touch_time.get(target_foot)
-            
-            if touch_time is not None:
-                support_time = ev.time - touch_time
-                if support_time > 0:
-                    if target_foot == "A":
-                        self._foot_a_support_times.append(support_time)
-                    else:
-                        self._foot_b_support_times.append(support_time)
-            
-        self._update_display(ev)
-
     def _process_gait_clusters(self, timestamp: float, clusters: list):
         """
-        基于 ClusterTracker 的实时步态分析（带去抖）。
-        
-        使用 confirm_samples 机制：簇数量变化需要持续 N 帧才确认为有效事件。
-        - 簇数量增加 → 新的触地事件（需确认）
-        - 簇数量减少 → 离地事件（需确认）
+        基于 ContactState (对象跟踪) 的步态事件机。
+        完全淘汰原先按“屏幕簇总数变动”即刻切脚的脆弱逻辑，改为对独立生命周期的脚印进行 `touch->lift` 闭环管理。
         """
-        # 去抖参数
-        CONFIRM_SAMPLES = 30  # 30帧 @ 1000Hz = 30ms 防抖
-        MIN_STEP_INTERVAL = 0.3  # 最小步态间隔 300ms
-        
-        # 获取当前活跃簇数量
-        active_count = len(clusters)
-        
-        # 初始化状态（如果还没有）
-        if not hasattr(self, '_prev_cluster_count'):
-            self._prev_cluster_count = 0
-            self._confirmed_cluster_count = 0  # 已确认的簇数量
-            self._touch_streak = 0  # 触地确认计数
-            self._lift_streak = 0   # 离地确认计数
-            self._pending_clusters = []  # 待确认的簇列表
-            self._last_valid_step_time = 0.0 # 上次有效步态时间
-        
-        # 检测簇数量变化趋势
-        if active_count > self._confirmed_cluster_count:
-            # 簇数量增加趋势 → 可能是触地
-            self._touch_streak += 1
-            self._lift_streak = max(0, self._lift_streak - 1)
-            self._pending_clusters = clusters  # 保存待确认的簇
-            
-            if self._touch_streak >= CONFIRM_SAMPLES:
-                # [新增] 最小时间间隔检查
-                if timestamp - self._last_valid_step_time < MIN_STEP_INTERVAL:
-                    # 冷却时间内，视为抖动/分裂，更新状态以同步物理现实，但不计步
-                    self._confirmed_cluster_count = active_count
-                    self._touch_streak = 0
-                    return 
+        # Step 1. 获取最新跟踪器识别的所有轨迹视图
+        active_tracks = getattr(self.gait_tracker, 'get_active_tracks_view', lambda: [])()
 
-                self._last_valid_step_time = timestamp
-                # 确认触地事件
-                self._confirmed_cluster_count = active_count
-                self._touch_streak = 0
-                
-                # 处理新增的簇
-                for cluster in self._pending_clusters:
-                    self.touch_count += 1
-                    
-                    # 交替脚标识
-                    self._current_foot = "A" if self.touch_count % 2 == 1 else "B"
-                    
-                    # 记录触地时间
-                    self._foot_touch_time[self._current_foot] = timestamp
-                    
-                    # 计算步幅和步速
-                    if self.last_touch_time is not None and self._last_strike_centroid is not None:
-                        step_length = abs(cluster.centroid_cm - self._last_strike_centroid)
-                        step_time = timestamp - self.last_touch_time
-                        velocity = step_length / step_time if step_time > 0 else 0
-                        
-                        if step_length > 0:
-                            self.stride_lengths.append(step_length)
-                            self.velocities.append(velocity)
-                            # 性能优化: 增量累加
-                            self._stride_sum += step_length
-                            self._stride_count += 1
-                            self._velocity_sum += velocity
-                            self._velocity_count += 1
-                            self._update_charts(step_length, velocity, None)
-                    
-                    self.last_touch_time = timestamp
-                    self._last_strike_centroid = cluster.centroid_cm
-                    break  # 只处理第一个新增的簇
-                    
-        elif active_count < self._confirmed_cluster_count:
-            # 簇数量减少趋势 → 可能是离地
-            self._lift_streak += 1
-            self._touch_streak = max(0, self._touch_streak - 1)
-            
-            if self._lift_streak >= CONFIRM_SAMPLES:
-                # 确认离地事件
-                self._confirmed_cluster_count = active_count
-                self._lift_streak = 0
-                self.lift_count += 1
-                
-                # 计算支撑时间
-                target_foot = self._current_foot
-                touch_time = self._foot_touch_time.get(target_foot)
-                
-                if touch_time is not None:
-                    support_time = timestamp - touch_time
-                    if support_time > 0:
-                        if target_foot == "A":
-                            self._foot_a_support_times.append(support_time)
-                            self._foot_a_support_sum += support_time  # 性能优化: 增量累加
-                        else:
-                            self._foot_b_support_times.append(support_time)
-                            self._foot_b_support_sum += support_time  # 性能优化: 增量累加
+        # [补丁1] Armed 机制：系统需要经历一段无接触期才算准备就绪
+        if not active_tracks:
+            self._no_contact_stable_frames += 1
         else:
-            # 簇数量稳定，重置计数
-            self._touch_streak = max(0, self._touch_streak - 1)
-            self._lift_streak = max(0, self._lift_streak - 1)
-        
-        # 更新上一帧状态
-        self._prev_cluster_count = active_count
-        
-        # ===== 性能优化: UI 节流 (10Hz) =====
+            self._no_contact_stable_frames = 0
+            
+        if self._no_contact_stable_frames >= self._arm_frames:
+            self._gait_armed = True
+
+        # Step 2. 先将所有已记录的 contact 标记为本帧未匹配
+        for c in self._active_contacts.values():
+            c.matched_this_frame = False
+
+        # Step 3. 用 track_id 优先匹配 contact
+        for track in active_tracks:
+            contact = self._find_or_create_contact_from_track(track, timestamp)
+            self._update_contact_seen(contact, track, timestamp)
+
+        # Step 4. 对本帧未匹配到的 active contact 增加 miss_count
+        for contact in self._active_contacts.values():
+            if not contact.matched_this_frame and contact.status in ("candidate", "confirmed"):
+                contact.miss_count += 1
+
+        # Step 5. candidate -> confirmed（持续存在，触发 touch 事件）
+        self._confirm_new_contacts(timestamp)
+
+        # Step 6. confirmed/candidate -> lifted（连续消失，触发 lift 事件）
+        self._finalize_lost_contacts(timestamp)
+
+        # Step 7. 性能优化: UI 节流 (10Hz) 更新信息板
         current_time = time.perf_counter()
-        if current_time - self._last_ui_update >= self._ui_update_interval:
+        if current_time - self._last_ui_update >= getattr(self, '_ui_update_interval', 0.1):
             self._update_gait_display(timestamp, clusters)
             self._last_ui_update = current_time
+
+    # =======================================================
+    # 新一代 Contact-Based 状态机支持函数
+    # =======================================================
+
+    def _find_or_create_contact_from_track(self, track: dict, timestamp: float) -> ContactState:
+        track_id = track["track_id"]
+        # 1. 找已有绑定
+        for contact in self._active_contacts.values():
+            if contact.track_id == track_id and contact.status in ("candidate", "confirmed"):
+                return contact
+
+        # 2. 建新 contact
+        cid = self._next_contact_id
+        self._next_contact_id += 1
+        contact = ContactState(
+            contact_id=cid,
+            track_id=track_id,
+            status="candidate",
+            first_seen_time=timestamp,
+            last_seen_time=timestamp,
+            seen_count=0,
+            miss_count=0,
+        )
+        self._active_contacts[cid] = contact
+        return contact
+
+    def _update_contact_seen(self, contact: ContactState, track: dict, timestamp: float):
+        centroid = float(track["centroid_cm"])
+        length_cm = float(track.get("length_cm", 0.0))
+
+        contact.matched_this_frame = True
+        contact.last_seen_time = timestamp
+        contact.seen_count += 1
+        contact.miss_count = 0
+
+        contact.latest_centroid = centroid
+        contact.latest_cluster_length = length_cm
+        contact.centroid_history.append(centroid)
+
+    def _confirm_new_contacts(self, timestamp: float):
+        # [补丁2] 未经历静态期前禁止确认
+        if not getattr(self, "_gait_armed", False):
+            return
+
+        candidates = [
+            c for c in self._active_contacts.values()
+            if c.status == "candidate" and c.seen_count >= self._contact_confirm_frames
+        ]
+        # 按出现时间排序保证触发时序
+        candidates.sort(key=lambda c: c.first_seen_time)
+
+        for contact in candidates:
+            # [补丁3] 新生窗口限制：低帧率放宽（0.2 -> 0.35）
+            contact_age = timestamp - contact.first_seen_time
+            if contact_age > 0.35:
+                continue
+
+            # [补丁4] 簇长度门槛：提高下限过滤小噪点（8.0 -> 12.0）
+            if contact.latest_cluster_length is None or contact.latest_cluster_length < 12.0:
+                continue
+
+            # [补丁5] 短窗质心抖动过滤：窗口 3 -> 4，阈值 4.0 -> 2.5
+            if len(contact.centroid_history) >= 4:
+                recent = contact.centroid_history[-4:]
+                jitter = max(recent) - min(recent)
+                if jitter > 2.5:
+                    continue
+
+            if (timestamp - self._last_confirmed_touch_time) < self._min_step_interval:
+                # 间隔过短防抖（可能是被误当成了新脚的噪点）
+                continue
+            
+            contact.status = "confirmed"
+            contact.touch_time = contact.first_seen_time
+            contact.centroid_at_touch = contact.latest_centroid
+            contact.cluster_length_at_touch = contact.latest_cluster_length
+
+            self._handle_touch_event(contact)
+            
+            self._last_confirmed_touch_time = contact.touch_time
+            self._last_confirmed_touch_centroid = contact.centroid_at_touch
+
+    def _handle_touch_event(self, contact: ContactState):
+        self.touch_count += 1
+        self._foot_contact_queue.append(contact.contact_id)
+
+        # 推断左右脚，不强制轮换
+        foot_label, confidence = self._infer_foot_label_on_touch(contact)
+        contact.foot_label = foot_label
+        contact.label_confidence = confidence
+
+        # 低阶参数：计算绝对步长和瞬间步速
+        if self._last_confirmed_touch_centroid is not None and contact.centroid_at_touch is not None:
+            step_length = abs(contact.centroid_at_touch - self._last_confirmed_touch_centroid)
+            contact.step_length = step_length
+
+            dt = contact.touch_time - self._prev_touch_time_for_step
+            if dt > 1e-6:
+                contact.stride_time = dt
+                contact.velocity = step_length / dt
+
+                # 图表所需的低阶数据
+                self.stride_lengths.append(step_length)
+                self.velocities.append(contact.velocity)
+                self._stride_sum += step_length
+                self._stride_count += 1
+                self._velocity_sum += contact.velocity
+                self._velocity_count += 1
+                self._update_charts(step_length, contact.velocity, None)
+
+                # 触地驱动高阶代理指标（仅累计，用于结束汇总）
+                touch_extra = {
+                    "imbalance_index": None,   # 用相邻步长差分近似
+                    "double_support": None,    # 无离地不可严格求，留空
+                    "single_support": None,    # 用步间隔近似
+                    "acceleration": None,      # 相邻触地速度差分
+                }
+
+                if len(self.stride_lengths) >= 2:
+                    prev_stride = self.stride_lengths[-2]
+                    denom = max((step_length + prev_stride) / 2.0, 1e-6)
+                    touch_extra["imbalance_index"] = abs(step_length - prev_stride) / denom * 100.0
+
+                touch_extra["single_support"] = dt
+
+                if self._last_touch_velocity_for_acc is not None and self._last_touch_time_for_acc is not None:
+                    dtt = contact.touch_time - self._last_touch_time_for_acc
+                    if dtt > 1e-6:
+                        touch_extra["acceleration"] = (contact.velocity - self._last_touch_velocity_for_acc) / dtt
+
+                self._last_touch_velocity_for_acc = contact.velocity
+                self._last_touch_time_for_acc = contact.touch_time
+                self._touch_extra_history.append(touch_extra)
+
+        self._prev_touch_time_for_step = contact.touch_time
+
+        # 仅高置信度进入严格历史供高级运算
+        if contact.foot_label in ("A", "B") and contact.label_confidence >= 0.7:
+            foot = contact.foot_label
+            hist = self._foot_history[foot]
+            hist["touch_time"] = contact.touch_time
+            hist["centroid"] = contact.centroid_at_touch
+            hist["stride_length_cm"] = contact.step_length
+            hist["stride_time"] = contact.stride_time
+            hist["velocity_cm_s"] = contact.velocity
+            hist["is_airborne"] = False
+            
+            # 回溯空中时间
+            prev_lift = self._foot_lift_time.get(foot)
+            if prev_lift is not None:
+                hist["flight_duration"] = contact.touch_time - prev_lift
+
+    def _infer_foot_label_on_touch(self, new_contact: ContactState):
+        # 找出当前地上已有的已确认脚印
+        confirmed_on_ground = [
+            self._active_contacts[cid]
+            for cid in self._foot_contact_queue
+            if cid in self._active_contacts and self._active_contacts[cid].status == "confirmed"
+        ]
+        confirmed_on_ground = [c for c in confirmed_on_ground if c.contact_id != new_contact.contact_id]
+
+        labeled = [c for c in confirmed_on_ground if c.foot_label in ("A", "B") and c.label_confidence >= 0.7]
+        if len(labeled) == 1:
+            # 双支撑期经典推导：地上有一只明确的A脚，那新下来的肯定是B脚
+            other = labeled[0]
+            new_label = "B" if other.foot_label == "A" else "A"
+            return new_label, 0.8
+            
+        # 若地上没脚或判断模糊，先留空不强制给标签
+        return None, 0.0
+
+    def _finalize_lost_contacts(self, timestamp: float):
+        to_lift = []
+        for contact in self._active_contacts.values():
+            if contact.status in ("candidate", "confirmed"):
+                if contact.miss_count >= self._contact_lift_miss_frames:
+                    to_lift.append(contact)
+
+        to_lift.sort(key=lambda c: c.touch_time if c.touch_time is not None else c.first_seen_time)
+        for contact in to_lift:
+            if contact.status == "confirmed":
+                self._handle_lift_event(contact, timestamp)
+            else:
+                # 扔掉从未被确认为真实脚印的噪点 candidate
+                self._active_contacts.pop(contact.contact_id, None)
+
+    def _handle_lift_event(self, contact: ContactState, timestamp: float):
+        contact.status = "lifted"
+        contact.lift_time = contact.last_seen_time
+        
+        if contact.touch_time is not None and contact.lift_time >= contact.touch_time:
+            contact.contact_duration = contact.lift_time - contact.touch_time
+            
+        self.lift_count += 1
+
+        if contact.contact_id in self._foot_contact_queue:
+            self._foot_contact_queue.remove(contact.contact_id)
+
+        # 只有置信度高的标签脚印离地时才触发高阶推演
+        if contact.foot_label in ("A", "B") and contact.label_confidence >= 0.7:
+            foot = contact.foot_label
+            self._foot_lift_time[foot] = contact.lift_time
+            hist = self._foot_history[foot]
+            hist["lift_time"] = contact.lift_time
+            hist["contact_duration"] = contact.contact_duration
+            hist["is_airborne"] = True
+            
+            if foot == "A" and contact.contact_duration:
+                self._foot_a_support_times.append(contact.contact_duration)
+            elif foot == "B" and contact.contact_duration:
+                self._foot_b_support_times.append(contact.contact_duration)
+                
+            opposite = "B" if foot == "A" else "A"
+            try:
+                extra = compute_extra_parameters(
+                    cycle_data_main=dict(hist),
+                    cycle_data_opposite=dict(self._foot_history[opposite]),
+                    prev_cycle_data=self._prev_cycle_data.get(foot)
+                )
+                self._latest_extra_metrics = extra
+                self._extra_metrics_history.append(extra)
+                self._prev_cycle_data[foot] = dict(hist)
+            except Exception as e:
+                print(f"[Extra Metrics] Calc Error: {e}")
+
+        self._completed_contacts.append(contact)
+        self._active_contacts.pop(contact.contact_id, None)
 
     def _update_charts(self, h, air_time, contact_time=None):
         """更新柱状图 (与 1data_show.py 中的 _update_charts 完全一致)"""
@@ -799,67 +994,18 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
                 "-" * 30,
                 f"总步数: {self.touch_count}",
             ]
-            # 显示步幅和步速
+            # 显示步长和步速
             if self.stride_lengths:
                 avg_stride = sum(self.stride_lengths) / len(self.stride_lengths)
                 latest_stride = self.stride_lengths[-1]
-                lines.append(f"最新步幅: {latest_stride:.2f} cm")
-                lines.append(f"平均步幅: {avg_stride:.2f} cm")
+                lines.append(f"最新步长: {latest_stride:.2f} cm")
+                lines.append(f"平均步长: {avg_stride:.2f} cm")
             if self.velocities:
                 avg_vel = sum(self.velocities) / len(self.velocities)
                 latest_vel = self.velocities[-1]
                 lines.append(f"最新步速: {latest_vel:.2f} cm/s")
                 lines.append(f"平均步速: {avg_vel:.2f} cm/s")
-            # 显示支撑时间
-            lines.append("-" * 30)
-            if self._foot_a_support_times:
-                avg_a = sum(self._foot_a_support_times) / len(self._foot_a_support_times)
-                lines.append(f"Foot A 平均支撑时间: {avg_a:.3f}s")
-            if self._foot_b_support_times:
-                avg_b = sum(self._foot_b_support_times) / len(self._foot_b_support_times)
-                lines.append(f"Foot B 平均支撑时间: {avg_b:.3f}s")
-        
-        self.text_edit_top.setText("\n".join(lines))
-        self._apply_line_spacing(self.text_edit_top, 140)
-
-    def _update_gait_display(self, timestamp: float, clusters: list):
-        """更新步态分析模式的文本显示 - 性能优化版"""
-        # 根据簇数量判断状态
-        active_count = len(clusters)
-        if active_count == 0:
-            status = "腾空"
-        elif active_count == 1:
-            status = "单脚支撑"
-        else:
-            status = "双脚支撑"
-        
-        # 质心位置
-        if clusters:
-            centroids_str = ", ".join([f"{c.centroid_cm:.1f}cm" for c in clusters])
-        else:
-            centroids_str = "--"
-        
-        lines = [
-            f"模式: 步态分析 (实时)",
-            f"当前状态: {status}",
-            f"检测簇数: {active_count}",
-            f"时刻: {timestamp:.3f}s",
-            f"质心位置: {centroids_str}",
-            "-" * 30,
-            f"触地次数: {self.touch_count}",
-            f"离地次数: {self.lift_count}",
-        ]
-        # 显示步幅和步速 - 使用增量统计 O(1)
-        if self._stride_count > 0:
-            avg_stride = self._stride_sum / self._stride_count
-            latest_stride = self.stride_lengths[-1] if self.stride_lengths else 0
-            lines.append(f"最新步幅: {latest_stride:.2f} cm")
-            lines.append(f"平均步幅: {avg_stride:.2f} cm")
-        if self._velocity_count > 0:
-            avg_vel = self._velocity_sum / self._velocity_count
-            latest_vel = self.velocities[-1] if self.velocities else 0
-            lines.append(f"最新步速: {latest_vel:.2f} cm/s")
-            lines.append(f"平均步速: {avg_vel:.2f} cm/s")
+            
         # 显示支撑时间 - 使用增量统计 O(1)
         lines.append("-" * 30)
         if self._foot_a_support_times:
@@ -868,10 +1014,97 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         if self._foot_b_support_times:
             avg_b = self._foot_b_support_sum / len(self._foot_b_support_times)
             lines.append(f"Foot B 平均支撑时间: {avg_b:.3f}s")
+            
+        # ======== 新增：扩展计算步态运动学参数 ========
+        if getattr(self, '_latest_extra_metrics', None):
+            em = self._latest_extra_metrics
+            lines.append("-" * 30)
+            lines.append("[ 高阶运动学特征 ]")
+            if em.get("alpha_deg") is not None: 
+                lines.append(f"起跳切线角: {em['alpha_deg']:.1f}°")
+            if em.get("imbalance_index") is not None: 
+                lines.append(f"左右脚不平稳度: {em['imbalance_index']:.1f}%")
+            if em.get("double_support") is not None: 
+                lines.append(f"双支撑期耗时: {em['double_support']:.3f}s")
+            if em.get("single_support") is not None: 
+                lines.append(f"单支撑期耗时: {em['single_support']:.3f}s")
+            if em.get("acceleration") is not None: 
+                lines.append(f"前后加速度: {em['acceleration']:.2f} cm/s²")
         
         self.text_edit_top.setText("\n".join(lines))
         self._apply_line_spacing(self.text_edit_top, 140)
 
+    def _update_gait_display(self, timestamp: float, clusters: list):
+        """更新步态分析模式的文本显示 - 兼容无标签对象跟踪"""
+        # 根据真实确立的物理接触面判断状态
+        active_count = len(self._foot_contact_queue)
+        if active_count == 0:
+            status = "腾空 / 离地"
+        elif active_count == 1:
+            status = "单脚支撑"
+        else:
+            status = f"多支撑 ({active_count}脚)"
+        
+        # 活跃脚印的位置
+        active_centroids = [
+            f"{self._active_contacts[cid].latest_centroid:.1f}cm"
+            for cid in self._foot_contact_queue if cid in self._active_contacts
+        ]
+        centroids_str = ", ".join(active_centroids) if active_centroids else "--"
+        
+        lines = [
+            f"模式: 步态分析 (Object Tracking)",
+            f"步态阶段: {status}",
+            f"原始光斑数: {len(clusters)} 簇",
+            f"时间: {timestamp:.3f}s",
+            f"脚印坐标: {centroids_str}",
+            "-" * 30,
+            f"累计触地: {self.touch_count} 次",
+            f"累计离地: {self.lift_count} 次",
+        ]
+        # 显示步长和步速 - 使用增量统计 O(1)
+        if self._stride_count > 0:
+            avg_stride = self._stride_sum / self._stride_count
+            latest_stride = self.stride_lengths[-1] if self.stride_lengths else 0
+            lines.append(f"最新步长: {latest_stride:.2f} cm")
+            lines.append(f"平均步长: {avg_stride:.2f} cm")
+        if self._velocity_count > 0:
+            avg_vel = self._velocity_sum / self._velocity_count
+            latest_vel = self.velocities[-1] if self.velocities else 0
+            lines.append(f"最新步速: {latest_vel:.2f} cm/s")
+            lines.append(f"平均步速: {avg_vel:.2f} cm/s")
+            
+        # 显示支撑时间
+        lines.append("-" * 30)
+        has_support_data = False
+        if self._foot_a_support_times:
+            avg_a = sum(self._foot_a_support_times) / len(self._foot_a_support_times)
+            lines.append(f"Foot A 平均支撑时间: {avg_a:.3f}s")
+            has_support_data = True
+        if self._foot_b_support_times:
+            avg_b = sum(self._foot_b_support_times) / len(self._foot_b_support_times)
+            lines.append(f"Foot B 平均支撑时间: {avg_b:.3f}s")
+            has_support_data = True
+            
+        if not has_support_data and getattr(self, "lift_count", 0) > 0:
+             lines.append(f"(仍在积累有标签数据的支撑期...)")
+        
+        # ======== 高阶运动学特征 ========
+        if getattr(self, '_latest_extra_metrics', None):
+            em = self._latest_extra_metrics
+            lines.append("-" * 30)
+            lines.append("[ 高阶运动学特征 ]")
+            if em.get("imbalance_index") is not None: 
+                lines.append(f"左右脚不平稳度: {em['imbalance_index']:.1f}%")
+            if em.get("double_support") is not None: 
+                lines.append(f"双支撑期耗时: {em['double_support']:.3f}s")
+            if em.get("single_support") is not None: 
+                lines.append(f"单支撑期耗时: {em['single_support']:.3f}s")
+            if em.get("acceleration") is not None: 
+                lines.append(f"前后加速度: {em['acceleration']:.2f} cm/s²")
+        
+        self.text_edit_top.setText("\n".join(lines))
+        self._apply_line_spacing(self.text_edit_top, 140)
 
     def on_pause_clicked(self):
         if not self.paused:
@@ -899,6 +1132,9 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
             finally:
                 self.serial_thread = None
                 self.serial_worker = None
+
+        # 导出数据
+        self._save_export()
 
         # 显示汇总 (与 1data_show.py 的 _show_summary 类似)
         self._show_summary()
@@ -952,12 +1188,12 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
         else:
             lines = ["分析完成！", "-" * 25]
             lines.append(f"总步数: {self.touch_count}")
-            # 步幅统计
+            # 步长统计
             if self.stride_lengths:
                 avg_stride = sum(self.stride_lengths) / len(self.stride_lengths)
                 max_stride = max(self.stride_lengths)
-                lines.append(f"平均步幅: {avg_stride:.2f} cm")
-                lines.append(f"最大步幅: {max_stride:.2f} cm")
+                lines.append(f"平均步长: {avg_stride:.2f} cm")
+                lines.append(f"最大步长: {max_stride:.2f} cm")
             # 步速统计
             if self.velocities:
                 avg_vel = sum(self.velocities) / len(self.velocities)
@@ -974,9 +1210,96 @@ class RealTimeGaitWidget(QtWidgets.QWidget):
                 avg_b = sum(self._foot_b_support_times) / len(self._foot_b_support_times)
                 lines.append(f"Foot B 平均支撑时间: {avg_b:.3f}s")
                 lines.append(f"Foot B 步数: {len(self._foot_b_support_times)}")
-        
+            # 高阶指标汇总
+            if getattr(self, '_extra_metrics_history', None):
+                lines.append("-" * 25)
+                lines.append("[ 高阶运动学汇总 ]")
+                # 对每个指标键收集非 None 值并求均值
+                metric_keys = [
+                    ("imbalance_index", "平均不平衡指数", "%", 1),
+                    ("double_support", "平均双支撑期", "s", 3),
+                    ("single_support", "平均单支撑期", "s", 3),
+                    ("acceleration", "平均加速度", "cm/s²", 2),
+                ]
+                for key, label, unit, decimals in metric_keys:
+                    vals = [m[key] for m in self._extra_metrics_history if m.get(key) is not None]
+                    if vals:
+                        avg = sum(vals) / len(vals)
+                        lines.append(f"{label}: {avg:.{decimals}f}{unit}")
+            
+            # 触地驱动高阶指标汇总（仅结束显示）
+            if self._touch_extra_history:
+                lines.append("-" * 25)
+                # lines.append("[ 高阶运动学汇总（触地驱动） ]")
+                metric_keys = [
+                    ("imbalance_index", "平均不平衡指数", "%", 1),
+                    ("single_support", "平均步间隔", "s", 3),
+                    ("acceleration", "平均加速度", "cm/s²", 2),
+                ]
+                for key, label, unit, decimals in metric_keys:
+                    vals = [m[key] for m in self._touch_extra_history if m.get(key) is not None]
+                    if vals:
+                        avg = sum(vals) / len(vals)
+                        lines.append(f"{label}: {avg:.{decimals}f}{unit}")
+
+                # 新增：平均步频（基于触地步间隔）
+                step_intervals = [
+                    m.get("single_support")
+                    for m in self._touch_extra_history
+                    if m.get("single_support") is not None and m.get("single_support") > 1e-6
+                ]
+                if step_intervals:
+                    avg_step_interval = sum(step_intervals) / len(step_intervals)
+                    cadence = 60.0 / avg_step_interval
+                    lines.append(f"平均步频: {cadence:.1f} 步/分钟")
+
         self.text_edit_top.setText("\n".join(lines))
         self._apply_line_spacing(self.text_edit_top, 140)
+
+    def _save_export(self):
+        """将缓存的 LED 位图帧导出为 Excel 文件。"""
+        if not self._export_frames:
+            return
+
+        # 弹出确认对话框
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "导出数据",
+            f"本次采集共 {len(self._export_frames)} 帧数据，是否保存？",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        # 固定保存路径
+        save_dir = r"E:\OptoJump\dayu_demo\demo\data"
+        os.makedirs(save_dir, exist_ok=True)
+        filename = time.strftime("led_frames_%Y%m%d_%H%M%S.xlsx")
+        path = os.path.join(save_dir, filename)
+
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "LED Frames"
+            # 表头：timestamp, hex_string
+            ws.append(["timestamp", "hex_string"])
+            # 逐行写入：将 96 位列表还原为 12 字节十六进制字符串（LSB-first）
+            for ts, bits in zip(self._export_timestamps, self._export_frames):
+                hex_bytes = []
+                for i in range(0, 96, 8):
+                    byte_val = 0
+                    for j in range(8):
+                        byte_val |= (bits[i + j] << j)
+                    hex_bytes.append(byte_val)
+                hex_str = " ".join(f"{b:02x}" for b in hex_bytes)
+                ws.append([ts, hex_str])
+            wb.save(path)
+            QtWidgets.QMessageBox.information(
+                self, "导出成功", f"数据已保存至：\n{path}"
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "导出失败", f"保存文件失败：{e}")
 
     def closeEvent(self, event):
         if self.serial_worker:

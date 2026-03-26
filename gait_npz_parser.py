@@ -76,6 +76,10 @@ class TrackedCluster:
     centroid_start: float      # 首次出现时的质心位置（cm）
     centroid_end: float        # 最后出现时的质心位置（cm）
     foot_label: Optional[str] = None  # "A" 或 "B"，用于左右脚区分
+    length_cm: float = 0.0     # 最新簇宽度 (cm)
+    seen_count: int = 0        # 累计被观测帧数
+    miss_count: int = 0        # 连续丢失帧数
+    is_active: bool = True     # 是否仍活跃
     # 生命周期内的质心轨迹
     centroid_history: List[Tuple[float, float]] = field(default_factory=list)
 
@@ -171,11 +175,13 @@ class ClusterTracker:
         max_shift_led: int = MAX_SHIFT_LED,
         t_min_s: float = T_MIN_MS / 1000.0,
         spacing_cm: float = SPACING_CM,
+        max_missed_frames: int = 5,
     ):
         self.max_shift_led = max_shift_led
         self.max_shift_cm = max_shift_led * spacing_cm
         self.t_min_s = t_min_s
         self.spacing_cm = spacing_cm
+        self.max_missed_frames = max_missed_frames
 
         self._next_track_id = 0
         self._active_tracks: Dict[int, TrackedCluster] = {}  # track_id -> TrackedCluster
@@ -189,13 +195,6 @@ class ClusterTracker:
             timestamp: 当前帧时间戳
             clusters: 当前帧提取的簇列表
         """
-        if not clusters:
-            # 当前帧无簇，所有活跃追踪结束
-            for track in self._active_tracks.values():
-                self._completed_tracks.append(track)
-            self._active_tracks.clear()
-            return
-
         # 贪心匹配：为每个当前簇找最近的活跃追踪
         used_tracks = set()
         matched_clusters = set()
@@ -217,14 +216,24 @@ class ClusterTracker:
             cluster = clusters[ci]
             track.disappear_time = timestamp
             track.centroid_end = cluster.centroid_cm
+            track.length_cm = cluster.length * self.spacing_cm
             track.centroid_history.append((timestamp, cluster.centroid_cm))
+            track.seen_count += 1
+            track.miss_count = 0
             used_tracks.add(track_id)
             matched_clusters.add(ci)
 
-        # 未匹配的活跃追踪结束
-        for track_id in list(self._active_tracks.keys()):
+        # 未匹配的活跃追踪容忍度检查
+        to_remove = []
+        for track_id, track in self._active_tracks.items():
             if track_id not in used_tracks:
-                self._completed_tracks.append(self._active_tracks.pop(track_id))
+                track.miss_count += 1
+                if track.miss_count > self.max_missed_frames:
+                    track.is_active = False
+                    to_remove.append(track_id)
+
+        for track_id in to_remove:
+            self._completed_tracks.append(self._active_tracks.pop(track_id))
 
         # 未匹配的簇开始新追踪
         for ci, cluster in enumerate(clusters):
@@ -235,10 +244,27 @@ class ClusterTracker:
                     disappear_time=timestamp,
                     centroid_start=cluster.centroid_cm,
                     centroid_end=cluster.centroid_cm,
+                    length_cm=cluster.length * self.spacing_cm,
+                    seen_count=1,
+                    miss_count=0,
+                    is_active=True,
                     centroid_history=[(timestamp, cluster.centroid_cm)],
                 )
                 self._active_tracks[self._next_track_id] = new_track
                 self._next_track_id += 1
+
+    def get_active_tracks_view(self) -> List[dict]:
+        """为上层提供统一结构视图"""
+        return [
+            {
+                "track_id": track.track_id,
+                "centroid_cm": track.centroid_end,
+                "length_cm": track.length_cm,
+                "seen_count": track.seen_count,
+                "miss_count": track.miss_count,
+            }
+            for track in self._active_tracks.values()
+        ]
 
     def finalize(self) -> List[TrackedCluster]:
         """
