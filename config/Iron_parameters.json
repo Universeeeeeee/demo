@@ -1,0 +1,740 @@
+[
+  {
+    "layer": 1,
+    "category": "测试类型选择 (Test Type Selection)",
+    "description": "OptoJump 支持的测试宏类型和具体测试类型",
+    "parameters": [
+      {
+        "name": "test_macro_type",
+        "display_name": "测试宏类型 Test Macro-typology",
+        "description": "测试的大类归属",
+        "type": "enum",
+        "values": [
+          "Performance",
+          "Gait Analysis",
+          "Rehab"
+        ],
+        "source": "4.2.2",
+        "priority": "core"
+      },
+      {
+        "name": "test_type",
+        "display_name": "测试类型 Test Type",
+        "description": "具体测试类型，决定后续所有可用参数",
+        "type": "enum",
+        "values": [
+          "Jump Test",
+          "Reaction Times",
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test",
+          "Static Test (Sway)"
+        ],
+        "source": "4.2.2",
+        "priority": "core"
+      }
+    ]
+  },
+  {
+    "layer": 2,
+    "category": "主配置参数 (Main Parameters)",
+    "description": "每类测试的主要配置参数，决定测试如何启动、运行和结束",
+    "sub_categories": [
+      {
+        "name": "通用主参数 (Common Main Parameters)",
+        "description": "适用于多种测试类型的通用主参数",
+        "parameters": [
+          {
+            "name": "start_type",
+            "display_name": "启动类型 Start Type",
+            "description": "测试触发方式",
+            "type": "enum",
+            "values": [
+              {
+                "value": "Status change",
+                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test"]
+              },
+              {
+                "value": "External impulse",
+                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test"]
+              },
+              {
+                "value": "Software command",
+                "applicable_tests": ["Treadmill Running Test", "Treadmill Gait Test", "Static Test (Sway)"],
+                "note": "Treadmill 和 Static 测试固定为此值，不可更改"
+              }
+            ],
+            "applicable_tests": [
+              "Jump Test",
+              "Sprint and Gait Test",
+              "Tapping Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Static Test (Sway)"
+            ],
+            "note": "Reaction Times 的 start_type 语义不同（刺激类型），见 stimulus_type 参数。Jump Test 仅支持 Status change / External impulse",
+            "source": "4.2.2.2-4.2.2.9",
+            "priority": "core"
+          },
+          {
+            "name": "start_position",
+            "display_name": "起始位置 Start Position",
+            "description": "测试开始时运动员应处于的位置",
+            "type": "enum",
+            "values": [
+              "Inside area",
+              "Outside area"
+            ],
+            "applicable_tests": [
+              "Jump Test",
+              "Reaction Times",
+              "Sprint and Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.2-4.2.2.7",
+            "priority": "core"
+          },
+          {
+            "name": "stop_type",
+            "display_name": "结束方式 Stop Type",
+            "description": "测试结束的触发方式",
+            "type": "enum",
+            "values": [
+              {
+                "value": "Status change",
+                "description": "通过状态变化（进入/离开测试区）结束",
+                "applicable_tests": ["Jump Test", "Reaction Times"],
+                "enables_fields": ["finish_position", "number_of_jumps"]
+              },
+              {
+                "value": "External impulse",
+                "description": "通过外部脉冲信号（光电门等）结束",
+                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test", "Static Test (Sway)"]
+              },
+              {
+                "value": "End of Time",
+                "description": "到达设定时长后自动结束",
+                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Treadmill Running Test", "Treadmill Gait Test", "Tapping Test", "Static Test (Sway)"],
+                "enables_fields": ["test_length"]
+              },
+              {
+                "value": "Timeout",
+                "description": "无信号超时后自动结束（超时时长由 test_timeout 配置）",
+                "applicable_tests": ["Sprint and Gait Test", "Tapping Test"],
+                "enables_fields": ["finish_position"]
+              },
+              {
+                "value": "Software command",
+                "description": "由软件手动发送停止命令结束",
+                "applicable_tests": ["Treadmill Running Test", "Treadmill Gait Test", "Static Test (Sway)"]
+              }
+            ],
+            "applicable_tests": [
+              "Jump Test",
+              "Reaction Times",
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test",
+              "Static Test (Sway)"
+            ],
+            "source": "4.2.2.2-4.2.2.9",
+            "priority": "core"
+          },
+          {
+            "name": "finish_position",
+            "display_name": "结束位置 Finish Position",
+            "description": "测试结束时运动员应处于的位置",
+            "type": "enum",
+            "values": [
+              "Inside area",
+              "Outside area"
+            ],
+            "applicable_tests": [
+              "Jump Test",
+              "Sprint and Gait Test",
+              "Tapping Test"
+            ],
+            "visibility_condition": {
+              "Jump Test": {"stop_type": "Status change"},
+              "Sprint and Gait Test": {"stop_type": "Timeout"},
+              "Tapping Test": {"stop_type": "Timeout"}
+            },
+            "source": "4.2.2.2/4.2.2.4/4.2.2.7",
+            "priority": "core"
+          },
+          {
+            "name": "test_length",
+            "display_name": "测试时长 Test Length",
+            "description": "测试持续时间（仅 Stop type = End of Time 时出现）",
+            "type": "string",
+            "format": "mm:ss",
+            "visibility_condition": {"stop_type": "End of Time"},
+            "range": {
+              "Jump Test": "00:01 - 09:59",
+              "Sprint and Gait Test": "00:01 - 09:59",
+              "Treadmill Running Test": "00:01 - 59:59",
+              "Treadmill Gait Test": "00:01 - 59:59",
+              "Tapping Test": "00:01 - 09:59",
+              "Static Test (Sway)": "00:01 - 09:59"
+            },
+            "applicable_tests": [
+              "Jump Test",
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test",
+              "Static Test (Sway)"
+            ],
+            "source": "4.2.2.2-4.2.2.9",
+            "priority": "core"
+          },
+          {
+            "name": "starting_foot",
+            "display_name": "起始脚 Starting Foot",
+            "description": "已知的起始脚",
+            "type": "enum",
+            "values": [
+              "Right",
+              "Left",
+              "Not defined"
+            ],
+            "default": "Not defined",
+            "applicable_tests": [
+              "Jump Test",
+              "Sprint and Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.2/4.2.2.4/4.2.2.7",
+            "priority": "optional"
+          }
+        ]
+      },
+      {
+        "name": "跳跃测试专有主参数 (Jump Test Specific)",
+        "parameters": [
+          {
+            "name": "number_of_jumps",
+            "display_name": "跳跃次数 Number of Jumps",
+            "description": "跳跃次数（仅 Stop type = Status change 时出现）",
+            "type": "integer",
+            "range": "1-99",
+            "applicable_tests": [
+              "Jump Test"
+            ],
+            "visibility_condition": {"stop_type": "Status change"},
+            "source": "4.2.2.2",
+            "priority": "core"
+          },
+          {
+            "name": "overload_weight",
+            "display_name": "附加负重 Overload Weight",
+            "description": "运动员跳跃时的附加负重（如杠铃、壶铃等），影响总能量 [J]、比能量 [J/Kg]、总功率 [W]、比功率 [W/Kg] 的计算",
+            "type": "float",
+            "unit": "kg",
+            "default": 0,
+            "applicable_tests": [
+              "Jump Test"
+            ],
+            "source": "4.2.2.2",
+            "priority": "optional"
+          },
+          {
+            "name": "overload_pct_bw",
+            "display_name": "附加负重百分比 Overload % Body Weight",
+            "description": "以体重百分比形式设置附加负重（与 overload_weight 二选一）。例如运动员70kg时设10%等同于附加7kg",
+            "type": "float",
+            "unit": "%",
+            "default": 0,
+            "applicable_tests": [
+              "Jump Test"
+            ],
+            "note": "与 overload_weight 互斥，二选一",
+            "source": "4.2.2.2",
+            "priority": "optional"
+          }
+        ]
+      },
+      {
+        "name": "反应时测试专有主参数 (Reaction Test Specific)",
+        "parameters": [
+          {
+            "name": "stimulus_type",
+            "display_name": "刺激类型 Stimulus Type",
+            "description": "反应时测试的刺激信号类型",
+            "type": "enum",
+            "values": [
+              "Visual stimulus",
+              "Acoustic stimulus",
+              "Visual/Acoustic stimulus",
+              "External impulse"
+            ],
+            "applicable_tests": [
+              "Reaction Times"
+            ],
+            "source": "4.2.2.3",
+            "priority": "core"
+          },
+          {
+            "name": "minimum_pause",
+            "display_name": "最小间隔 Minimum Pause",
+            "description": "两次重复之间的最小休息时间（随机，实际总是 >= 此值）",
+            "type": "string",
+            "format": "mm:ss",
+            "applicable_tests": [
+              "Reaction Times"
+            ],
+            "source": "4.2.2.3",
+            "priority": "core"
+          },
+          {
+            "name": "number_of_repetitions",
+            "display_name": "重复次数 Number of Repetitions",
+            "description": "反应时测试的重复执行次数",
+            "type": "integer",
+            "range": "1-99",
+            "applicable_tests": [
+              "Reaction Times"
+            ],
+            "source": "4.2.2.3",
+            "priority": "core"
+          },
+          {
+            "name": "sequence_type",
+            "display_name": "序列类型 Sequence Type",
+            "description": "重复执行模式",
+            "type": "enum",
+            "values": [
+              "Automatic",
+              "Manual"
+            ],
+            "applicable_tests": [
+              "Reaction Times"
+            ],
+            "source": "4.2.2.3",
+            "priority": "core"
+          }
+        ]
+      },
+      {
+        "name": "Sprint/Gait 测试专有主参数 (Sprint/Gait Specific)",
+        "parameters": [
+          {
+            "name": "template",
+            "display_name": "参数模板 Template",
+            "description": "针对步态/跑步测试的预设滤波参数组合",
+            "type": "enum",
+            "values": [
+              "Normal Walking",
+              "Shuffling",
+              "Short Steps Walking"
+            ],
+            "default": "Normal Walking",
+            "applicable_tests": [
+              "Sprint and Gait Test"
+            ],
+            "source": "4.2.2.1.1",
+            "priority": "core"
+          }
+        ]
+      },
+      {
+        "name": "跑步机测试专有主参数 (Treadmill Specific)",
+        "parameters": [
+          {
+            "name": "treadmill_speed",
+            "display_name": "跑步机速度 Treadmill Speed",
+            "description": "跑步机设定速度",
+            "type": "float",
+            "unit": "km/h",
+            "range": "0.1-20.0",
+            "step": 0.1,
+            "applicable_tests": [
+              "Treadmill Running Test",
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.5/4.2.2.6",
+            "priority": "core"
+          },
+          {
+            "name": "direction",
+            "display_name": "行走方向 Direction",
+            "description": "行走方向相对于接口鼓",
+            "type": "enum",
+            "values": [
+              "Interface side",
+              "Opposite side"
+            ],
+            "applicable_tests": [
+              "Treadmill Running Test",
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.5/4.2.2.6",
+            "priority": "core"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "layer": 3,
+    "category": "次级滤波参数 (Secondary / Filter Parameters)",
+    "description": "数据采集滤波和步态检测算法参数，具有三级继承：Basic Config → Test Definition → Single Test",
+    "sub_categories": [
+      {
+        "name": "时间滤波 (Time Filters)",
+        "description": "接触时间和腾空时间的有效性阈值",
+        "parameters": [
+          {
+            "name": "min_contact_time",
+            "display_name": "最小接触时间 Minimum Contact Time",
+            "description": "低于此值的接触时间视为无效，其时间将合并到关联的腾空时间中。设为0禁用",
+            "type": "integer",
+            "unit": "ms",
+            "default": 60,
+            "applicable_tests": [
+              "Jump Test",
+              "Reaction Times",
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.2/4.4.1.2",
+            "priority": "core"
+          },
+          {
+            "name": "min_flight_time",
+            "display_name": "最小腾空时间 Minimum Flight Time",
+            "description": "低于此值的腾空时间视为无效，其时间将合并到关联的接触时间中。设为0禁用",
+            "type": "integer",
+            "unit": "ms",
+            "default": 0,
+            "applicable_tests": [
+              "Jump Test",
+              "Reaction Times",
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.2/4.4.1.2",
+            "priority": "core"
+          },
+          {
+            "name": "max_flight_time",
+            "display_name": "最大腾空时间 Maximum Flight Time",
+            "description": "超过此值的腾空时间视为无效，直接丢弃。设为0禁用",
+            "type": "integer",
+            "unit": "ms",
+            "default": 0,
+            "applicable_tests": [
+              "Jump Test",
+              "Reaction Times",
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.2/4.4.1.2",
+            "priority": "core"
+          }
+        ]
+      },
+      {
+        "name": "步态检测参数 (Gait Detection Parameters)",
+        "description": "步长、足长和步态相位检测的滤波参数",
+        "parameters": [
+          {
+            "name": "step_length_calculation",
+            "display_name": "步长计算方式 Step Length Calculation",
+            "description": "步长计算参考点：足尖到足尖 或 足跟到足跟",
+            "type": "enum",
+            "values": [
+              "Tip-to-Tip",
+              "Heel-to-Heel"
+            ],
+            "default": "Tip-to-Tip",
+            "applicable_tests": [
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "min_gap_between_feet",
+            "display_name": "两脚最小间距 Minimum Gap Between Feet",
+            "description": "前脚脚尖与后脚脚跟之间的最小间隔距离",
+            "type": "float",
+            "unit": "cm",
+            "applicable_tests": [
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "min_foot_length",
+            "display_name": "最小足长 Minimum Foot Length",
+            "description": "用于过滤异常采集的最小足长阈值",
+            "type": "float",
+            "unit": "cm",
+            "applicable_tests": [
+              "Sprint and Gait Test",
+              "Treadmill Running Test",
+              "Treadmill Gait Test",
+              "Tapping Test"
+            ],
+            "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "entry_point",
+            "display_name": "进入方向 Entry Point",
+            "description": "运动员进入测试区域的方向",
+            "type": "enum",
+            "values": [
+              "Interface side",
+              "Opposite side",
+              "Automatic"
+            ],
+            "default": "Automatic",
+            "applicable_tests": [
+              "Sprint and Gait Test"
+            ],
+            "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "consider_first_step",
+            "display_name": "考虑第一步 Consider First Step",
+            "description": "是否将第一步纳入分析计算",
+            "type": "enum",
+            "values": [
+              "Yes",
+              "No"
+            ],
+            "default": "Yes",
+            "applicable_tests": [
+              "Sprint and Gait Test"
+            ],
+            "source": "4.2.2.4",
+            "priority": "core"
+          },
+          {
+            "name": "filter_gaitr_in",
+            "display_name": "GaitR进过滤器 Filter GaitR IN",
+            "description": "触发接触事件所需的最小连续中断LED数量（增大可减少与力板测量的偏差）",
+            "type": "integer",
+            "unit": "LED数",
+            "default": 0,
+            "applicable_tests": [
+              "Treadmill Running Test",
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.5/5.1.6",
+            "priority": "core"
+          },
+          {
+            "name": "filter_gaitr_out",
+            "display_name": "GaitR出过滤器 Filter GaitR OUT",
+            "description": "判定离开接触所需的最小连续中断LED数量",
+            "type": "integer",
+            "unit": "LED数",
+            "default": 0,
+            "applicable_tests": [
+              "Treadmill Running Test",
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.5/5.1.6",
+            "priority": "core"
+          },
+          {
+            "name": "automatic_data_filter",
+            "display_name": "自动数据过滤 Automatic Data Filter",
+            "description": "启用后，超出均值±该百分比范围的数据行将被排除计算。设为0禁用",
+            "type": "integer",
+            "unit": "%",
+            "range": "10-90",
+            "default": 0,
+            "applicable_tests": [
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.6",
+            "priority": "optional"
+          }
+        ]
+      },
+      {
+        "name": "Sprint 专有次级参数",
+        "parameters": [
+          {
+            "name": "test_timeout",
+            "display_name": "测试超时 Test Timeout",
+            "description": "Timeout 停止模式下，无信号输入超过此时长则测试自动结束",
+            "type": "integer",
+            "unit": "ms",
+            "applicable_tests": [
+              "Sprint and Gait Test"
+            ],
+            "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          }
+        ]
+      },
+      {
+        "name": "反应时测试次级参数 (Reaction Test Secondary)",
+        "parameters": [
+          {
+            "name": "reaction_time_range",
+            "display_name": "反应时间范围 Reaction Time Range",
+            "description": "反应信号随机出现的时间窗口范围",
+            "type": "integer",
+            "unit": "ms",
+            "applicable_tests": [
+              "Reaction Times"
+            ],
+            "source": "4.2.2.3/4.4.1.3",
+            "priority": "core"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "layer": 4,
+    "category": "实时反馈与阈值参数 (Feedback & Thresholds)",
+    "description": "BioFeedback / Video Feedback 模式下的实时监测与预警参数",
+    "parameters": [
+      {
+        "name": "feedback_mode",
+        "display_name": "反馈模式 Feedback Mode",
+        "description": "反馈显示模式",
+        "type": "enum",
+        "values": [
+          "Asymmetry",
+          "Absolute Value"
+        ],
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "feedback_parameter_type",
+        "display_name": "反馈参数类型 Feedback Parameter Type",
+        "description": "反馈界面显示的参数类型（因测试类型而异：步态=Stance/Swing/Step Length等，跑步=Speed/Acceleration等）",
+        "type": "string",
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "data_window",
+        "display_name": "数据窗口 Data Window",
+        "description": "用于计算反馈值的最近数据量（窗口越大平均越平滑，但患者纠正反馈越慢）",
+        "type": "integer",
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "reference_value",
+        "display_name": "参考值 Reference Value",
+        "description": "Absolute Value 模式下的目标参考值（如高度30cm、步长70cm等）",
+        "type": "float",
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "warning_threshold",
+        "display_name": "预警阈值 Warning Threshold",
+        "description": "不对称性或偏差超过此百分比时显示橙色警告",
+        "type": "float",
+        "unit": "%",
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "bad_threshold",
+        "display_name": "报警阈值 Bad Threshold",
+        "description": "不对称性或偏差超过此百分比时显示红色报警",
+        "type": "float",
+        "unit": "%",
+        "applicable_tests": [
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.2/4.5",
+        "priority": "optional"
+      },
+      {
+        "name": "metronome_enabled",
+        "display_name": "节拍器启用 Metronome Enabled",
+        "description": "是否启用虚拟节拍器辅助运动员保持节奏",
+        "type": "boolean",
+        "default": false,
+        "applicable_tests": [
+          "Jump Test",
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.3",
+        "priority": "optional"
+      },
+      {
+        "name": "metronome_bpm",
+        "display_name": "节拍器速度 Metronome BPM",
+        "description": "节拍器每分钟节拍数",
+        "type": "integer",
+        "range": "10-200",
+        "step": 5,
+        "applicable_tests": [
+          "Jump Test",
+          "Sprint and Gait Test",
+          "Treadmill Running Test",
+          "Treadmill Gait Test",
+          "Tapping Test"
+        ],
+        "source": "4.2.1.3",
+        "priority": "optional"
+      }
+    ]
+  }
+]

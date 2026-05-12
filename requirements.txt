@@ -1,0 +1,9 @@
+qtpy
+PySide2
+openpyxl
+numpy
+pyqtgraph
+opencv-python
+pydantic
+pydantic-ai
+python-dotenv
