@@ -20,6 +20,8 @@ dayu_widgets/
 # Generated runtime/data artifacts
 camera/recordings/
 data/led_frames_*.xlsx
+data/*.sqlite3
+data/*.sqlite3-*
 
 # IDE
 .idea/

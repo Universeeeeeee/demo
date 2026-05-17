@@ -36,7 +36,7 @@ from dayu_widgets.line_edit import MLineEdit
 from dayu_widgets.qt import application
 from dayu_widgets import dayu_theme
 
-from agent import GaitAgent, PatientContext
+from agent import GaitAgent, AthleteProfile
 from markdown_it import MarkdownIt
 
 _md = MarkdownIt().enable("table")
@@ -55,7 +55,7 @@ class LLMWorker(QThread):
     finished = Signal(object, str)  # (TestConfig | None, reply_text)
     error = Signal(str)
 
-    def __init__(self, agent: GaitAgent, message: str, ctx: PatientContext):
+    def __init__(self, agent: GaitAgent, message: str, ctx: AthleteProfile):
         super().__init__()
         self._agent = agent
         self._message = message
@@ -73,19 +73,26 @@ class LLMWorker(QThread):
 
 
 class WarmupWorker(QThread):
-    """后台预热 Agent，避免 switch_mode("online") 阻塞 UI。"""
+    """后台初始化在线 Agent，避免切到在线模式时阻塞 UI。"""
+    ready = Signal()
+    error = Signal(str)
+
     def __init__(self, agent: GaitAgent):
         super().__init__()
         self._agent = agent
 
     def run(self):
-        self._agent.switch_mode("online")
+        try:
+            self._agent.warmup_online()
+            self.ready.emit()
+        except Exception as e:
+            self.error.emit(f"{e}\n{traceback.format_exc()}")
 
 
-# ---- 患者信息面板 ----
+# ---- 用户信息面板 ----
 
-class PatientPanel(QWidget):
-    """患者上下文输入面板。"""
+class AthletePanel(QWidget):
+    """用户运动档案输入面板。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,7 +101,7 @@ class PatientPanel(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(MDivider("患者信息"))
+        layout.addWidget(MDivider("用户信息"))
 
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -122,18 +129,18 @@ class PatientPanel(QWidget):
         grid.addWidget(MLabel("身高"), 2, 0)
         grid.addWidget(self.height_spin, 2, 1)
 
-        # 状况
-        self.condition_combo = QComboBox()
-        self.condition_combo.addItems([
-            "healthy", "post_surgery", "neurological",
+        # 训练水平
+        self.level_combo = QComboBox()
+        self.level_combo.addItems([
+            "advanced", "intermediate", "beginner",
         ])
-        grid.addWidget(MLabel("状况"), 3, 0)
-        grid.addWidget(self.condition_combo, 3, 1)
+        grid.addWidget(MLabel("训练水平"), 3, 0)
+        grid.addWidget(self.level_combo, 3, 1)
 
-        # 患侧
+        # 侧重训练
         self.side_combo = QComboBox()
         self.side_combo.addItems(["", "left", "right", "both"])
-        grid.addWidget(MLabel("患侧"), 4, 0)
+        grid.addWidget(MLabel("侧重训练"), 4, 0)
         grid.addWidget(self.side_combo, 4, 1)
 
 
@@ -141,14 +148,14 @@ class PatientPanel(QWidget):
         layout.addLayout(grid)
         layout.addStretch()
 
-    def get_context(self) -> PatientContext:
-        """收集当前输入，构建 PatientContext。"""
-        return PatientContext(
+    def get_context(self) -> AthleteProfile:
+        """收集当前输入，构建 AthleteProfile。"""
+        return AthleteProfile(
             age=self.age_spin.value(),
             weight=self.weight_spin.value(),
             height=self.height_spin.value(),
-            condition=self.condition_combo.currentText(),
-            affected_side=self.side_combo.currentText(),
+            level=self.level_combo.currentText(),
+            focus_side=self.side_combo.currentText(),
         )
 
 
@@ -160,24 +167,33 @@ class AgentTestWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Agent 参数配置测试工具")
-        self.resize(900, 650)
+        self.resize(900, 800)
 
         self._agent = GaitAgent(mode="offline")
         self._llm_worker: LLMWorker | None = None
         self._chat_start_time: float = 0.0
+        self._stream_anchor: int | None = None
+        self._stream_buffer = ""
+        self._agent_label_inserted = False
+        self._warmup_worker: WarmupWorker | None = None
+        self._warmup_started = False
+        self._warmup_ready = False
+        self._warmup_error: str | None = None
 
         self._build_ui()
         self._connect_signals()
+        self._start_warmup()
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
 
-        # ===== 上半部分: 患者信息 + 操作面板 =====
+        # ===== 上半部分: 用户信息 + 操作面板 =====
         splitter = QSplitter(Qt.Horizontal)
 
-        # 左: 患者信息
-        self._patient_panel = PatientPanel()
-        splitter.addWidget(self._patient_panel)
+        # 左: 用户信息（固定宽度，不参与拉伸）
+        self._athlete_panel = AthletePanel()
+        self._athlete_panel.setMaximumWidth(240)
+        splitter.addWidget(self._athlete_panel)
 
         # 右: 操作面板
         right_panel = QWidget()
@@ -227,11 +243,11 @@ class AgentTestWindow(QWidget):
             "table { border-collapse: collapse; margin: 8px 0; }"
             "td, th { border: 1px solid #999; padding: 4px 10px; }"
         )
-        online_layout.addWidget(self._chat_display)
+        online_layout.addWidget(self._chat_display, 1)
 
         input_layout = QHBoxLayout()
         self._chat_input = MLineEdit()
-        self._chat_input.setPlaceholderText("描述测试需求，如: 70岁老人术后康复跳跃测试")
+        self._chat_input.setPlaceholderText("描述测试需求，如: 入门用户30次跳跃测试")
         self._chat_input.setStyleSheet("font-size: 18px;")
         
         self._send_btn = MPushButton("发送")
@@ -242,20 +258,20 @@ class AgentTestWindow(QWidget):
         input_layout.addWidget(self._reset_btn)
         online_layout.addLayout(input_layout)
 
-        right_layout.addWidget(self._online_panel)
+        right_layout.addWidget(self._online_panel, 1)
         self._online_panel.hide()
 
         splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(splitter, 1)
 
         # ===== 下半部分: 结果展示 =====
         main_layout.addWidget(MDivider("生成结果 (TestConfig)"))
         self._result_display = QTextEdit()
         self._result_display.setReadOnly(True)
-        self._result_display.setMaximumHeight(200)
+        self._result_display.setMaximumHeight(100)
         self._result_display.setPlaceholderText("点击「生成配置」或「发送」后，结果显示在此处...")
         main_layout.addWidget(self._result_display)
 
@@ -265,6 +281,45 @@ class AgentTestWindow(QWidget):
         self._send_btn.clicked.connect(self._on_send_message)
         self._reset_btn.clicked.connect(self._on_reset_chat)
         self._chat_input.returnPressed.connect(self._on_send_message)
+
+    def _start_warmup(self):
+        if self._warmup_started:
+            return
+        self._warmup_started = True
+        self._warmup_worker = WarmupWorker(self._agent)
+        self._warmup_worker.ready.connect(self._on_warmup_ready)
+        self._warmup_worker.error.connect(self._on_warmup_error)
+        self._warmup_worker.start()
+
+    def _sync_online_input_state(self):
+        if self._mode_combo.currentIndex() == 0:
+            return
+        if self._llm_worker is not None and self._llm_worker.isRunning():
+            return
+        if self._warmup_error:
+            self._chat_input.setEnabled(False)
+            self._send_btn.setEnabled(False)
+            self._send_btn.setText("Agent初始化失败")
+            return
+        if not self._warmup_ready:
+            self._chat_input.setEnabled(False)
+            self._send_btn.setEnabled(False)
+            self._send_btn.setText("Agent正在初始化")
+            return
+        self._chat_input.setEnabled(True)
+        self._send_btn.setEnabled(True)
+        self._send_btn.setText("发送")
+
+    def _on_warmup_ready(self):
+        self._warmup_ready = True
+        if self._mode_combo.currentIndex() != 0:
+            self._agent.switch_mode("online")
+            self._sync_online_input_state()
+
+    def _on_warmup_error(self, error_msg: str):
+        self._warmup_error = error_msg
+        self._chat_display.append(f"<b>错误:</b> Agent初始化失败: {error_msg}")
+        self._sync_online_input_state()
 
     # ---- 模式切换 ----
 
@@ -276,13 +331,14 @@ class AgentTestWindow(QWidget):
         else:
             self._offline_panel.hide()
             self._online_panel.show()
-            self._warmup_worker = WarmupWorker(self._agent)
-            self._warmup_worker.start()
+            if self._warmup_ready:
+                self._agent.switch_mode("online")
+            self._sync_online_input_state()
 
     # ---- 离线模式 ----
 
     def _on_offline_generate(self):
-        ctx = self._patient_panel.get_context()
+        ctx = self._athlete_panel.get_context()
         test_type = self._test_type_combo.currentText()
 
         try:
@@ -294,20 +350,31 @@ class AgentTestWindow(QWidget):
     # ---- 在线模式 ----
 
     def _on_send_message(self):
+        if self._llm_worker is not None and self._llm_worker.isRunning():
+            return
+        if not self._warmup_ready or self._warmup_error:
+            self._sync_online_input_state()
+            return
+
         message = self._chat_input.text().strip()
         if not message:
             return
 
         self._chat_display.append(f"<b>你:</b> {message}")
-        self._chat_display.append("<b>Agent:</b> ")  # 新段落，不跟用户消息同行
-        self._stream_anchor = self._chat_display.textCursor().position()
+        self._stream_anchor = None
         self._stream_buffer = ""
+        self._agent_label_inserted = False
         self._chat_input.clear()
+        self._chat_input.setEnabled(False)
         self._send_btn.setEnabled(False)
         self._send_btn.setText("等待中...")
         self._chat_start_time = time.perf_counter()
 
-        ctx = self._patient_panel.get_context()
+        ctx = self._athlete_panel.get_context()
+        if self._llm_worker is not None:
+            self._llm_worker.text_chunk.disconnect()
+            self._llm_worker.finished.disconnect()
+            self._llm_worker.error.disconnect()
         self._llm_worker = LLMWorker(self._agent, message, ctx)
         self._llm_worker.text_chunk.connect(self._on_text_chunk)
         self._llm_worker.finished.connect(self._on_llm_finished)
@@ -315,22 +382,27 @@ class AgentTestWindow(QWidget):
         self._llm_worker.start()
 
     def _on_text_chunk(self, text: str):
+        if not self._agent_label_inserted:
+            self._chat_display.append("<b>Agent:</b> ")
+            self._stream_anchor = self._chat_display.textCursor().position()
+            self._agent_label_inserted = True
         self._stream_buffer += text
         self._chat_display.insertPlainText(text)
 
     def _on_llm_finished(self, config, reply: str):
+        self._chat_input.setEnabled(True)
         self._send_btn.setEnabled(True)
         self._send_btn.setText("发送")
 
         if self._stream_buffer:
-            # 选中从 _stream_anchor 到文档末尾的全部 raw text
             doc = self._chat_display.document()
             cursor = QTextCursor(doc)
             cursor.setPosition(self._stream_anchor)
             cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-            # 用 rendered HTML 替换
-            cursor.insertHtml(_md_to_html(self._stream_buffer))
+            display_text = reply if config is not None else self._stream_buffer
+            cursor.insertHtml(_md_to_html(display_text))
         else:
+            self._chat_display.append("<b>Agent:</b> ")
             self._chat_display.insertHtml(_md_to_html(reply))
 
         if config is not None:
@@ -341,6 +413,7 @@ class AgentTestWindow(QWidget):
             )
 
     def _on_llm_error(self, error_msg: str):
+        self._chat_input.setEnabled(True)
         self._send_btn.setEnabled(True)
         self._send_btn.setText("发送")
         self._chat_display.append(f"<b>错误:</b> {error_msg}")

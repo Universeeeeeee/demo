@@ -67,7 +67,7 @@ class LLMTestConfig(BaseModel):
     )
     start_position: Literal["Inside area", "Outside area"] = Field(
         default="Inside area",
-        description="起始位置: 受试者从踏板上还是踏板外开始",
+        description="起始位置: 用户从踏板上还是踏板外开始",
     )
     starting_foot: Literal["Right", "Left", "Not defined"] = Field(
         default="Not defined",
@@ -81,7 +81,7 @@ class LLMTestConfig(BaseModel):
     # ---- Layer 3: 滤波参数 ----
     min_contact_time: int = Field(
         default=60, ge=0, le=500,
-        description="最小接触时间(ms), 低于此值的触地视为无效. 老年人建议80+, 术后建议100+",
+        description="最小接触时间(ms), 低于此值的触地视为无效. 年长者建议80+, 入门用户建议100+",
     )
     min_flight_time: int = Field(
         default=0, ge=0, le=500,
@@ -148,13 +148,13 @@ class LLMTestConfig(BaseModel):
 # ---- Agent 输入模型 ----
 
 @dataclass
-class PatientContext:
-    """患者上下文 — 两种模式共用"""
+class AthleteProfile:
+    """用户运动档案 — 供规则引擎和 LLM 使用"""
     age: int
     weight: float
     height: float
-    condition: str              # healthy / post_surgery / neurological
-    affected_side: str = ""     # left / right / both / none
+    level: str = "intermediate"     # beginner / intermediate / advanced
+    focus_side: str = ""            # "" / "left" / "right" / "both"
     device_channels: int = 8
     history: list[dict] = field(default_factory=list)
 

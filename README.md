@@ -50,7 +50,7 @@ Iron_Jump/
 │   └── test_report.py      # TestReport frozen dataclass：不可变测试结果快照
 │
 ├── agent/                  # AI Agent 模块
-│   ├── models.py           # PatientContext(输入) + LLMTestConfig + ChatResponse(LLM 输出)
+│   ├── models.py           # AthleteProfile(输入) + LLMTestConfig + ChatResponse(LLM 输出)
 │   ├── rule_engine.py      # 离线：规则引擎，保守聚合 + 顺序无关 → TestConfig
 │   ├── llm_agent.py        # 在线：Pydantic AI + DeepSeek + ClarifyGPT 验证 → TestConfig
 │   ├── gait_agent.py       # Facade 门面，统一两种模式对外接口 + 生命周期管理
@@ -138,7 +138,7 @@ Iron_Jump/
 | 方式 | 入口 | 说明 |
 |:---|:---|:---|
 | **手动配置** | `ParamPanel.get_config()` | Schema 驱动的动态表单 |
-| **规则引擎** (离线) | `GaitAgent.configure_offline()` | 按 PatientContext 自动推荐 |
+| **规则引擎** (离线) | `GaitAgent.configure_offline()` | 按 AthleteProfile 自动推荐 |
 | **LLM** (在线) | `GaitAgent.chat_online()` | 自然语言对话 → 结构化输出 |
 
 ### 参数分层 (来自 Iron_parameters.json)
@@ -178,8 +178,8 @@ Iron_Jump/
 用户/UI
   ↓
 GaitAgent (Facade)
-  ├── 离线: RuleEngine.configure(test_type, PatientContext) → TestConfig
-  └── 在线: LLMConfigAgent.chat(user_msg, PatientContext)
+  ├── 离线: RuleEngine.configure(test_type, AthleteProfile) → TestConfig
+  └── 在线: LLMConfigAgent.chat(user_msg, AthleteProfile)
               → asyncio.run(_flow())
                 → agent.run() → Union[LLMTestConfig, ChatResponse]
                   ├── ChatResponse → 自然语言追问/解释
@@ -204,7 +204,7 @@ LLM 输出 JSON → Pydantic 校验 → LLMTestConfig (BaseModel)
 
 ### 其他关键实现细节
 
-- **RuleEngine**: `PATIENT_RULES` 是 `list[tuple[Callable, dict]]`，数据驱动。多规则命中同一字段时取最保守值（`min_contact→MAX`, `number_of_jumps→MIN`, `max_flight→MIN(非零)`），与规则添加顺序无关。14 个单元测试覆盖
+- **RuleEngine**: `PROFILE_RULES` 是 `list[tuple[Callable, dict]]`，数据驱动。多规则命中同一字段时取最保守值（`min_contact→MAX`, `number_of_jumps→MIN`, `max_flight→MIN(非零)`），与规则添加顺序无关。14 个单元测试覆盖
 - **LLMConfigAgent**: 延迟初始化 (`_ensure_agent()`) + 预热 (`warmup()`)，避免导入崩溃，首次对话不卡。chat() 同步接口，内部 `asyncio.run()` 统一事件循环以支持并行验证
 - **三层校验**: ① Pydantic BaseModel 校验结构+范围+枚举 → ② `.to_test_config()` 转换 → ③ ParamSchema 校验跨字段联动
 
@@ -236,7 +236,7 @@ python agent/agent_test_ui.py
 python hardware/receive.py
 
 # 验证 import 链
-python -c "from agent import GaitAgent, PatientContext; print('OK')"
+python -c "from agent import GaitAgent, AthleteProfile; print('OK')"
 python -c "from ui.main_window import MainWindow; print('OK')"
 ```
 

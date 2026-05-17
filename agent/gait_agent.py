@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from config.test_config import TestConfig
-from .models import PatientContext
+from .models import AthleteProfile
 from .rule_engine import RuleEngine
 
 
@@ -15,12 +15,12 @@ class GaitAgent:
     用法:
         agent = GaitAgent(mode="offline")
 
-        # 离线模式：UI 传入 test_type + 患者信息
-        config = agent.configure_offline("Jump Test", patient_ctx)
+        # 离线模式：UI 传入 test_type + 用户信息
+        config = agent.configure_offline("Jump Test", athlete_ctx)
 
         # 在线模式：自然语言对话
         agent.switch_mode("online")
-        config, reply = agent.chat_online("70岁老人术后康复", patient_ctx)
+        config, reply = agent.chat_online("入门用户，做5次跳跃测试", athlete_ctx)
     """
 
     def __init__(self, mode: str = "offline"):
@@ -41,29 +41,33 @@ class GaitAgent:
             self._llm_agent = LLMConfigAgent()
         return self._llm_agent
 
+    def warmup_online(self):
+        """初始化在线 Agent，不改变当前模式或对话历史。"""
+        self.llm_agent.warmup()
+
     def switch_mode(self, mode: str):
-        """切换模式，首次进入在线模式时预热 Agent"""
+        """切换模式，首次进入在线模式时确保 Agent 已初始化。"""
         self.mode = mode
         if mode == "online":
-            self.llm_agent.warmup()
+            self.warmup_online()
             self.llm_agent.reset()
 
     # ---- 离线模式：直接配置 ----
     def configure_offline(
-        self, test_type: str, ctx: PatientContext
+        self, test_type: str, ctx: AthleteProfile
     ) -> TestConfig:
-        """离线模式：UI 传入 test_type + 患者信息 → 直接返回配置"""
+        """离线模式：UI 传入 test_type + 用户信息 → 直接返回配置"""
         return self._rule_engine.configure(test_type, ctx)
 
     # ---- 在线模式：对话式配置 ----
     def chat_online(
-        self, message: str, ctx: PatientContext
+        self, message: str, ctx: AthleteProfile
     ) -> tuple[TestConfig | None, str]:
         """在线模式：自然语言对话 → 返回 (配置或None, 回复文字)"""
         return self.llm_agent.chat(message, ctx)
 
     def chat_online_stream(
-        self, message: str, ctx: PatientContext, on_chunk
+        self, message: str, ctx: AthleteProfile, on_chunk
     ) -> tuple[TestConfig | None, str]:
         """在线模式流式版：每收到文本增量回调 on_chunk(text)"""
         return self.llm_agent.chat_stream(message, ctx, on_chunk)
@@ -72,4 +76,3 @@ class GaitAgent:
         """重置在线对话"""
         if self._llm_agent:
             self._llm_agent.reset()
-

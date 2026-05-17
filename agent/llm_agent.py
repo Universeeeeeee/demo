@@ -2,7 +2,7 @@
 # 使用 Pydantic AI + DeepSeek LLM 进行智能参数配置
 #
 # 数据流:
-#   用户自然语言 + PatientContext
+#   用户自然语言 + AthleteProfile
 #     → Pydantic AI (Union[LLMTestConfig, ChatResponse])
 #     → LLM 自主选择: 自然语言回复 或 结构化配置
 #     → 配置路径: LLMTestConfig → TestConfig → ParamSchema 校验
@@ -15,16 +15,16 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Union, Callable
+from typing import Any, Union, Callable
 
 from dotenv import load_dotenv
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from config.test_config import TestConfig
 from config.param_schema import get_schema
-from .models import PatientContext, LLMTestConfig, ChatResponse
+from .models import AthleteProfile, LLMTestConfig, ChatResponse
 
 
 def _init_model() -> OpenAIChatModel:
@@ -71,15 +71,46 @@ SYSTEM_PROMPT = """\
 - 纵跳模式默认双脚起跳，starting_foot="Not defined"，reply_message 中说"双脚跳跃"不要写"未指定"
 
 沉默规则：
-底层滤波参数（min_contact_time, min_flight_time, max_flight_time）由 LLM 根据患者信息自动设置，
+底层滤波参数（min_contact_time, min_flight_time, max_flight_time）由 LLM 根据用户信息自动设置，
 不要在 reply_message 中提及、解释或展示这些参数，除非用户主动追问。
 
-患者触发值（静默设置，不向用户解释）：
-- 老年人(>60): min_contact_time>=80, number_of_jumps<=3
-- 术后康复: min_contact_time>=100, number_of_jumps<=3
+触发值（静默设置，不向用户解释）：
+- 年长用户(>60): min_contact_time>=80, number_of_jumps<=3
+- 入门用户: min_contact_time>=100, number_of_jumps<=3
 - 儿童(<12): min_contact_time>=40
 - 采样率硬件固定 1000Hz
 """
+
+
+def _format_runtime_context(ctx: AthleteProfile) -> str:
+    """将本地上下文注入 prompt，避免为已知数据额外发起 tool 往返。"""
+    if ctx.history:
+        recent = ctx.history[-3:]
+        history_text = "\n".join(
+            f"- {h.get('date', '')}: {h.get('test_type', '')}, "
+            f"jumps={h.get('number_of_jumps', '')}, "
+            f"min_contact={h.get('min_contact_time', '')}ms"
+            for h in recent
+        )
+    else:
+        history_text = "该用户无历史测试记录"
+
+    level_labels = {"beginner": "入门", "intermediate": "进阶", "advanced": "高阶"}
+
+    return (
+        "用户信息：\n"
+        f"- 年龄: {ctx.age}\n"
+        f"- 体重: {ctx.weight}kg\n"
+        f"- 身高: {ctx.height}cm\n"
+        f"- 训练水平: {level_labels.get(ctx.level, ctx.level)}\n"
+        f"- 侧重训练: {ctx.focus_side or '均衡'}\n"
+        "历史记录：\n"
+        f"{history_text}\n"
+        "设备能力：\n"
+        f"- 设备通道数: {ctx.device_channels}\n"
+        "- 采样率: 1000Hz (硬件固定)\n"
+        "- 当前支持的测试类型: Jump Test"
+    )
 
 
 def _create_agent() -> Agent:
@@ -88,7 +119,7 @@ def _create_agent() -> Agent:
 
     agent = Agent(
         model=model,
-        deps_type=PatientContext,
+        deps_type=AthleteProfile,
         output_type=Union[LLMTestConfig, ChatResponse],
         instructions=SYSTEM_PROMPT,
         retries=1,
@@ -96,30 +127,6 @@ def _create_agent() -> Agent:
         # 根据 DeepSeek 官网，需通过 extra_body 显式关闭
         model_settings={"extra_body": {"thinking": {"type": "disabled"}}},
     )
-
-    # ---- 工具注册 ----
-
-    @agent.tool
-    def get_patient_history(ctx: RunContext[PatientContext]) -> str:
-        """获取该患者最近的测试记录，用于参考之前的配置"""
-        if not ctx.deps.history:
-            return "该患者无历史测试记录"
-        recent = ctx.deps.history[-3:]
-        return "\n".join(
-            f"- {h.get('date','')}: {h.get('test_type','')}, "
-            f"jumps={h.get('number_of_jumps','')}, "
-            f"min_contact={h.get('min_contact_time','')}ms"
-            for h in recent
-        )
-
-    @agent.tool
-    def get_device_capabilities(ctx: RunContext[PatientContext]) -> str:
-        """获取当前连接设备的能力参数"""
-        return (
-            f"设备通道数: {ctx.deps.device_channels}\n"
-            f"采样率: 1000Hz (硬件固定)\n"
-            f"当前支持的测试类型: Jump Test"
-        )
 
     return agent
 
@@ -141,6 +148,41 @@ class LLMConfigAgent:
         "number_of_jumps": "跳跃次数",
         "test_length": "测试时长",
     }
+    STRONG_CONFIG_PHRASES = (
+        "配置",
+        "配参数",
+        "帮我配",
+        "生成参数",
+        "设置参数",
+        "设参数",
+    )
+    CONFIG_ACTION_TERMS = (
+        "测试",
+        "测",
+        "纵跳",
+        "跳跃",
+        "跳",
+        "开始",
+        "停止",
+        "jump",
+        "test",
+    )
+    CONFIG_CONSTRAINT_TERMS = (
+        "次",
+        "分钟",
+        "秒",
+        "时长",
+        "手动",
+        "自动",
+        "起跳",
+        "双脚",
+        "单脚",
+        "次数",
+        "参数",
+        "minute",
+        "second",
+        "times",
+    )
 
     def __init__(self):
         self._agent: Agent | None = None
@@ -153,24 +195,29 @@ class LLMConfigAgent:
             self._agent = _create_agent()
 
     def warmup(self):
-        """预热: 提前初始化 Agent，省去首次 chat() 的初始化耗时（~6s）。"""
+        """预热: 初始化 Agent，并用一次轻量真实请求预热远端连接/服务端实例。"""
         self._ensure_agent()
+        try:
+            ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
+            asyncio.run(
+                self._agent.run(
+                    "请只回复 OK。",
+                    deps=ctx,
+                    message_history=[],
+                    instructions=_format_runtime_context(ctx),
+                )
+            )
+        except Exception as e:
+            print(f"[Warmup] 真实请求预热失败: {e}")
 
-    def _snapshot_before_last_output(self) -> list:
-        """获取不包含最后一条 ModelResponse 的 history 快照。
-
-        pydantic-ai 的 message_history 可能包含:
-          [..., ModelRequest, (ToolReturn...), ModelResponse]
-        需要精确去掉最后一条 ModelResponse，保留之前的全部内容。
-        """
-        from pydantic_ai.messages import ModelResponse
-
-        if not self.message_history:
-            return []
-        for i in range(len(self.message_history) - 1, -1, -1):
-            if isinstance(self.message_history[i], ModelResponse):
-                return list(self.message_history[:i])
-        return list(self.message_history)
+    def _is_config_request(self, user_message: str) -> bool:
+        """确定性 fast gate：只识别配置短语或“测试动作 + 参数约束”的组合。"""
+        text = user_message.lower()
+        if any(phrase in text for phrase in self.STRONG_CONFIG_PHRASES):
+            return True
+        has_action = any(term in text for term in self.CONFIG_ACTION_TERMS)
+        has_constraint = any(term in text for term in self.CONFIG_CONSTRAINT_TERMS)
+        return has_action and has_constraint
 
     def _cluster_configs(
         self, configs: list[LLMTestConfig],
@@ -214,81 +261,128 @@ class LLMConfigAgent:
         config: TestConfig,
         raw_reply: str,
     ) -> str:
-        """LLM 自然语言回复末尾追加 Markdown 配置摘要表格。"""
-        d = config.to_dict()
-        rows = [
-            ("停止", d.get("stop_type", "")),
-            ("次数", d.get("number_of_jumps", "—")),
-            ("起跳脚", d.get("starting_foot", "")),
-        ]
-        table = "| 参数 | 值 |\n|---|---|\n"
-        for k, v in rows:
-            table += f"| {k} | {v} |\n"
-        return raw_reply + "\n\n" + table
+        """生成稳定的 Markdown 配置摘要，避免模型把多项设置挤在同一行。"""
+        stop_labels = {
+            "External impulse": "手动控制停止",
+            "End of Time": f"按测试时长自动停止，共 {config.test_length}",
+            "Status change": f"按跳跃次数自动停止，共 {config.number_of_jumps} 次",
+        }
+        start_labels = {
+            "Status change": "踩上踏板即开始",
+            "External impulse": "手动开始",
+        }
+        position_labels = {
+            "Inside area": "踏板上",
+            "Outside area": "踏板外",
+        }
+        foot_labels = {
+            "Not defined": "双脚跳跃",
+            "Right": "右脚起跳",
+            "Left": "左脚起跳",
+        }
 
-    async def _verify_config(
+        return "\n".join([
+            "为你配置纵跳测试参数，以下是设置总结：",
+            "",
+            f"- 测试类型：{config.test_type}（纵跳测试）",
+            f"- 停止方式：{stop_labels.get(config.stop_type, config.stop_type)}",
+            f"- 启动方式：{start_labels.get(config.start_type, config.start_type)}",
+            f"- 起跳方式：{foot_labels.get(config.starting_foot, config.starting_foot)}",
+            f"- 起始位置：{position_labels.get(config.start_position, config.start_position)}",
+            f"- 结束位置：{position_labels.get(config.finish_position, config.finish_position or '未指定')}",
+            "",
+            "其他参数已根据默认配置自动设定。准备好了就可以开始测试。",
+        ])
+
+    async def _run_sample(
         self,
-        first_output: LLMTestConfig,
         user_message: str,
-        ctx: PatientContext,
-        timing: list[str] | None = None,
-    ) -> tuple[LLMTestConfig | None, str | None]:
-        """ClarifyGPT: 并行采样 + 聚类验证。
+        ctx: AthleteProfile,
+        snapshot: list,
+        runtime_ctx: str,
+    ):
+        """执行一次独立采样，返回 result 与耗时。"""
+        t0 = time.perf_counter()
+        result = await self._agent.run(
+            user_message,
+            deps=ctx,
+            message_history=snapshot,
+            instructions=runtime_ctx,
+        )
+        return result, result.output, time.perf_counter() - t0
 
-        所有 N 个样本平等，无主从之分。分三步：
-        1. 并行采样 N-1 次（与首次同级，共同组成 N 个 peer）
-        2. 按关键字段值聚类
-        3. 1 组 → 随机选一个返回；多组 → 生成追问
-        """
-        if timing is None:
-            timing = []
-        snapshot = self._snapshot_before_last_output()
+    async def _run_parallel_samples(
+        self,
+        user_message: str,
+        ctx: AthleteProfile,
+        snapshot: list,
+        runtime_ctx: str,
+        initial_sample: tuple[Any, Union[LLMTestConfig, ChatResponse], float] | None = None,
+    ) -> list[Any]:
+        """ClarifyGPT: 从同一个上下文快照并行采样 N 次。"""
+        samples: list[Any] = []
+        if initial_sample is not None:
+            samples.append(initial_sample)
 
-        async def _sample():
-            t0 = time.perf_counter()
-            result = await self._agent.run(
-                user_message, deps=ctx, message_history=snapshot
-            )
-            elapsed = time.perf_counter() - t0
-            return result, elapsed
+        tasks = [
+            self._run_sample(user_message, ctx, snapshot, runtime_ctx)
+            for _ in range(self.N_SAMPLES - len(samples))
+        ]
+        samples.extend(await asyncio.gather(*tasks, return_exceptions=True))
+        return samples
 
-        tasks = [_sample() for _ in range(self.N_SAMPLES - 1)]
-        gather_results = await asyncio.gather(*tasks, return_exceptions=True)
+    def _resolve_parallel_samples(
+        self,
+        sample_results: list[Any],
+        timing: list[str],
+    ) -> tuple[LLMTestConfig | None, str | None, Any | None]:
+        """聚类 N 个并行样本，返回配置、追问消息和应写入 history 的 result。"""
+        configs: list[LLMTestConfig] = []
+        config_results: list[tuple[LLMTestConfig, Any]] = []
+        first_chat_result = None
+        first_success_result = None
+        failed_count = 0
 
-        # 收集所有 peer（首次 + 并行采样），彼此平等
-        peers: list[LLMTestConfig] = [first_output]
-        chat_count = 0
-
-        for i, item in enumerate(gather_results):
+        for i, item in enumerate(sample_results):
             if isinstance(item, Exception):
-                chat_count += 1
+                failed_count += 1
+                timing.append(f"sample{i+1}=error")
                 continue
-            result, elapsed = item
-            print(f"[Timing] 并行采样 peer #{i + 1}: {elapsed:.1f}s")
-            timing.append(f"peer{i+1}={elapsed:.1f}s")
-            output = result.output
-            if isinstance(output, LLMTestConfig):
-                peers.append(output)
-            else:
-                chat_count += 1
 
-        if len(peers) < self.MIN_CONFIG_COUNT:
+            result, output, elapsed = item
+            if first_success_result is None:
+                first_success_result = result
+            timing.append(f"sample{i+1}={elapsed:.1f}s")
+            print(f"[Timing] 并行采样 sample #{i + 1}: {elapsed:.1f}s")
+
+            if isinstance(output, LLMTestConfig):
+                configs.append(output)
+                config_results.append((output, result))
+            elif isinstance(output, ChatResponse) and first_chat_result is None:
+                first_chat_result = result
+
+        history_result = first_chat_result or first_success_result
+
+        if len(configs) < self.MIN_CONFIG_COUNT:
+            if first_chat_result is not None:
+                return None, first_chat_result.output.message, history_result
             return None, (
                 f"信息可能不够充分"
-                f"（{chat_count}/{self.N_SAMPLES - 1} 次采样选择了追问而非生成配置）。"
-                f"请补充更多测试需求信息。"
-            )
+                f"（{len(configs)}/{self.N_SAMPLES} 次采样生成配置，"
+                f"{failed_count} 次采样失败）。"
+                f"请补充停止方式、跳跃次数或测试时长。"
+            ), history_result
 
-        # 聚类 — ClarifyGPT 核心：按输出一致性分组
-        clusters = self._cluster_configs(peers)
-
+        clusters = self._cluster_configs(configs)
         if len(clusters) == 1:
-            # 全部一致 — 组内任一可代表整体
-            return random.choice(clusters[0]), None
+            chosen = random.choice(clusters[0])
+            chosen_result = next(
+                result for config, result in config_results if config is chosen
+            )
+            return chosen, None, chosen_result
 
-        # 多组 = 需求有歧义 — 生成追问
-        disagreements = self._find_disagreements(peers)
-        return None, self._generate_clarification(disagreements)
+        disagreements = self._find_disagreements(configs)
+        return None, self._generate_clarification(disagreements), history_result
 
     def _finalize(
         self,
@@ -307,44 +401,91 @@ class LLMConfigAgent:
             stream_callback(hint)
         return config, message + hint
 
-    async def _process_output(
+    def _finalize_config_output(
         self,
-        output: Union[LLMTestConfig, ChatResponse],
-        user_message: str,
-        ctx: PatientContext,
+        verified: LLMTestConfig,
         t_start: float,
         timing: list[str],
         stream_callback: Callable[[str], None] | None = None,
     ) -> tuple[TestConfig | None, str]:
-        """处理 LLM 输出——流式和非流式共享。"""
+        """将已通过 ClarifyGPT 的 LLMTestConfig 转成系统 TestConfig。"""
+        config = verified.to_test_config()
+        values = config.to_dict()
+        values.setdefault("test_macro_type", "Performance")
+        errors = self._schema.validate(config.test_type, values)
+        if errors:
+            return self._finalize(
+                None,
+                f"配置参数不合法: {'; '.join(errors)}",
+                t_start,
+                timing,
+                "参数校验失败",
+                stream_callback,
+            )
+        normalized_reply = self._format_config_reply_markdown(
+            config=config, raw_reply=verified.reply_message,
+        )
+        return self._finalize(
+            config, normalized_reply, t_start, timing, "配置成功", stream_callback,
+        )
+
+    async def _process_single_output(
+        self,
+        output: Union[LLMTestConfig, ChatResponse],
+        t_start: float,
+        timing: list[str],
+        stream_callback: Callable[[str], None] | None = None,
+    ) -> tuple[TestConfig | None, str]:
+        """处理单次 LLM 输出，用于非配置 fast path。"""
         if isinstance(output, ChatResponse):
             return self._finalize(None, output.message, t_start, timing, "ChatResponse",
                                   stream_callback)
 
         if isinstance(output, LLMTestConfig):
-            verified, clarify_msg = await self._verify_config(
-                output, user_message, ctx, timing,
+            return self._finalize_config_output(
+                output, t_start, timing, stream_callback,
             )
-            if clarify_msg:
-                return self._finalize(None, clarify_msg, t_start, timing, "追问",
-                                      stream_callback)
-
-            config = verified.to_test_config()
-            values = config.to_dict()
-            values.setdefault("test_macro_type", "Performance")
-            errors = self._schema.validate(config.test_type, values)
-            if errors:
-                return None, f"配置参数不合法: {'; '.join(errors)}"
-            normalized_reply = self._format_config_reply_markdown(
-                config=config, raw_reply=verified.reply_message,
-            )
-            return self._finalize(config, normalized_reply, t_start, timing, "配置成功",
-                                  stream_callback)
 
         return None, f"未知的输出类型: {type(output).__name__}"
 
+    async def _run_parallel_clarify(
+        self,
+        user_message: str,
+        ctx: AthleteProfile,
+        snapshot: list,
+        runtime_ctx: str,
+        t_start: float,
+        timing: list[str],
+        stream_callback: Callable[[str], None] | None = None,
+        initial_sample: tuple[Any, Union[LLMTestConfig, ChatResponse], float] | None = None,
+    ) -> tuple[TestConfig | None, str]:
+        """配置请求路径：N 个样本从同一快照真正并行，随后聚类裁判。"""
+        if stream_callback:
+            stream_callback("正在生成并校验配置...\n")
+
+        sample_results = await self._run_parallel_samples(
+            user_message, ctx, snapshot, runtime_ctx, initial_sample,
+        )
+        verified, clarify_msg, history_result = self._resolve_parallel_samples(
+            sample_results, timing,
+        )
+
+        if history_result is not None:
+            self.message_history = history_result.all_messages()
+
+        if clarify_msg:
+            if stream_callback:
+                stream_callback(clarify_msg)
+            return self._finalize(
+                None, clarify_msg, t_start, timing, "追问", stream_callback,
+            )
+
+        return self._finalize_config_output(
+            verified, t_start, timing, stream_callback,
+        )
+
     def chat(
-        self, user_message: str, ctx: PatientContext
+        self, user_message: str, ctx: AthleteProfile
     ) -> tuple[TestConfig | None, str]:
         """
         一轮对话（同步接口，内部用 asyncio.run 统一事件循环以支持并行采样）。
@@ -358,17 +499,41 @@ class LLMConfigAgent:
 
         t_start = time.perf_counter()
         timing: list[str] = []
+        runtime_ctx = _format_runtime_context(ctx)
+        snapshot = list(self.message_history or [])
 
         async def _flow() -> tuple[TestConfig | None, str]:
+            if self._is_config_request(user_message):
+                return await self._run_parallel_clarify(
+                    user_message, ctx, snapshot, runtime_ctx, t_start, timing,
+                )
+
             t0 = time.perf_counter()
             result = await self._agent.run(
-                user_message, deps=ctx, message_history=self.message_history,
+                user_message,
+                deps=ctx,
+                message_history=snapshot,
+                instructions=runtime_ctx,
             )
-            timing.append(f"1st={time.perf_counter() - t0:.1f}s")
-            print(f"[Timing] 首次 LLM 调用: {timing[-1]}")
+            elapsed = time.perf_counter() - t0
+            print(f"[Timing] 单次 LLM 调用: {elapsed:.1f}s")
+
+            if isinstance(result.output, LLMTestConfig):
+                timing.append("gate=miss")
+                return await self._run_parallel_clarify(
+                    user_message,
+                    ctx,
+                    snapshot,
+                    runtime_ctx,
+                    t_start,
+                    timing,
+                    initial_sample=(result, result.output, elapsed),
+                )
+
+            timing.append(f"single={elapsed:.1f}s")
             self.message_history = result.all_messages()
-            return await self._process_output(
-                result.output, user_message, ctx, t_start, timing,
+            return await self._process_single_output(
+                result.output, t_start, timing,
             )
 
         try:
@@ -378,7 +543,7 @@ class LLMConfigAgent:
             return None, f"配置生成失败: {e}"
 
     def chat_stream(
-        self, user_message: str, ctx: PatientContext,
+        self, user_message: str, ctx: AthleteProfile,
         on_chunk: Callable[[str], None],
     ) -> tuple[TestConfig | None, str]:
         """
@@ -391,18 +556,34 @@ class LLMConfigAgent:
 
         t_start = time.perf_counter()
         timing: list[str] = []
+        runtime_ctx = _format_runtime_context(ctx)
+        snapshot = list(self.message_history or [])
 
         async def _flow_stream() -> tuple[TestConfig | None, str]:
+            if self._is_config_request(user_message):
+                return await self._run_parallel_clarify(
+                    user_message,
+                    ctx,
+                    snapshot,
+                    runtime_ctx,
+                    t_start,
+                    timing,
+                    stream_callback=on_chunk,
+                )
+
             t0 = time.perf_counter()
             async with self._agent.run_stream(
-                user_message, deps=ctx, message_history=self.message_history,
+                user_message,
+                deps=ctx,
+                message_history=snapshot,
+                instructions=runtime_ctx,
             ) as result:
                 prev = ""
                 async for partial in result.stream_output(debounce_by=0.05):
                     if isinstance(partial, ChatResponse):
                         current = partial.message or ""
                     elif isinstance(partial, LLMTestConfig):
-                        current = partial.reply_message or ""
+                        current = ""
                     else:
                         continue
                     if current and len(current) > len(prev):
@@ -410,13 +591,29 @@ class LLMConfigAgent:
                         on_chunk(delta)
                         prev = current
 
-                timing.append(f"1st={time.perf_counter() - t0:.1f}s")
-                print(f"[Timing] 首次 LLM 调用(流式): {timing[-1]}")
+                elapsed = time.perf_counter() - t0
+                print(f"[Timing] 单次 LLM 调用(流式): {elapsed:.1f}s")
 
                 output = await result.get_output()
-                self.message_history = result.all_messages()
-            return await self._process_output(
-                output, user_message, ctx, t_start, timing, on_chunk,
+                stream_history = result.all_messages()
+
+            if isinstance(output, LLMTestConfig):
+                timing.append("gate=miss")
+                return await self._run_parallel_clarify(
+                    user_message,
+                    ctx,
+                    snapshot,
+                    runtime_ctx,
+                    t_start,
+                    timing,
+                    stream_callback=on_chunk,
+                    initial_sample=(result, output, elapsed),
+                )
+
+            timing.append(f"single={elapsed:.1f}s")
+            self.message_history = stream_history
+            return await self._process_single_output(
+                output, t_start, timing, on_chunk,
             )
 
         try:

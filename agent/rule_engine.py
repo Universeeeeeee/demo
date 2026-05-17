@@ -1,8 +1,8 @@
 # rule_engine.py — 规则引擎（离线模式）
-# 根据患者信息自动推荐 OptoJump 测试参数，无需网络连接
+# 根据用户信息自动推荐 OptoJump 测试参数，无需网络连接
 #
 # 数据流:
-#   test_type (str) + PatientContext → TestConfig
+#   test_type (str) + AthleteProfile → TestConfig
 #   输出与 ParamPanel.get_config() 完全一致，可直接传入 GaitEngine
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ from typing import Callable
 
 from config.test_config import TestConfig, default_jump_config
 from config.param_schema import get_schema
-from .models import PatientContext
+from .models import AthleteProfile
 
 
-# ---- 患者修正规则 ----
+# ---- 参数修正规则 ----
 #
 # 格式: (条件函数, 要覆盖的 TestConfig 字段字典)
 #
@@ -25,12 +25,12 @@ from .models import PatientContext
 #   2. 可覆盖的字段 — TestConfig 的任意字段:
 #      stop_type, number_of_jumps, test_length,
 #      min_contact_time, min_flight_time, max_flight_time, ...
-#   3. 条件函数签名: (PatientContext) -> bool
+#   3. 条件函数签名: (AthleteProfile) -> bool
 #
-PatientRule = tuple[Callable[[PatientContext], bool], dict]
+ProfileRule = tuple[Callable[[AthleteProfile], bool], dict]
 
-PATIENT_RULES: list[PatientRule] = [
-    # 老年人 (>60): 触地时间更长，减少跳跃次数
+PROFILE_RULES: list[ProfileRule] = [
+    # 年长用户 (>60): 触地时间更长，减少跳跃次数
     (lambda ctx: ctx.age > 60,
      {"min_contact_time": 80, "number_of_jumps": 3}),
 
@@ -38,23 +38,19 @@ PATIENT_RULES: list[PatientRule] = [
     (lambda ctx: ctx.age < 12,
      {"min_contact_time": 40, "number_of_jumps": 3}),
 
-    # 术后康复: 保守参数
-    (lambda ctx: ctx.condition == "post_surgery",
+    # 入门用户: 保守参数
+    (lambda ctx: ctx.level == "beginner",
      {"min_contact_time": 100, "number_of_jumps": 3}),
-
-    # 神经系统疾病: 高敏感滤波
-    (lambda ctx: ctx.condition == "neurological",
-     {"min_contact_time": 100, "number_of_jumps": 3, "max_flight_time": 1000}),
 ]
 
 
 class RuleEngine:
     """
-    规则引擎 — 根据患者信息自动调整测试参数
+    规则引擎 — 根据用户信息自动调整测试参数
 
     职责:
       - 以 default_jump_config() 为基准
-      - 按患者条件逐条修正 TestConfig 字段
+      - 按用户条件逐条修正 TestConfig 字段
       - 用 ParamSchema.validate() 校验输出合法性
 
     不做:
@@ -65,13 +61,13 @@ class RuleEngine:
     def __init__(self):
         self._schema = get_schema()
 
-    def configure(self, test_type: str, ctx: PatientContext) -> TestConfig:
+    def configure(self, test_type: str, ctx: AthleteProfile) -> TestConfig:
         """
         生成测试配置。
 
         Args:
             test_type: 测试类型字符串，如 "Jump Test"
-            ctx: 患者上下文
+            ctx: 用户运动档案
 
         Returns:
             TestConfig — 与 ParamPanel.get_config() 输出格式一致
@@ -83,8 +79,8 @@ class RuleEngine:
         config = default_jump_config()
         config.test_type = test_type
 
-        # 2. 按患者条件修正
-        self._apply_patient_rules(config, ctx)
+        # 2. 按用户条件修正
+        self._apply_rules(config, ctx)
 
         # 3. schema 校验
         self._validate(config)
@@ -96,10 +92,10 @@ class RuleEngine:
     _MERGE_MIN = {"number_of_jumps"}                           # 越小越保守
     _MERGE_MIN_NONZERO = {"max_flight_time"}                   # 0=禁用，非零值越小越保守
 
-    def _apply_patient_rules(self, config: TestConfig, ctx: PatientContext) -> None:
+    def _apply_rules(self, config: TestConfig, ctx: AthleteProfile) -> None:
         """收集匹配规则的覆盖值，保守聚合后应用到 config。"""
         collected: dict[str, list] = {}
-        for condition_fn, overrides in PATIENT_RULES:
+        for condition_fn, overrides in PROFILE_RULES:
             if condition_fn(ctx):
                 for field_name, value in overrides.items():
                     collected.setdefault(field_name, []).append(value)

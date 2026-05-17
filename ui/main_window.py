@@ -11,6 +11,7 @@ main_window.py — 多视图主窗口
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
@@ -28,8 +29,9 @@ if _project_root not in sys.path:
 
 from config.test_config import TestConfig
 from config.test_report import TestReport
+from data.subject_store import SubjectProfile, SubjectStore
 from ui.session_controller import SessionController
-from ui.views.setup_view import SetupView
+from ui.views.setup_view import SessionSetup, SetupView
 from ui.views.execution_view import ExecutionView
 from ui.views.report_view import ReportView
 
@@ -38,6 +40,9 @@ try:
     from ui.camera import Camera
 except ImportError:
     Camera = None
+
+
+log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -61,11 +66,21 @@ class MainWindow(QMainWindow):
         # ===== Controller =====
         self._controller = SessionController(self)
 
+        try:
+            self._subject_store: SubjectStore | None = SubjectStore()
+        except Exception:
+            log.exception("Failed to initialize subject store")
+            self._subject_store = None
+
+        self._active_config: TestConfig | None = None
+        self._subject_id: int | None = None
+        self._subject: SubjectProfile | None = None
+
         # ===== Views =====
         self._stack = QStackedWidget() 
         self.setCentralWidget(self._stack)
 
-        self._setup_view = SetupView()
+        self._setup_view = SetupView(subject_store=self._subject_store)
         self._exec_view = ExecutionView()
         self._report_view = ReportView()
 
@@ -114,6 +129,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _go_to_setup(self):
+        self._active_config = None
+        self._subject_id = None
+        self._subject = None
         self._stack.setCurrentWidget(self._setup_view)
 
     def _go_to_execution(self):
@@ -126,8 +144,12 @@ class MainWindow(QMainWindow):
     #  事件处理
     # ------------------------------------------------------------------
 
-    def _on_ready(self, config: TestConfig):
+    def _on_ready(self, setup: SessionSetup):
         """SetupView '准备就绪' → 初始化资源 + 切到 ExecutionView"""
+        config = setup.config
+        self._active_config = config
+        self._subject_id = setup.subject_id
+        self._subject = setup.subject
         self._exec_view.reset()
         self._exec_view.configure(config)
         self._controller.prepare(config)
@@ -151,6 +173,22 @@ class MainWindow(QMainWindow):
 
     def _on_session_finished(self, report: TestReport):
         """Controller 发来 TestReport → 切到 ReportView"""
+        if (
+            self._subject_store is not None
+            and self._subject_id is not None
+            and self._active_config is not None
+        ):
+            try:
+                self._subject_store.record_session(
+                    self._subject_id,
+                    self._active_config,
+                    report,
+                    height_cm=self._subject.height_cm if self._subject else None,
+                    weight_kg=self._subject.weight_kg if self._subject else None,
+                )
+            except Exception:
+                log.exception("Failed to record subject session")
+
         self._report_view.load_report(report)
         self._go_to_report()
 
