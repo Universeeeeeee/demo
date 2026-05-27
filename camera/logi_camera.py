@@ -22,6 +22,13 @@ from pathlib import Path
 
 import threading
 
+_module_dir = Path(__file__).resolve().parent
+if str(_module_dir) not in sys.path:
+    sys.path.insert(0, str(_module_dir))
+_project_root = _module_dir.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import cv2
 import numpy as np
 from qtpy.QtCore import QObject, QThread, Signal, Qt

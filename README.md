@@ -14,132 +14,9 @@
 
 **未来硬件**: 将支持多米段设备级联（多对条形装置串联，LED 数量从 96 扩展到 N×96）。因此，当前模块中涉及 LED 数量、空间坐标、聚类算法的部分，**必须确保可扩展性**——避免硬编码 96 或单段假设。修改 `hardware/`、`engine/` 层代码时尤其注意这一点。
 
-## 技术栈
-
-| 层 | 技术 | 关键约束 |
-|:---|:---|:---|
-| **UI** | PySide2 + qtpy + dayu_widgets (本地库) | dayu_widgets 是本地安装的第三方库，已被 .gitignore 排除 |
-| **图表** | pyqtgraph (可选，降级为 QLabel 占位) | `_PG_AVAILABLE` 检查 |
-| **硬件通信** | ctypes + CyUsbInterface.dll (stdcall) | Windows-only, DLL 在 `hardware/` 目录下 |
-| **AI Agent** | pydantic-ai + DeepSeek LLM | .env 中配置 OPENAI_BASE_URL 和 API_KEY |
-| **数据导出** | openpyxl (Excel) | — |
-
-**采样率固定 1000Hz** — 这是硬件约束，代码中不应出现采样率可配置的逻辑。
-
-## 目录结构与各模块职责
-
-```
-Iron_Jump/
-├── hardware/               # L1 层：硬件通信（不要修改）
-│   ├── CyUsbInterface.dll  # Cypress USB 驱动 DLL
-│   ├── protocol.py         # 协议解析器（帧头帧尾、CRC8、分包重组）
-│   ├── receive.py          # DLL ctypes 封装 + CyUsbInterfaceDevice 高级封装
-│   └── usb_worker.py       # QObject Worker，管理 USB 读取线程，发射 Qt Signal
-│
-├── engine/                 # L2 层：算法引擎（不要修改，除非修复 bug）
-│   ├── gait_engine.py      # 核心引擎：接收原始帧 → 检测事件 → 发射高级信号
-│   ├── single_foot_tracker.py  # 纵跳模式：单足触地/腾空状态机
-│   ├── contact_tracker.py  # 步态模式：基于接触区域的步态事件追踪
-│   ├── spatial_clusterer.py # 空间聚类：将 96 位数据聚类为脚印
-│   └── extra_parameter.py  # 高阶步态参数计算（步长、步速等）
-│
-├── config/                 # 配置层
-│   ├── Iron_parameters.json # OptoJump 参数定义（4 层结构，含联动规则）
-│   ├── param_schema.py     # JSON Schema 加载器 + 校验器
-│   ├── test_config.py      # TestConfig dataclass：一次测试的完整运行时参数
-│   └── test_report.py      # TestReport frozen dataclass：不可变测试结果快照
-│
-├── agent/                  # AI Agent 模块
-│   ├── models.py           # AthleteProfile(输入) + LLMTestConfig + ChatResponse(LLM 输出)
-│   ├── rule_engine.py      # 离线：规则引擎，保守聚合 + 顺序无关 → TestConfig
-│   ├── llm_agent.py        # 在线：Pydantic AI + DeepSeek + ClarifyGPT 验证 → TestConfig
-│   ├── gait_agent.py       # Facade 门面，统一两种模式对外接口 + 生命周期管理
-│   └── agent_test_ui.py    # Agent 独立测试窗口（不依赖硬件）
-│
-├── ui/                     # UI 层
-│   ├── main_window.py      # 入口：多视图路由 (QStackedWidget)
-│   ├── session_controller.py # 会话控制器：管理 QThread + UsbWorker + GaitEngine 生命周期
-│   ├── param_panel.py      # 动态参数配置面板（Schema 驱动）
-│   ├── data_show.py        # 旧版单页 Demo（保留为回退方案，不要删除）
-│   ├── camera.py           # OpenCV 相机（独立线程，独立窗口）
-│   ├── led_con.py / led_panel.py  # LED 状态可视化
-│   └── views/
-│       ├── setup_view.py      # 配置页：ParamPanel + "准备就绪"按钮
-│       ├── execution_view.py  # 执行页：MetricCard 仪表盘 + 实时图表
-│       └── report_view.py     # 报告页：统计汇总 + Excel 导出
-│
-├── tests/                  # 单元测试
-│   ├── test_rule_engine.py     # 规则引擎 14 个测试（保守聚合/边界值/顺序无关）
-│   └── test_llm_test_config.py # LLMTestConfig 转换 5 个测试（字段传递/reply_message 泄漏）
-├── path_utils.py           # DLL 路径查找工具
-├── claude.md               # 代码编写行为准则（必读）
-├── .env                    # DeepSeek API 配置
-└── requirements.txt        # Python 依赖
-```
-
-## 核心架构：信号流
-
-```
-用户点击"准备就绪"
-  → SetupView.ready_signal.emit(TestConfig)
-  → MainWindow._on_ready(config)
-      → ExecutionView.reset() + configure(config)
-      → SessionController.prepare(config)
-          → 创建 QThread + UsbWorker + GaitEngine
-          → moveToThread
-          → 连接信号: L1→L2 (DirectConnection), L2→Controller (QueuedConnection)
-      → 切到 ExecutionView
-
-用户点击"开始"
-  → SessionController.start() → thread.start()
-
-实时数据流 (后台线程 → 主线程):
-  UsbWorker.raw_contact_signal
-    →[DirectConnection]→ GaitEngine.process_raw_frame()
-    →[产生事件]→ hop_event / gait_step_event
-    →[QueuedConnection]→ SessionController → ExecutionView
-
-测试结束 (自动/手动):
-  GaitEngine.test_finished.emit(reason)
-  → SessionController._on_engine_finished()
-      → 200ms 延迟 → stop()
-      → build_report(engine, reason) → TestReport (frozen dataclass)
-      → session_finished.emit(TestReport)
-  → MainWindow → ReportView.load_report(report)
-```
-
-## 线程模型
-
-```
-┌─────────────────────────────────────────────┐
-│ 主线程 (GUI)                                  │
-│  MainWindow, SetupView, ExecutionView,       │
-│  ReportView, SessionController               │
-│  (所有 Qt Widget 操作必须在此线程)              │
-└──────────────┬──────────────────────────────┘
-               │ QueuedConnection (低频 ~2-5Hz)
-┌──────────────▼──────────────────────────────┐
-│ Worker 线程 (QThread)                         │
-│  UsbWorker → GaitEngine                      │
-│  DirectConnection (高频 1000Hz)               │
-│  [USB 读取在 daemon 子线程，回调到此线程]        │
-└─────────────────────────────────────────────┘
-```
-
-**关键约束**:
-- GaitEngine 不能 import 任何 QtWidgets
-- 所有 UI 更新必须通过 QueuedConnection 回到主线程
-- `SessionController.prepare()` 中严格遵循: 创建对象 → moveToThread → 连接信号 → start
-
 ## 参数配置系统
 
-参数配置有 3 种方式，输出完全一致的 `TestConfig`:
-
-| 方式 | 入口 | 说明 |
-|:---|:---|:---|
-| **手动配置** | `ParamPanel.get_config()` | Schema 驱动的动态表单 |
-| **规则引擎** (离线) | `GaitAgent.configure_offline()` | 按 AthleteProfile 自动推荐 |
-| **LLM** (在线) | `GaitAgent.chat_online()` | 自然语言对话 → 结构化输出 |
+系统架构详见 **[docs/architecture.md](docs/architecture.md)**。
 
 ### 参数分层 (来自 Iron_parameters.json)
 
@@ -157,46 +34,9 @@ Iron_Jump/
 - `stop_type = "External impulse"` 时: 硬件层未实现，UI 选项保留但功能不可用
 - `visibility_condition` 可能是 per-test-type 格式（嵌套 dict）
 
-## 关键设计决策（已确认，不要推翻）
-
-| 决策 | 结论 | 原因 |
-|:---|:---|:---|
-| **采样率** | 固定 1000Hz | 硬件约束 |
-| **TestConfig** | dataclass, 不改为 BaseModel | 全系统通用 (engine/ui/controller)，改动影响面太大 |
-| **LLM 输出** | 新增 `LLMTestConfig(BaseModel)` 作为转换层 | 通过 Field/Literal 编码约束进 JSON Schema，提升 LLM 输出准确率 |
-| **TestReport** | frozen=True dataclass | ReportView 不持有 GaitEngine 引用 |
-| **旧 data_show.py** | 保留不动 | 回退方案 |
-| **Camera** | 独立 OpenCV 窗口 | 不嵌入 Qt |
-| **L1/L2 层** | 不动 usb_worker.py / gait_engine.py | 除非修复 bug |
-| **dayu_widgets** | 本地库，.gitignore 已排除 | 不要提交到 Git |
-
 ## Agent 模块设计
 
-### 架构
-
-```
-用户/UI
-  ↓
-GaitAgent (Facade)
-  ├── 离线: RuleEngine.configure(test_type, AthleteProfile) → TestConfig
-  └── 在线: LLMConfigAgent.chat(user_msg, AthleteProfile)
-              → asyncio.run(_flow())
-                → agent.run() → Union[LLMTestConfig, ChatResponse]
-                  ├── ChatResponse → 自然语言追问/解释
-                  └── LLMTestConfig → _verify_config()
-                       → asyncio.gather() 并行验证
-                       → .to_test_config() → TestConfig
-```
-
-### LLM 结构化输出层
-
-`LLMTestConfig(BaseModel)` 是专为 Pydantic AI 设计的中间层：
-
-```
-LLM 输出 JSON → Pydantic 校验 → LLMTestConfig (BaseModel)
-  → .to_test_config() → TestConfig (dataclass, 系统通用)
-  → ParamSchema.validate() → 业务逻辑二次校验
-```
+详见 **[docs/architecture.md §8](docs/architecture.md)**。
 
 **为什么不直接用 TestConfig？** TestConfig 是 dataclass，生成的 JSON Schema 只有字段名和类型，LLM 看不到枚举值、数值范围、字段含义。LLMTestConfig 通过 `Field(description=..., ge=..., le=...)` 和 `Literal[...]` 将这些约束编码进 schema，让 LLM 输出更准确。
 
@@ -267,7 +107,7 @@ python -c "from ui.main_window import MainWindow; print('OK')"
 | agent/ LLMTestConfig | ✅ 完成 | BaseModel 转换层 + @field_validator，5 个单元测试 |
 | agent/ LLM 在线模式 | ✅ 已验证 | DeepSeek API 实际调用通过，P0-P2 性能优化落地 |
 | agent/ ClarifyGPT | ✅ 已实现 | 并行采样 + 一致性检查 + 追问生成 |
-| Agent 集成到主 UI | 📋 待开发 | `agent_test_ui.py` → `SetupView` |
+| Agent 集成到主 UI | ✅ 已完成 | `agent_config_panel.py` 集成进 `SetupView` |
 | LED Panel 集成 | 📋 Phase 6 | 未来迭代 |
 | Camera 嵌入 Qt | 📋 Phase 6 | 未来迭代 |
 

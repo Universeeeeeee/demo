@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "web-search": {
+      "type": "stdio",
+      "command": "D:/conda/envs/pydantic_ai/python.exe",
+      "args": ["e:/OptoJump/Iron_Jump/agent/web_search_mcp.py"]
+    }
+  }
+}

@@ -1,4 +1,15 @@
 
+import os
+import sys
+
+# Ensure project root is importable when running `python ui/led_con.py`.
+_module_dir = os.path.dirname(os.path.abspath(__file__))
+if _module_dir not in sys.path:
+    sys.path.insert(0, _module_dir)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QThread, QObject, Signal, Qt, QTimer
 from dayu_widgets.divider import MDivider
@@ -8,17 +19,9 @@ from dayu_widgets.qt import application
 from dayu_widgets import dayu_theme
 import threading
 import time
-import sys
-import os
 from collections import deque
 
 from openpyxl import Workbook
-
-# 独立运行时确保项目根目录在 sys.path 中
-import os as _os
-_project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
 from hardware.receive import CyUsbInterfaceDevice, E_DATA_REPORT
 from hardware.usb_worker import UsbWorker

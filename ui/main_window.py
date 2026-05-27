@@ -15,17 +15,17 @@ import logging
 import os
 import sys
 
+# Ensure project root is importable when running `python ui/main_window.py`.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QMainWindow, QStackedWidget, QMessageBox,
 )
 from dayu_widgets import dayu_theme
 from dayu_widgets.qt import application
-
-# 确保项目根目录在 sys.path 中
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
 from config.test_config import TestConfig
 from config.test_report import TestReport
@@ -40,6 +40,25 @@ try:
     from ui.camera import Camera
 except ImportError:
     Camera = None
+
+# 专用相机 widget + 检测工具
+try:
+    from camera.logi_camera import LogiCameraWidget
+except ImportError:
+    LogiCameraWidget = None
+
+try:
+    from camera.tinyse_camera import TinySeCameraWidget
+except ImportError:
+    TinySeCameraWidget = None
+
+try:
+    from camera.tinyse_dshow_capture import TinySeDShowCapture
+except ImportError:
+    TinySeDShowCapture = None
+
+import cv2
+from qtpy.QtCore import QTimer
 
 
 log = logging.getLogger(__name__)
@@ -89,13 +108,18 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._report_view)    # index 2
 
         # ===== Camera =====
-        self._camera = None
+        self._logi_camera = None
+        self._tinyse_camera = None
+        self._basic_camera = None
 
         # ===== 连接信号 =====
         self._connect_signals()
 
         # ===== 初始页面 =====
         self._go_to_setup()
+
+        # ===== 异步检测相机设备 =====
+        QTimer.singleShot(0, self._detect_cameras)
 
     # ------------------------------------------------------------------
     #  信号连接
@@ -192,19 +216,78 @@ class MainWindow(QMainWindow):
         self._report_view.load_report(report)
         self._go_to_report()
 
-    def _on_camera(self):
-        """打开/关闭相机"""
-        if Camera is None:
-            QMessageBox.warning(self, "相机", "Camera 模块不可用")
-            return
+    def _detect_cameras(self):
+        """异步检测可用相机设备, 控制 Tiny SE 按钮显隐。"""
+        has_tinyse = False
+        try:
+            probe = TinySeDShowCapture(device_needle="OBSBOT Tiny SE")
+            probe.close()
+            has_tinyse = True
+        except Exception:
+            log.exception("Tiny SE 检测失败")
 
-        if self._camera is None:
-            self._camera = Camera()
+        self._exec_view.set_tinyse_available(has_tinyse)
 
-        if not self._camera.is_running:
-            self._camera.open_camera(threaded=True)
+    def _on_camera(self, camera_type: str):
+        """根据 camera_type 打开/关闭对应相机窗口。
+        
+        支持三种类型: "logi" / "tinyse" / "basic"
+        惰性创建, 已打开则置顶, 已销毁则重建。
+        """
+        if camera_type == "logi":
+            if LogiCameraWidget is None:
+                QMessageBox.warning(self, "相机", "LogiCameraWidget 模块不可用")
+                return
+            widget = self._logi_camera
+            if widget is None:
+                self._logi_camera = LogiCameraWidget()
+                dayu_theme.apply(self._logi_camera)
+                self._logi_camera.show()
+            elif widget.isVisible():
+                widget.raise_()
+                widget.activateWindow()
+                if widget.isMinimized():
+                    widget.showNormal()
+            else:
+                # 已销毁则重建
+                self._logi_camera = LogiCameraWidget()
+                dayu_theme.apply(self._logi_camera)
+                self._logi_camera.show()
+
+        elif camera_type == "tinyse":
+            if TinySeCameraWidget is None:
+                QMessageBox.warning(self, "相机", "TinySeCameraWidget 模块不可用")
+                return
+            widget = self._tinyse_camera
+            if widget is None:
+                self._tinyse_camera = TinySeCameraWidget()
+                dayu_theme.apply(self._tinyse_camera)
+                self._tinyse_camera.show()
+            elif widget.isVisible():
+                widget.raise_()
+                widget.activateWindow()
+                if widget.isMinimized():
+                    widget.showNormal()
+            else:
+                self._tinyse_camera = TinySeCameraWidget()
+                dayu_theme.apply(self._tinyse_camera)
+                self._tinyse_camera.show()
+
+        elif camera_type == "basic":
+            if Camera is None:
+                QMessageBox.warning(self, "相机", "Camera 模块不可用")
+                return
+            cam = self._basic_camera
+            if cam is None:
+                cam = Camera()
+                self._basic_camera = cam
+            
+            if not cam.is_running:
+                cam.open_camera(threaded=True)
+            else:
+                cam.close_camera()
         else:
-            self._camera.close_camera()
+            log.warning(f"Unknown camera type: {camera_type}")
 
     # ------------------------------------------------------------------
     #  窗口关闭
@@ -217,8 +300,21 @@ class MainWindow(QMainWindow):
             self._controller.stop()
 
         # 关闭相机
-        if self._camera and self._camera.is_running:
-            self._camera.close_camera()
+        try:
+            if self._logi_camera is not None:
+                self._logi_camera.close()
+        except Exception:
+            pass
+        try:
+            if self._tinyse_camera is not None:
+                self._tinyse_camera.close()
+        except Exception:
+            pass
+        try:
+            if self._basic_camera is not None and self._basic_camera.is_running:
+                self._basic_camera.close_camera()
+        except Exception:
+            pass
 
         event.accept()
 

@@ -113,7 +113,7 @@ class ExecutionView(QWidget):
     start_requested = Signal()
     pause_requested = Signal()
     stop_requested = Signal()
-    camera_requested = Signal()
+    camera_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,15 +169,34 @@ class ExecutionView(QWidget):
         self._device_label.setStyleSheet("font-size: 10pt; color: #888888;")
         top_bar.addWidget(self._device_label)
 
-        # 相机按钮
-        self.btn_camera = MPushButton("📷 相机")
-        self.btn_camera.setFixedHeight(36)
-        self.btn_camera.setStyleSheet(
+        # 相机按钮组 (三个独立按钮, 各对应固定相机实现)
+        self.btn_logi_camera = MPushButton("📷 MX Brio")
+        self.btn_logi_camera.setFixedHeight(36)
+        self.btn_logi_camera.setStyleSheet(
             "font-size: 11pt; padding: 4px 12px; "
             "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
         )
-        self.btn_camera.clicked.connect(self.camera_requested)
-        top_bar.addWidget(self.btn_camera)
+        self.btn_logi_camera.clicked.connect(lambda: self.camera_requested.emit("logi"))
+        top_bar.addWidget(self.btn_logi_camera)
+
+        self.btn_tinyse_camera = MPushButton("🤖 Tiny SE")
+        self.btn_tinyse_camera.setFixedHeight(36)
+        self.btn_tinyse_camera.setStyleSheet(
+            "font-size: 11pt; padding: 4px 12px; "
+            "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
+        )
+        self.btn_tinyse_camera.clicked.connect(lambda: self.camera_requested.emit("tinyse"))
+        self.btn_tinyse_camera.setVisible(False)  # 默认隐藏, 由 MainWindow 控制
+        top_bar.addWidget(self.btn_tinyse_camera)
+
+        self.btn_basic_camera = MPushButton("👁 预览")
+        self.btn_basic_camera.setFixedHeight(36)
+        self.btn_basic_camera.setStyleSheet(
+            "font-size: 11pt; padding: 4px 12px; "
+            "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
+        )
+        self.btn_basic_camera.clicked.connect(lambda: self.camera_requested.emit("basic"))
+        top_bar.addWidget(self.btn_basic_camera)
 
         main_layout.addLayout(top_bar)
 
@@ -338,6 +357,10 @@ class ExecutionView(QWidget):
         self.btn_pause.hide()
         self.btn_stop.hide()
         self._device_label.setText("等待连接...")
+
+    def set_tinyse_available(self, available: bool):
+        """由 MainWindow 调用, 控制 Tiny SE 按钮显隐."""
+        self.btn_tinyse_camera.setVisible(available)
 
     def reset(self):
         """重置所有仪表盘和图表到初始状态。"""

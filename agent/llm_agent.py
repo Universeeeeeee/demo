@@ -201,10 +201,11 @@ class LLMConfigAgent:
             ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
             asyncio.run(
                 self._agent.run(
-                    "请只回复 OK。",
+                    "OK",
                     deps=ctx,
                     message_history=[],
-                    instructions=_format_runtime_context(ctx),
+                    
+                    
                 )
             )
         except Exception as e:

@@ -13,6 +13,11 @@ import os
 import sys
 import time
 
+# Ensure project root is importable when running `python ui/data_show.py`.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from openpyxl import Workbook
 
 from qtpy import QtWidgets
@@ -24,11 +29,6 @@ from dayu_widgets.text_edit import MTextEdit
 from dayu_widgets import dayu_theme
 from dayu_widgets.qt import application
 
-# 独立运行时确保项目根目录在 sys.path 中
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 # 导入 UsbWorker 和算法引擎
 from hardware.usb_worker import UsbWorker
 from engine.gait_engine import GaitEngine
@@ -37,7 +37,7 @@ from ui.param_panel import ParamPanel
 try:
     from .camera import Camera
 except ImportError:
-    from camera import Camera
+    from ui.camera import Camera
 
 # pyqtgraph 可选导入
 try:
