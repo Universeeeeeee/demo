@@ -34,6 +34,7 @@ from ui.session_controller import SessionController
 from ui.views.setup_view import SessionSetup, SetupView
 from ui.views.execution_view import ExecutionView
 from ui.views.report_view import ReportView
+from ui.llm_client import LLMWorkerClient
 
 # Camera (可选)
 try:
@@ -99,7 +100,11 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget() 
         self.setCentralWidget(self._stack)
 
-        self._setup_view = SetupView(subject_store=self._subject_store)
+        self._llm_client = LLMWorkerClient(
+            python_exe=sys.executable,
+            worker_script=os.path.join(_project_root, "agent", "llm_worker.py"),
+        )
+        self._setup_view = SetupView(subject_store=self._subject_store, llm_client=self._llm_client)
         self._exec_view = ExecutionView()
         self._report_view = ReportView()
 
@@ -120,6 +125,12 @@ class MainWindow(QMainWindow):
 
         # ===== 异步检测相机设备 =====
         QTimer.singleShot(0, self._detect_cameras)
+
+        # ===== LLM Worker 健康检查 =====
+        self._health_timer = QTimer(self)
+        self._health_timer.timeout.connect(self._check_llm_health)
+        self._health_timer.start(5000)
+        self._health_fail_count = 0
 
     # ------------------------------------------------------------------
     #  信号连接
@@ -228,6 +239,21 @@ class MainWindow(QMainWindow):
 
         self._exec_view.set_tinyse_available(has_tinyse)
 
+    def _check_llm_health(self):
+        if not self._llm_client.is_running:
+            return
+        status = self._llm_client.worker_status(timeout=0.25)
+        if status == "ready":
+            self._health_fail_count = 0
+        elif status in {"starting", "warming"}:
+            return
+        else:
+            self._health_fail_count += 1
+            if self._health_fail_count >= 2:
+                log.warning("LLM worker health check failed twice, status=%s, stopping", status)
+                self._llm_client.stop()
+                self._health_fail_count = 0
+
     def _on_camera(self, camera_type: str):
         """根据 camera_type 打开/关闭对应相机窗口。
         
@@ -315,6 +341,11 @@ class MainWindow(QMainWindow):
                 self._basic_camera.close_camera()
         except Exception:
             pass
+
+        # 关闭 LLM worker
+        if self._llm_client.is_running:
+            self._health_timer.stop()
+            self._llm_client.stop()
 
         event.accept()
 

@@ -313,7 +313,9 @@ class GaitEngine(QObject):
                         ev._air_time = air_time
                         ev._hop_height = 0.5 * G * (air_time / 2) ** 2
                         ev._contact_time = self.contact_times[-1] if self.contact_times else None
-            if self.last_touch_time is not None:
+            # cycle_times: 跳跃周期 = 连续两次落地的时间差。
+            # 跳过第一个周期（touch_count==2，含初始站立时间，不是有效跳跃周期）。
+            if self.last_touch_time is not None and self.touch_count > 2:
                 cycle = ev.time - self.last_touch_time
                 if cycle > 0:
                     self.cycle_times.append(cycle)
@@ -324,7 +326,9 @@ class GaitEngine(QObject):
 
         elif ev.kind.lower() == "lift":
             self.lift_count += 1
-            if self.last_touch_time is not None:
+            # contact_times: 落地后的地面接触时间。
+            # 跳过第一次 lift（lift_count==1，从初始站立起跳，不是跳跃周期接触阶段）。
+            if self.last_touch_time is not None and self.lift_count > 1:
                 contact_time = ev.time - self.last_touch_time
                 if contact_time > 0:
                     # 滤波: min_contact_time — 低于下限的接触合并到关联腾空时间
@@ -418,10 +422,11 @@ class GaitEngine(QObject):
 
         # Status change + number_of_jumps: 跳够指定次数
         if cfg.stop_type == "Status change" and cfg.number_of_jumps:
-            if self.touch_count >= cfg.number_of_jumps:
+            # 用 lift_count 计数实际跳跃次数，避免初始踩上设备的第一次 touch 被误计
+            if self.lift_count >= cfg.number_of_jumps:
                 self._finished = True
                 log.info("自动停止: 已完成 %d/%d 次跳跃",
-                         self.touch_count, cfg.number_of_jumps)
+                         self.lift_count, cfg.number_of_jumps)
                 self.test_finished.emit("jump_count_reached")
 
     def _start_timer(self):

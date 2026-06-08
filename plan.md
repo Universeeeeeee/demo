@@ -387,7 +387,7 @@ Iron_Jump/
 
 | 阶段 | 内容 | 验证 |
 |---|---|---|
-| 9.0 锁定现状 | 补齐测试依赖和测试入口；先让现有 `tests/` 可运行 | `python -m pytest -q tests` 通过 |
+| ✅ 9.0 锁定现状 | 已补齐测试入口依赖并消除 pytest 收集警告；现有 `tests/` 可统一运行 | 2026-06-08: `python -m pytest -q tests` → 32 passed |
 | 9.1 加保护测试 | 给 `single_foot_tracker`、`spatial_clusterer`、`contact_tracker`、`build_report` 加小样本测试 | 不接硬件也能验证算法输出 |
 | 9.2 抽纯算法核心 | 新增 `engine/gait_core.py`，迁出 `GaitEngine` 中的状态机、统计、停止判断；现有 `GaitEngine(QObject)` 先保留为 Qt 适配壳 | `gait_core` 无 Qt import；原 UI 流程不变 |
 | 9.3 拆 USB Worker | 把 bytes→bits、分包合并、contact_bits 转换抽到 `hardware/frame_decoder.py`；Qt 信号部分保留为薄 Worker | 帧解析可单测；Qt Worker 只负责生命周期和信号转发 |

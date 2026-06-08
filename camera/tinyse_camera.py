@@ -15,11 +15,19 @@ tinyse_camera.py — OBSBOT Tiny SE 摄像头独立预览窗口
 
 from __future__ import annotations
 
+import csv
 import ctypes
 import os
 import sys
 import time
 from pathlib import Path
+
+_module_dir = Path(__file__).resolve().parent
+if str(_module_dir) not in sys.path:
+    sys.path.insert(0, str(_module_dir))
+_project_root = _module_dir.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 import cv2
 import numpy as np
@@ -66,6 +74,108 @@ TARGET_FPS = 100
 PREVIEW_FPS = 30
 PREVIEW_WIDTH = 960
 PREVIEW_HEIGHT = 540
+
+
+def mjpg_to_avi(
+    mjpg_path: Path,
+    csv_path: Path,
+    output_path: Path | None = None,
+    fps: float | None = None,
+    cleanup: bool = True,
+) -> Path:
+    """将 DLL 录制的 raw .mjpg + .csv 索引 转换为 Kinovea 可读的 .avi。
+
+    DLL 的 .mjpg 是纯 JPEG 帧拼接（无容器），Kinovea 不识别。
+    此函数读 CSV 索引，逐帧解码后写入 AVI 容器（MJPG codec）。
+
+    Args:
+        mjpg_path: DLL 生成的 .mjpg 文件
+        csv_path:  DLL 生成的 .csv 索引文件
+        output_path: 输出 .avi 路径，默认替换后缀
+        fps: 帧率，默认从 CSV 采样时间推算
+
+    Returns:
+        输出 .avi 的 Path
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+
+    if output_path is None:
+        output_path = mjpg_path.with_suffix(".avi")
+
+    # 1. 读取 CSV 帧索引
+    frames_index: list[tuple[int, int, float]] = []  # (offset, length, sample_time)
+    with open(csv_path, "r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            frames_index.append((
+                int(row["offset"]),
+                int(row["length"]),
+                float(row["sample_time"]),
+            ))
+
+    if not frames_index:
+        raise RuntimeError(f"CSV 索引为空: {csv_path}")
+
+    # 2. 推算帧率
+    if fps is None and len(frames_index) >= 2:
+        t0 = frames_index[0][2]
+        t1 = frames_index[-1][2]
+        if t1 > t0:
+            fps = (len(frames_index) - 1) / (t1 - t0)
+    if fps is None or fps <= 0:
+        fps = 100.0
+
+    _log.info("mjpg→avi: %d frames, %.2f fps", len(frames_index), fps)
+
+    # 3. 读取全部 MJPEG 数据
+    with open(mjpg_path, "rb") as fh:
+        mjpg_data = fh.read()
+
+    # 4. 解码首帧获取分辨率
+    first_offset, first_length, _ = frames_index[0]
+    first_jpeg = mjpg_data[first_offset : first_offset + first_length]
+    first_frame = cv2.imdecode(
+        np.frombuffer(first_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
+    )
+    if first_frame is None:
+        raise RuntimeError("无法解码首帧 JPEG")
+    h, w = first_frame.shape[:2]
+
+    # 5. 写入 AVI (MJPG fourcc, 与源格式一致)
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+    if not writer.isOpened():
+        raise RuntimeError(f"VideoWriter 打开失败: {output_path}")
+
+    written = 0
+    for offset, length, _ in frames_index:
+        jpeg_bytes = mjpg_data[offset : offset + length]
+        frame = cv2.imdecode(
+            np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
+        )
+        if frame is not None:
+            writer.write(frame)
+            written += 1
+
+    writer.release()
+    _log.info("mjpg→avi: wrote %d frames → %s", written, output_path)
+
+    if cleanup:
+        try:
+            mjpg_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            csv_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return output_path
+
+
+def _log_timing(message: str) -> None:
+    print(f"[TinySE Timing] {message}", flush=True)
 
 
 def _bind_control_fns(dll: ctypes.CDLL) -> None:
@@ -198,8 +308,10 @@ class TinySeCameraCapture(QObject):
         self._running = False
         self._recording = False
         self._record_path: Path | None = None
+        self._csv_path: Path | None = None
         self._record_start = 0.0
         self._mirror = True  # 软件镜像
+        self._preview_enabled = True
 
     @property
     def is_recording(self) -> bool:
@@ -209,6 +321,7 @@ class TinySeCameraCapture(QObject):
         if self._capture is not None:
             return True
         try:
+            start = time.perf_counter()
             self._capture = TinySeDShowCapture(
                 device_needle=self._device_needle,
                 width=self._width,
@@ -216,6 +329,7 @@ class TinySeCameraCapture(QObject):
                 fps=self._fps,
                 on_frame=self._on_mjpg_frame,
             )
+            _log_timing(f"dshow.create={time.perf_counter() - start:.3f}s")
             return True
         except Exception as exc:
             self.error.emit(str(exc))
@@ -223,19 +337,25 @@ class TinySeCameraCapture(QObject):
             return False
 
     def start(self):
+        total_start = time.perf_counter()
         if not self.open():
             self._running = False
+            _log_timing(f"capture.worker.start.failed={time.perf_counter() - total_start:.3f}s")
             return
 
         capture = self._capture
         if capture is None:
             self.error.emit("Tiny SE capture was not initialized")
             self._running = False
+            _log_timing(f"capture.worker.start.failed={time.perf_counter() - total_start:.3f}s")
             return
 
         try:
+            start = time.perf_counter()
             capture.start()
+            _log_timing(f"dshow.start={time.perf_counter() - start:.3f}s")
             self._running = True
+            _log_timing(f"capture.worker.ready={time.perf_counter() - total_start:.3f}s")
             while self._running:
                 stats = capture.stats()
                 record_sec = time.perf_counter() - self._record_start if self._recording else 0.0
@@ -249,25 +369,29 @@ class TinySeCameraCapture(QObject):
     def stop(self):
         self._running = False
         if self._capture is not None:
+            start = time.perf_counter()
             self._capture.stop()
+            _log_timing(f"dshow.stop={time.perf_counter() - start:.3f}s")
 
     def start_record(self) -> str | None:
         if self._capture is None or self._recording:
             return None
         try:
-            mjpg_path, _csv_path = self._capture.start_record()
+            mjpg_path, csv_path = self._capture.start_record()
         except Exception as exc:
             self.error.emit(str(exc))
             return None
         self._recording = True
         self._record_path = mjpg_path
+        self._csv_path = csv_path
         self._record_start = time.perf_counter()
         return str(mjpg_path)
 
     def stop_record(self):
         if self._capture is None or not self._recording:
             return
-        path = self._record_path
+        mjpg_path = self._record_path
+        csv_path = self._csv_path
         try:
             self._capture.stop_record()
         except Exception as exc:
@@ -275,13 +399,28 @@ class TinySeCameraCapture(QObject):
         finally:
             self._recording = False
             self._record_path = None
-        if path is not None:
-            self.recording_finished.emit(str(path))
+            self._csv_path = None
+        if mjpg_path is not None and csv_path is not None:
+            try:
+                avi_path = mjpg_to_avi(mjpg_path, csv_path)
+                self.recording_finished.emit(str(avi_path))
+            except Exception as exc:
+                self.error.emit(f"MJPEG→AVI 转换失败: {exc}")
+                # 转换失败时仍发送原始路径
+                self.recording_finished.emit(str(mjpg_path))
 
     def set_mirror(self, on: bool):
         self._mirror = on
 
+    def set_preview_enabled(self, enabled: bool):
+        self._preview_enabled = enabled
+        if enabled:
+            self._last_preview_time = 0.0
+
     def _on_mjpg_frame(self, data: bytes, _frame_index: int, _sample_time: float) -> None:
+        if not self._preview_enabled:
+            return
+
         now = time.perf_counter()
         if now - self._last_preview_time < self._preview_interval:
             return
@@ -300,7 +439,9 @@ class TinySeCameraCapture(QObject):
         if self._recording:
             self.stop_record()
         if self._capture is not None:
+            start = time.perf_counter()
             self._capture.close()
+            _log_timing(f"dshow.close={time.perf_counter() - start:.3f}s")
             self._capture = None
 
 
@@ -318,6 +459,8 @@ class TinySeCameraWidget(QWidget):
         self._capture: TinySeCameraCapture | None = None
         self._control: TinySeCameraControl | None = None
         self._record_path: str | None = None
+        self._preview_start_time: float | None = None
+        self._preview_active = False
 
         layout = QVBoxLayout(self)
         layout.addWidget(MDivider("OBSBOT Tiny SE"))
@@ -416,24 +559,58 @@ class TinySeCameraWidget(QWidget):
         )
         layout.addWidget(self._ctl_section)
 
-    def _on_start(self):
-        if self._thread is not None:
+    def _apply_control_settings(self, ctl: TinySeCameraControl):
+        start = time.perf_counter()
+        ctl.set_fov(int(self._cmb_fov.currentData() or 0))
+        ctl.set_auto_focus(self._chk_af.isChecked())
+        ctl.set_exposure_compensation(int(self._cmb_exp.currentData() or 0))
+        ctl.set_anti_flicker(int(self._cmb_flicker.currentData() or 0))
+        ctl.set_wdr(int(self._cmb_wdr.currentData() or 0))
+        ai_sub = int(self._cmb_ai.currentData() or 0)
+        ctl.set_ai_mode(ai_sub)
+        _log_timing(f"control.apply={time.perf_counter() - start:.3f}s")
+
+    def _ensure_control(self):
+        if self._control is not None:
+            self._apply_control_settings(self._control)
             return
-        # 1. SDK 初始化 + 应用全部设置（必须在采集前完成）
         try:
+            start = time.perf_counter()
             ctl = TinySeCameraControl(0)
-            if ctl.init():
-                ctl.set_fov(int(self._cmb_fov.currentData() or 0))
-                ctl.set_auto_focus(self._chk_af.isChecked())
-                ctl.set_exposure_compensation(int(self._cmb_exp.currentData() or 0))
-                ctl.set_anti_flicker(int(self._cmb_flicker.currentData() or 0))
-                ctl.set_wdr(int(self._cmb_wdr.currentData() or 0))
-                ai_sub = int(self._cmb_ai.currentData() or 0)
-                ctl.set_ai_mode(ai_sub)
+            _log_timing(f"control.create={time.perf_counter() - start:.3f}s")
+            start = time.perf_counter()
+            initialized = ctl.init()
+            _log_timing(f"control.init={time.perf_counter() - start:.3f}s ok={initialized}")
+            if not initialized:
+                ctl.close()
+                return
             self._control = ctl
+            self._apply_control_settings(ctl)
         except Exception as exc:
             QMessageBox.warning(self, "SDK 控制不可用", str(exc))
             self._control = None
+
+    def _release_control(self):
+        ctl = self._control
+        self._control = None
+        if ctl is not None:
+            start = time.perf_counter()
+            ctl.close()
+            _log_timing(f"control.close={time.perf_counter() - start:.3f}s")
+
+    def _on_start(self):
+        if self._thread is not None:
+            self._preview_active = True
+            self._preview_start_time = time.perf_counter()
+            if self._capture is not None:
+                self._capture.set_preview_enabled(True)
+            self._set_running(True)
+            return
+        total_start = time.perf_counter()
+        self._preview_start_time = total_start
+        self._preview_active = True
+        _log_timing("ui.start.click")
+        self._ensure_control()
         # 2. 启动采集
         self._thread = QThread(self)
         self._capture = TinySeCameraCapture()
@@ -444,25 +621,43 @@ class TinySeCameraWidget(QWidget):
         self._capture.recording_finished.connect(self._on_recording_finished)
         self._capture.error.connect(self._on_error)
         self._thread.finished.connect(self._thread.deleteLater)
+        start = time.perf_counter()
         self._thread.start()
+        _log_timing(f"ui.thread.start={time.perf_counter() - start:.3f}s")
         self._set_running(True)
+        _log_timing(f"ui.start.total={time.perf_counter() - total_start:.3f}s")
 
     def _on_stop(self):
+        total_start = time.perf_counter()
+        _log_timing("ui.stop.click")
+        capture = self._capture
+        if capture is not None:
+            if capture.is_recording:
+                capture.stop_record()
+            capture.set_preview_enabled(False)
+        self._preview_active = False
+        self._preview_start_time = None
+        self._set_running(False)
+        _log_timing(f"ui.stop.total={time.perf_counter() - total_start:.3f}s")
+
+    def _shutdown_capture(self):
         capture = self._capture
         thread = self._thread
         if capture is not None:
             if capture.is_recording:
                 capture.stop_record()
+            start = time.perf_counter()
             capture.stop()
+            _log_timing(f"ui.capture.stop.call={time.perf_counter() - start:.3f}s")
         if thread is not None:
+            start = time.perf_counter()
             thread.quit()
-            thread.wait(2000)
+            finished = thread.wait(2000)
+            _log_timing(f"ui.thread.wait={time.perf_counter() - start:.3f}s finished={finished}")
         self._thread = None
         self._capture = None
-        ctl = self._control
-        self._control = None
-        if ctl is not None:
-            ctl.close()
+        self._preview_active = False
+        self._preview_start_time = None
         self._set_running(False)
 
     def _on_record(self):
@@ -478,6 +673,11 @@ class TinySeCameraWidget(QWidget):
             capture.stop_record()
 
     def _on_frame(self, frame: np.ndarray):
+        if not self._preview_active:
+            return
+        if self._preview_start_time is not None:
+            _log_timing(f"ui.first_frame={time.perf_counter() - self._preview_start_time:.3f}s")
+            self._preview_start_time = None
         preview = cv2.resize(frame, (PREVIEW_WIDTH, PREVIEW_HEIGHT), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
@@ -485,6 +685,8 @@ class TinySeCameraWidget(QWidget):
         self._preview.setPixmap(QPixmap.fromImage(image))
 
     def _on_stats(self, fps: float, record_sec: float):
+        if not self._preview_active:
+            return
         rec = f" recording {record_sec:.1f}s" if record_sec > 0 else ""
         self._stats.setText(f"Capture {fps:.2f} fps{rec}")
 
@@ -495,7 +697,7 @@ class TinySeCameraWidget(QWidget):
 
     def _on_error(self, message: str):
         QMessageBox.critical(self, "Tiny SE Error", message)
-        self._on_stop()
+        self._shutdown_capture()
 
     # ── 控制面板事件（即时发送；采集运行中可能被驱动拒绝，重启预览保证生效）──
 
@@ -563,7 +765,8 @@ class TinySeCameraWidget(QWidget):
             self._stats.setText("Idle")
 
     def closeEvent(self, event):
-        self._on_stop()
+        self._shutdown_capture()
+        self._release_control()
         super().closeEvent(event)
 
 

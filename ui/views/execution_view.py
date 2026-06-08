@@ -186,7 +186,7 @@ class ExecutionView(QWidget):
             "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
         )
         self.btn_tinyse_camera.clicked.connect(lambda: self.camera_requested.emit("tinyse"))
-        self.btn_tinyse_camera.setVisible(False)  # 默认隐藏, 由 MainWindow 控制
+        self.btn_tinyse_camera.setToolTip("OBSBOT Tiny SE (100fps)")
         top_bar.addWidget(self.btn_tinyse_camera)
 
         self.btn_basic_camera = MPushButton("👁 预览")
@@ -359,8 +359,11 @@ class ExecutionView(QWidget):
         self._device_label.setText("等待连接...")
 
     def set_tinyse_available(self, available: bool):
-        """由 MainWindow 调用, 控制 Tiny SE 按钮显隐."""
-        self.btn_tinyse_camera.setVisible(available)
+        """由 MainWindow 调用, 更新 Tiny SE 按钮提示."""
+        if available:
+            self.btn_tinyse_camera.setToolTip("OBSBOT Tiny SE (已检测到)")
+        else:
+            self.btn_tinyse_camera.setToolTip("OBSBOT Tiny SE (未检测到，点击可重试)")
 
     def reset(self):
         """重置所有仪表盘和图表到初始状态。"""

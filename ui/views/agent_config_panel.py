@@ -6,8 +6,7 @@ import logging
 import traceback
 
 from markdown_it import MarkdownIt
-from qtpy.QtCore import Qt, Signal, QThread
-from qtpy.QtGui import QTextCursor
+from qtpy.QtCore import Qt, Signal, QThread, QTimer
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox, QTextEdit,
     QFrame, QSizePolicy,
@@ -19,9 +18,11 @@ from dayu_widgets.line_edit import MLineEdit
 from dayu_widgets.push_button import MPushButton
 from dayu_widgets.spin_box import MDoubleSpinBox, MSpinBox
 
-from agent import AthleteProfile, GaitAgent
+from agent.models import AthleteProfile
+from agent.rule_engine import RuleEngine
 from config.test_config import TestConfig
 from data.subject_store import SubjectSearchResult, SubjectStore
+from ui.llm_client import LLMWorkerClient
 
 
 log = logging.getLogger(__name__)
@@ -32,41 +33,38 @@ def _md_to_html(text: str) -> str:
     return _md.render(text)
 
 
-class LLMWorker(QThread):
-    text_chunk = Signal(str)
-    finished = Signal(object, str)
+class _LLMHttpWorker(QThread):
+    """在线模式：通过 HTTP 调用 llm_worker 进程（阻塞式，v1 无流式）。"""
+    finished = Signal(object, str)  # (TestConfig | None, reply_text)
     error = Signal(str)
 
-    def __init__(self, agent: GaitAgent, message: str, ctx: AthleteProfile):
+    def __init__(self, client: LLMWorkerClient, message: str, athlete: AthleteProfile):
         super().__init__()
-        self._agent = agent
+        self._client = client
         self._message = message
-        self._ctx = ctx
+        self._athlete = athlete
 
     def run(self):
         try:
-            config, reply = self._agent.chat_online_stream(
-                self._message,
-                self._ctx,
-                on_chunk=lambda text: self.text_chunk.emit(text),
-            )
-            self.finished.emit(config, reply)
-        except Exception as e:
-            self.error.emit(f"{e}\n{traceback.format_exc()}")
-
-
-class WarmupWorker(QThread):
-    ready = Signal()
-    error = Signal(str)
-
-    def __init__(self, agent: GaitAgent):
-        super().__init__()
-        self._agent = agent
-
-    def run(self):
-        try:
-            self._agent.warmup_online()
-            self.ready.emit()
+            profile_dict = {
+                "age": self._athlete.age,
+                "weight": self._athlete.weight,
+                "height": self._athlete.height,
+                "level": self._athlete.level,
+                "focus_side": self._athlete.focus_side,
+                "device_channels": self._athlete.device_channels,
+                "history": self._athlete.history,
+            }
+            result = self._client.chat(self._message, profile_dict)
+            if "error" in result:
+                self.error.emit(result["error"])
+                return
+            config_dict = result.get("config")
+            if config_dict:
+                config = TestConfig(**config_dict)
+            else:
+                config = None
+            self.finished.emit(config, result.get("reply", ""))
         except Exception as e:
             self.error.emit(f"{e}\n{traceback.format_exc()}")
 
@@ -76,32 +74,37 @@ class AgentConfigPanel(QWidget):
 
     config_confirmed = Signal(object)  # TestConfig
 
-    def __init__(self, subject_store: SubjectStore | None = None, parent=None):
+    def __init__(
+        self,
+        subject_store: SubjectStore | None = None,
+        llm_client: LLMWorkerClient | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._subject_store = subject_store
-        self._agent = GaitAgent(mode="offline")
-        self._llm_worker: LLMWorker | None = None
-        self._warmup_worker: WarmupWorker | None = None
-        self._warmup_started = False
-        self._warmup_ready = False
-        self._warmup_error: str | None = None
+        self._llm_client = llm_client
+        self._rule_engine = RuleEngine()
+        self._llm_worker: _LLMHttpWorker | None = None
+        self._worker_ready = False
+        self._worker_error: str | None = None
+        self._worker_start_requested = False
         self._pending_config: TestConfig | None = None
         self._history: list[dict] = []
-        self._stream_anchor: int | None = None
-        self._stream_buffer = ""
-        self._agent_label_inserted = False
+        self._worker_status_timer = QTimer(self)
+        self._worker_status_timer.setInterval(1000)
+        self._worker_status_timer.timeout.connect(self._poll_llm_worker)
 
         self._build_ui()
         self._connect_signals()
         self.set_subject_result(None)
-        self._start_warmup()
+        self._sync_mode_state()
+        QTimer.singleShot(0, self._ensure_llm_worker_started)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def set_subject_result(self, result: SubjectSearchResult | None) -> None:
-        """Load selected subject into temporary athlete fields."""
         self._clear_pending_config()
         self._history = []
         if result is None or self._subject_store is None:
@@ -194,7 +197,7 @@ class AgentConfigPanel(QWidget):
         header.addWidget(self._mode_combo)
         chat_layout.addLayout(header)
 
-        self._status_label = MLabel("Agent 正在预热...")
+        self._status_label = MLabel("")
         self._status_label.setStyleSheet("color: #d8a443;")
         chat_layout.addWidget(self._status_label)
 
@@ -258,7 +261,6 @@ class AgentConfigPanel(QWidget):
         self._height_spin.valueChanged.connect(self._clear_pending_config)
         self._level_combo.currentIndexChanged.connect(self._clear_pending_config)
         self._focus_combo.currentIndexChanged.connect(self._clear_pending_config)
-        self._sync_mode_state()
 
     def _create_card(self) -> QFrame:
         frame = QFrame()
@@ -305,27 +307,22 @@ class AgentConfigPanel(QWidget):
         self._confirm_btn.setEnabled(False)
         self._suggestion_text.setText("运动档案已变化，请重新生成建议配置。")
 
-    def _start_warmup(self) -> None:
-        if self._warmup_started:
-            return
-        self._warmup_started = True
-        self._warmup_worker = WarmupWorker(self._agent)
-        self._warmup_worker.ready.connect(self._on_warmup_ready)
-        self._warmup_worker.error.connect(self._on_warmup_error)
-        self._warmup_worker.start()
-        self._sync_mode_state()
-
     def _sync_mode_state(self) -> None:
         online = self._mode_combo.currentIndex() == 0
         busy = self._llm_worker is not None and self._llm_worker.isRunning()
-        self._offline_btn.setEnabled(not online)
-        self._chat_input.setEnabled(online and self._warmup_ready and not busy)
-        self._send_btn.setEnabled(online and self._warmup_ready and not busy)
+        if self._llm_client is not None and not self._llm_client.is_running:
+            self._worker_ready = False
+        self._offline_btn.setEnabled(not online and not busy)
+        self._chat_input.setEnabled(online and not busy and self._worker_ready)
+        self._send_btn.setEnabled(online and not busy and self._worker_ready)
+        self._reset_btn.setEnabled(not busy and (not online or self._worker_ready))
         if online:
-            if self._warmup_error:
-                self._status_label.setText("在线服务初始化失败，可切换离线规则或稍后重试。")
-            elif not self._warmup_ready:
-                self._status_label.setText("Agent 正在预热...")
+            if self._llm_client is None:
+                self._status_label.setText("智能服务未初始化。")
+            elif self._worker_error:
+                self._status_label.setText(f"智能模块初始化失败：{self._worker_error}")
+            elif not self._worker_ready:
+                self._status_label.setText("智能模块正在初始化，请稍候。")
             elif busy:
                 self._status_label.setText("正在生成建议...")
             else:
@@ -333,43 +330,70 @@ class AgentConfigPanel(QWidget):
         else:
             self._status_label.setText("离线规则不依赖网络，根据运动档案生成保守配置。")
 
+    def _ensure_llm_worker_started(self) -> None:
+        if self._mode_combo.currentIndex() != 0 or self._llm_client is None:
+            self._sync_mode_state()
+            return
+        if self._worker_ready:
+            self._sync_mode_state()
+            return
+        if not self._llm_client.is_running:
+            self._worker_start_requested = True
+            self._worker_error = None
+            if not self._llm_client.start():
+                self._worker_error = "worker 进程启动失败"
+                self._sync_mode_state()
+                return
+        if not self._worker_status_timer.isActive():
+            self._worker_status_timer.start()
+        self._poll_llm_worker()
+
+    def _poll_llm_worker(self) -> None:
+        if self._llm_client is None:
+            return
+        status = self._llm_client.worker_status(timeout=0.25)
+        if status == "ready":
+            self._worker_ready = True
+            self._worker_error = None
+            self._worker_status_timer.stop()
+        elif status in {"starting", "warming"}:
+            self._worker_ready = False
+            self._worker_error = None
+        else:
+            self._worker_ready = False
+            self._worker_error = status
+            self._worker_status_timer.stop()
+        self._sync_mode_state()
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
 
-    def _on_warmup_ready(self) -> None:
-        self._warmup_ready = True
-        self._warmup_error = None
-        self._sync_mode_state()
-
-    def _on_warmup_error(self, message: str) -> None:
-        self._warmup_error = message
-        self._chat_display.append(f"<b>错误:</b> Agent 初始化失败。")
-        self._sync_mode_state()
-
     def _on_mode_changed(self, _index: int) -> None:
+        if self._mode_combo.currentIndex() == 0:
+            self._ensure_llm_worker_started()
+            return
         self._sync_mode_state()
 
     def _on_send_message(self) -> None:
         if self._llm_worker is not None and self._llm_worker.isRunning():
             return
-        if not self._warmup_ready:
-            self._sync_mode_state()
+        if self._llm_client is None:
+            return
+        if not self._worker_ready:
+            self._ensure_llm_worker_started()
             return
         message = self._chat_input.text().strip()
         if not message:
             return
 
         self._chat_display.append(f"<b>你:</b> {message}")
-        self._stream_anchor = None
-        self._stream_buffer = ""
-        self._agent_label_inserted = False
+
         self._chat_input.clear()
 
-        self._llm_worker = LLMWorker(
-            self._agent, message, self._current_athlete_profile(),
+        self._llm_worker = _LLMHttpWorker(
+            self._llm_client, message, self._current_athlete_profile(),
         )
-        self._llm_worker.text_chunk.connect(self._on_text_chunk)
         self._llm_worker.finished.connect(self._on_llm_finished)
         self._llm_worker.error.connect(self._on_llm_error)
         self._chat_input.setEnabled(False)
@@ -377,37 +401,24 @@ class AgentConfigPanel(QWidget):
         self._status_label.setText("正在生成建议...")
         self._llm_worker.start()
 
-    def _on_text_chunk(self, text: str) -> None:
-        if not self._agent_label_inserted:
-            self._chat_display.append("<b>AI:</b> ")
-            self._stream_anchor = self._chat_display.textCursor().position()
-            self._agent_label_inserted = True
-        self._stream_buffer += text
-        self._chat_display.insertPlainText(text)
-
     def _on_llm_finished(self, config, reply: str) -> None:
-        if self._stream_buffer:
-            doc = self._chat_display.document()
-            cursor = QTextCursor(doc)
-            cursor.setPosition(self._stream_anchor)
-            cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-            display_text = reply if config is not None else self._stream_buffer
-            cursor.insertHtml(_md_to_html(display_text))
-        else:
-            self._chat_display.append("<b>AI:</b> ")
-            self._chat_display.insertHtml(_md_to_html(reply))
+        self._chat_display.append("<b>AI:</b> ")
+        self._chat_display.insertHtml(_md_to_html(reply))
 
         if config is not None:
             self._set_pending_config(config, "在线 LLM 已生成建议配置。")
 
+        self._llm_worker = None
         self._sync_mode_state()
 
     def _on_llm_error(self, message: str) -> None:
         self._chat_display.append(f"<b>错误:</b> {message}")
+        self._llm_worker = None
         self._sync_mode_state()
 
     def _on_reset_chat(self) -> None:
-        self._agent.reset_chat()
+        if self._llm_client is not None and self._worker_ready:
+            self._llm_client.reset()
         self._pending_config = None
         self._confirm_btn.setEnabled(False)
         self._suggestion_text.setText("尚未生成建议配置。")
@@ -415,7 +426,7 @@ class AgentConfigPanel(QWidget):
 
     def _on_offline_generate(self) -> None:
         try:
-            config = self._agent.configure_offline(
+            config = self._rule_engine.configure(
                 "Jump Test", self._current_athlete_profile(),
             )
         except Exception as e:

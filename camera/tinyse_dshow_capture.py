@@ -92,6 +92,7 @@ class TinySeDShowCapture:
             )
             callback_arg = self._callback_ref
 
+        self._started = False
         self._handle = self._dll.tinyse_capture_create(
             device_needle,
             int(width),
@@ -156,16 +157,24 @@ class TinySeDShowCapture:
             except RuntimeError:
                 pass
             raise RuntimeError(message)
+        self._started = True
 
     def stop(self) -> None:
-        if self._handle:
-            self._dll.tinyse_capture_stop(self._handle)
+        if self._started:
+            try:
+                self._dll.tinyse_capture_stop(self._handle)
+            finally:
+                self._started = False
 
     def close(self) -> None:
-        if self._handle:
-            self.stop()
-            self._dll.tinyse_capture_destroy(self._handle)
+        handle = self._handle
+        if handle is not None:
+            try:
+                self.stop()
+            except Exception:
+                pass
             self._handle = None
+            self._dll.tinyse_capture_destroy(handle)
 
     def stats(self) -> TinySeCaptureStats:
         stats = TinySeCaptureStats()

@@ -7,3 +7,5 @@ opencv-python
 pydantic
 pydantic-ai
 python-dotenv
+pytest
+requests

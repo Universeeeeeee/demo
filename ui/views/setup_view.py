@@ -43,8 +43,10 @@ class SetupView(QWidget):
 
     ready_signal = Signal(object)  # SessionSetup
 
-    def __init__(self, subject_store: SubjectStore | None = None, parent=None):
+    def __init__(self, subject_store: SubjectStore | None = None,
+                 llm_client=None, parent=None):
         super().__init__(parent)
+        self._llm_client = llm_client
         self._subject_store = subject_store
         self._subject_search = None
         self._subject_combo = None
@@ -92,7 +94,7 @@ class SetupView(QWidget):
 
         # ===== 配置工作区 =====
         self._config_stack = QStackedWidget()
-        self._agent_panel = AgentConfigPanel(subject_store=self._subject_store)
+        self._agent_panel = AgentConfigPanel(subject_store=self._subject_store, llm_client=self._llm_client)
         self._config_stack.addWidget(self._agent_panel)
 
         self.param_panel = ParamPanel()

@@ -1,10 +1,15 @@
-# agent/ — 步态分析 AI Agent 模块
-# 包含规则引擎（离线）和 LLM 代理（在线）两种参数配置模式
+"""Agent package exports."""
 
 from .models import AthleteProfile
-from .gait_agent import GaitAgent
 
 __all__ = [
     "AthleteProfile",
     "GaitAgent",
 ]
+
+
+def __getattr__(name: str):
+    if name == "GaitAgent":
+        from .gait_agent import GaitAgent
+        return GaitAgent
+    raise AttributeError(name)
