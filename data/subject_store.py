@@ -233,6 +233,19 @@ class SubjectStore:
             row = conn.execute(sql, params).fetchone()
         return _session_from_row(row) if row else None
 
+    def get_sessions(self, subject_id: int, *, limit: int = 50) -> list[SessionRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM test_sessions
+                WHERE subject_id = ?
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+                """,
+                (subject_id, limit),
+            ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
     def get_recent_history(
         self, subject_id: int, *, limit: int = 3
     ) -> list[dict[str, Any]]:
@@ -480,9 +493,16 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
                 "total_jumps": report.touch_count,
                 "avg_jump_height": report.avg_jump_height,
                 "max_jump_height": report.max_jump_height,
+                "min_jump_height": report.min_jump_height,
+                "std_jump_height": report.std_jump_height,
                 "avg_air_time": report.avg_air_time,
                 "max_air_time": report.max_air_time,
+                "min_air_time": report.min_air_time,
+                "std_air_time": report.std_air_time,
                 "avg_contact_time": report.avg_contact_time,
+                "max_contact_time": report.max_contact_time,
+                "min_contact_time": report.min_contact_time,
+                "std_contact_time": report.std_contact_time,
                 "avg_cadence": report.avg_cadence,
             }
         )

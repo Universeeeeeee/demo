@@ -2,8 +2,15 @@
   "mcpServers": {
     "web-search": {
       "type": "stdio",
-      "command": "D:/conda/envs/pydantic_ai/python.exe",
-      "args": ["e:/OptoJump/Iron_Jump/agent/web_search_mcp.py"]
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n",
+        "pydantic_ai",
+        "python",
+        "${CLAUDE_PROJECT_DIR:-.}/agent/web_search_mcp.py"
+      ]
     }
   }
 }

@@ -8,9 +8,41 @@ ReportView 只依赖此 dataclass，不依赖 GaitEngine。
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Optional, Union
 
 G = 9.81  # 重力加速度
+
+
+def _positive_values(values) -> tuple[float, ...]:
+    return tuple(float(value) for value in values if value > 0)
+
+
+def _mean(values: tuple[float, ...]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _min_or_zero(values: tuple[float, ...]) -> float:
+    return min(values) if values else 0.0
+
+
+def _max_or_zero(values: tuple[float, ...]) -> float:
+    return max(values) if values else 0.0
+
+
+def _population_std(values: tuple[float, ...]) -> float:
+    if not values:
+        return 0.0
+    avg = _mean(values)
+    return math.sqrt(sum((value - avg) ** 2 for value in values) / len(values))
+
+
+def _jump_heights(air_times: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(0.5 * G * (air_time / 2) ** 2 for air_time in air_times)
+
+
+def _cadences(cycle_times: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(60.0 / cycle_time for cycle_time in cycle_times)
 
 
 @dataclass(frozen=True)
@@ -18,9 +50,9 @@ class JumpTestReport:
     """纵跳测试结果快照（不可变）"""
     touch_count: int
     lift_count: int
-    air_times: tuple
-    contact_times: tuple
-    cycle_times: tuple
+    air_times: tuple[float, ...]
+    contact_times: tuple[float, ...]
+    cycle_times: tuple[float, ...]
     # 派生指标
     avg_jump_height: float
     max_jump_height: float
@@ -29,6 +61,15 @@ class JumpTestReport:
     avg_contact_time: float
     avg_cadence: Optional[float]   # 60/avg_cycle, 无数据时 None
     finish_reason: str             # "jump_count_reached" | "time_up" | "manual"
+    jump_heights: tuple[float, ...] = ()
+    cadences: tuple[float, ...] = ()
+    min_jump_height: float = 0.0
+    std_jump_height: float = 0.0
+    min_air_time: float = 0.0
+    std_air_time: float = 0.0
+    min_contact_time: float = 0.0
+    max_contact_time: float = 0.0
+    std_contact_time: float = 0.0
     # 原始导出帧 (可选，用于 Excel 导出)
     export_frames: tuple = ()
     export_timestamps: tuple = ()
@@ -75,14 +116,15 @@ def build_report(engine, reason: str = "manual") -> TestReport:
     export_timestamps = tuple(engine.export_timestamps)
 
     if mode == "纵跳":
-        air = tuple(engine.air_times)
-        contact = tuple(engine.contact_times)
-        cycle = tuple(engine.cycle_times)
+        air = _positive_values(engine.air_times)
+        contact = _positive_values(engine.contact_times)
+        cycle = _positive_values(engine.cycle_times)
 
-        avg_air = sum(air) / len(air) if air else 0.0
-        max_air = max(air) if air else 0.0
-        avg_contact = sum(contact) / len(contact) if contact else 0.0
-        avg_cycle = sum(cycle) / len(cycle) if cycle else 0.0
+        heights = _jump_heights(air)
+        cadence_values = _cadences(cycle)
+        avg_air = _mean(air)
+        avg_contact = _mean(contact)
+        avg_cycle = _mean(cycle)
 
         return JumpTestReport(
             touch_count=engine.touch_count,
@@ -90,13 +132,22 @@ def build_report(engine, reason: str = "manual") -> TestReport:
             air_times=air,
             contact_times=contact,
             cycle_times=cycle,
-            avg_jump_height=0.5 * G * (avg_air / 2) ** 2,
-            max_jump_height=0.5 * G * (max_air / 2) ** 2,
+            avg_jump_height=_mean(heights),
+            max_jump_height=_max_or_zero(heights),
             avg_air_time=avg_air,
-            max_air_time=max_air,
+            max_air_time=_max_or_zero(air),
             avg_contact_time=avg_contact,
             avg_cadence=60.0 / avg_cycle if avg_cycle > 0 else None,
             finish_reason=reason,
+            jump_heights=heights,
+            cadences=cadence_values,
+            min_jump_height=_min_or_zero(heights),
+            std_jump_height=_population_std(heights),
+            min_air_time=_min_or_zero(air),
+            std_air_time=_population_std(air),
+            min_contact_time=_min_or_zero(contact),
+            max_contact_time=_max_or_zero(contact),
+            std_contact_time=_population_std(contact),
             export_frames=export_frames,
             export_timestamps=export_timestamps,
         )

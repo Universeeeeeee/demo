@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Union, Callable
 
+import httpx
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -27,27 +28,25 @@ from config.param_schema import get_schema
 from .models import AthleteProfile, LLMTestConfig, ChatResponse
 
 
-def _init_model() -> OpenAIChatModel:
-    """初始化 DeepSeek 模型，从 .env 加载配置"""
+_ENV_LOADED = False
+_ENV_BASE_URL: str | None = None
+_ENV_API_KEY: str | None = None
+
+
+def _load_env():
+    global _ENV_LOADED, _ENV_BASE_URL, _ENV_API_KEY
+    if _ENV_LOADED:
+        return
     dotenv_path = Path(__file__).resolve().parent.parent / '.env'
     load_dotenv(dotenv_path=dotenv_path)
-
-    base_url = os.getenv("OPENAI_BASE_URL")
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not base_url or not api_key:
+    _ENV_BASE_URL = os.getenv("OPENAI_BASE_URL")
+    _ENV_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not _ENV_BASE_URL or not _ENV_API_KEY:
         raise RuntimeError(
             f"缺少 OPENAI_BASE_URL 或 OPENAI_API_KEY，"
             f"请检查 .env 配置 (查找路径: {dotenv_path})"
         )
-
-    return OpenAIChatModel(
-        'deepseek-v4-flash',
-        provider=OpenAIProvider(
-            base_url=base_url,
-            api_key=api_key,
-        ),
-    )
+    _ENV_LOADED = True
 
 
 # ---- System Prompt ----
@@ -113,24 +112,6 @@ def _format_runtime_context(ctx: AthleteProfile) -> str:
     )
 
 
-def _create_agent() -> Agent:
-    """创建 Pydantic AI Agent 实例。"""
-    model = _init_model()
-
-    agent = Agent(
-        model=model,
-        deps_type=AthleteProfile,
-        output_type=Union[LLMTestConfig, ChatResponse],
-        instructions=SYSTEM_PROMPT,
-        retries=1,
-        # v4-flash 默认开启 thinking(reasoner)，而 reasoner 不支持 tool_choice（Pydantic AI 结构化输出必须依赖它）
-        # 根据 DeepSeek 官网，需通过 extra_body 显式关闭
-        model_settings={"extra_body": {"thinking": {"type": "disabled"}}},
-    )
-
-    return agent
-
-
 class LLMConfigAgent:
     """
     LLM 配置 Agent — 支持多轮对话，管理对话历史。
@@ -183,31 +164,61 @@ class LLMConfigAgent:
         "second",
         "times",
     )
+    CURRENT_CONFIG_QUERY_TERMS = (
+        "展示",
+        "显示",
+        "输出",
+        "查看",
+        "列出",
+        "表格",
+        "完整",
+        "当前",
+        "详情",
+        "show",
+        "display",
+        "table",
+        "list",
+    )
+    CONFIG_REFERENCE_TERMS = ("配置", "参数", "config", "setting")
 
     def __init__(self):
-        self._agent: Agent | None = None
         self._schema = get_schema()
         self.message_history = None
+        self._last_config: TestConfig | None = None
 
-    def _ensure_agent(self):
-        """延迟创建 Agent，首次调用时才初始化。"""
-        if self._agent is None:
-            self._agent = _create_agent()
+    @staticmethod
+    def _make_agent(http_client: httpx.AsyncClient) -> Agent:
+        """用 fresh http_client 创建 Agent，绕过 pydantic-ai 全局缓存。"""
+        _load_env()
+        provider = OpenAIProvider(
+            base_url=_ENV_BASE_URL,
+            api_key=_ENV_API_KEY,
+            http_client=http_client,
+        )
+        model = OpenAIChatModel('deepseek-v4-flash', provider=provider)
+        return Agent(
+            model=model,
+            deps_type=AthleteProfile,
+            output_type=Union[LLMTestConfig, ChatResponse],
+            instructions=SYSTEM_PROMPT,
+            retries=1,
+            model_settings={"extra_body": {"thinking": {"type": "disabled"}}},
+        )
 
     def warmup(self):
-        """预热: 初始化 Agent，并用一次轻量真实请求预热远端连接/服务端实例。"""
-        self._ensure_agent()
+        """预热: 用 fresh client 初始化连接。"""
+
+        async def _flow():
+            http_client = httpx.AsyncClient()
+            try:
+                agent = self._make_agent(http_client)
+                ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
+                await agent.run("OK", deps=ctx, message_history=[])
+            finally:
+                await http_client.aclose()
+
         try:
-            ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
-            asyncio.run(
-                self._agent.run(
-                    "OK",
-                    deps=ctx,
-                    message_history=[],
-                    
-                    
-                )
-            )
+            asyncio.run(_flow())
         except Exception as e:
             print(f"[Warmup] 真实请求预热失败: {e}")
 
@@ -219,6 +230,57 @@ class LLMConfigAgent:
         has_action = any(term in text for term in self.CONFIG_ACTION_TERMS)
         has_constraint = any(term in text for term in self.CONFIG_CONSTRAINT_TERMS)
         return has_action and has_constraint
+
+    _CONFIG_SUMMARY_KEYWORDS = ("配置", "参数设置", "设置总结", "为你配置", "测试参数", "已配置")
+
+    @staticmethod
+    def _looks_like_config_summary(reply: str) -> bool:
+        return any(kw in reply for kw in LLMConfigAgent._CONFIG_SUMMARY_KEYWORDS)
+
+    def _is_current_config_query(self, user_message: str) -> bool:
+        """识别“展示/输出当前配置”类请求，避免误走重新生成配置。"""
+        text = user_message.lower()
+        has_config_ref = any(term in text for term in self.CONFIG_REFERENCE_TERMS)
+        has_query_term = any(term in text for term in self.CURRENT_CONFIG_QUERY_TERMS)
+        return has_config_ref and has_query_term
+
+    def _format_current_config_table_markdown(self, config: TestConfig) -> str:
+        labels = {
+            "test_type": "测试类型",
+            "start_type": "启动方式",
+            "start_position": "起始位置",
+            "stop_type": "停止方式",
+            "finish_position": "结束位置",
+            "number_of_jumps": "跳跃次数",
+            "test_length": "测试时长",
+            "starting_foot": "起跳方式",
+            "min_contact_time": "最小接触时间(ms)",
+            "min_flight_time": "最小腾空时间(ms)",
+            "max_flight_time": "最大腾空时间(ms)",
+            "metronome_enabled": "节拍器启用",
+            "metronome_bpm": "节拍器 BPM",
+        }
+        rows = [
+            "当前建议配置如下：",
+            "",
+            "| 参数 | 值 |",
+            "| --- | --- |",
+        ]
+        for field_name in config.__dataclass_fields__:
+            value = getattr(config, field_name)
+            if value is None:
+                text = "未设置"
+            elif isinstance(value, bool):
+                text = "是" if value else "否"
+            else:
+                text = str(value)
+            rows.append(f"| {labels.get(field_name, field_name)} | {text} |")
+        return "\n".join(rows)
+
+    def _current_config_query_reply(self) -> str:
+        if self._last_config is None:
+            return "当前还没有可展示的建议配置，请先说明测试需求生成配置。"
+        return self._format_current_config_table_markdown(self._last_config)
 
     def _cluster_configs(
         self, configs: list[LLMTestConfig],
@@ -297,6 +359,7 @@ class LLMConfigAgent:
 
     async def _run_sample(
         self,
+        agent: Agent,
         user_message: str,
         ctx: AthleteProfile,
         snapshot: list,
@@ -304,7 +367,7 @@ class LLMConfigAgent:
     ):
         """执行一次独立采样，返回 result 与耗时。"""
         t0 = time.perf_counter()
-        result = await self._agent.run(
+        result = await agent.run(
             user_message,
             deps=ctx,
             message_history=snapshot,
@@ -314,6 +377,7 @@ class LLMConfigAgent:
 
     async def _run_parallel_samples(
         self,
+        agent: Agent,
         user_message: str,
         ctx: AthleteProfile,
         snapshot: list,
@@ -326,7 +390,7 @@ class LLMConfigAgent:
             samples.append(initial_sample)
 
         tasks = [
-            self._run_sample(user_message, ctx, snapshot, runtime_ctx)
+            self._run_sample(agent, user_message, ctx, snapshot, runtime_ctx)
             for _ in range(self.N_SAMPLES - len(samples))
         ]
         samples.extend(await asyncio.gather(*tasks, return_exceptions=True))
@@ -423,6 +487,7 @@ class LLMConfigAgent:
                 "参数校验失败",
                 stream_callback,
             )
+        self._last_config = config
         normalized_reply = self._format_config_reply_markdown(
             config=config, raw_reply=verified.reply_message,
         )
@@ -451,6 +516,7 @@ class LLMConfigAgent:
 
     async def _run_parallel_clarify(
         self,
+        agent: Agent,
         user_message: str,
         ctx: AthleteProfile,
         snapshot: list,
@@ -465,7 +531,7 @@ class LLMConfigAgent:
             stream_callback("正在生成并校验配置...\n")
 
         sample_results = await self._run_parallel_samples(
-            user_message, ctx, snapshot, runtime_ctx, initial_sample,
+            agent, user_message, ctx, snapshot, runtime_ctx, initial_sample,
         )
         verified, clarify_msg, history_result = self._resolve_parallel_samples(
             sample_results, timing,
@@ -496,46 +562,58 @@ class LLMConfigAgent:
             - LLM 生成了完整配置: config 有值, reply_text 是配置摘要
             - LLM 自然语言回复/追问: config 为 None, reply_text 是回复内容
         """
-        self._ensure_agent()
-
         t_start = time.perf_counter()
         timing: list[str] = []
         runtime_ctx = _format_runtime_context(ctx)
         snapshot = list(self.message_history or [])
 
+        if self._is_current_config_query(user_message):
+            timing.append("local=current-config")
+            return self._finalize(
+                None,
+                self._current_config_query_reply(),
+                t_start,
+                timing,
+                "当前配置查询",
+            )
+
         async def _flow() -> tuple[TestConfig | None, str]:
-            if self._is_config_request(user_message):
-                return await self._run_parallel_clarify(
-                    user_message, ctx, snapshot, runtime_ctx, t_start, timing,
-                )
+            http_client = httpx.AsyncClient()
+            try:
+                agent = self._make_agent(http_client)
 
-            t0 = time.perf_counter()
-            result = await self._agent.run(
-                user_message,
-                deps=ctx,
-                message_history=snapshot,
-                instructions=runtime_ctx,
-            )
-            elapsed = time.perf_counter() - t0
-            print(f"[Timing] 单次 LLM 调用: {elapsed:.1f}s")
+                if self._is_config_request(user_message):
+                    return await self._run_parallel_clarify(
+                        agent, user_message, ctx, snapshot, runtime_ctx, t_start, timing,
+                    )
 
-            if isinstance(result.output, LLMTestConfig):
-                timing.append("gate=miss")
-                return await self._run_parallel_clarify(
+                t0 = time.perf_counter()
+                result = await agent.run(
                     user_message,
-                    ctx,
-                    snapshot,
-                    runtime_ctx,
-                    t_start,
-                    timing,
-                    initial_sample=(result, result.output, elapsed),
+                    deps=ctx,
+                    message_history=snapshot,
+                    instructions=runtime_ctx,
                 )
+                elapsed = time.perf_counter() - t0
+                print(f"[Timing] 单次 LLM 调用: {elapsed:.1f}s")
+                timing.append(f"single={elapsed:.1f}s")
 
-            timing.append(f"single={elapsed:.1f}s")
-            self.message_history = result.all_messages()
-            return await self._process_single_output(
-                result.output, t_start, timing,
-            )
+                if isinstance(result.output, LLMTestConfig):
+                    timing.append("gate=miss→chat")
+                    self.message_history = result.all_messages()
+                    reply = result.output.reply_message or ""
+                    if not reply or self._looks_like_config_summary(reply):
+                        reply = "这个问题不涉及测试配置，当前配置保持不变。"
+                    return self._finalize(
+                        None, reply, t_start, timing, "ChatResponse(gate miss)",
+                    )
+
+                self.message_history = result.all_messages()
+                return await self._process_single_output(
+                    result.output, t_start, timing,
+                )
+            finally:
+                await http_client.aclose()
 
         try:
             return asyncio.run(_flow())
@@ -553,69 +631,80 @@ class LLMConfigAgent:
         用 stream_output() 而非 stream_text()，因为 Union 结构化输出走 tool_call，
         stream_text() 拿不到任何文本。改为监听 partial 对象，从中提取 message/reply_message 增量。
         """
-        self._ensure_agent()
-
         t_start = time.perf_counter()
         timing: list[str] = []
         runtime_ctx = _format_runtime_context(ctx)
         snapshot = list(self.message_history or [])
 
-        async def _flow_stream() -> tuple[TestConfig | None, str]:
-            if self._is_config_request(user_message):
-                return await self._run_parallel_clarify(
-                    user_message,
-                    ctx,
-                    snapshot,
-                    runtime_ctx,
-                    t_start,
-                    timing,
-                    stream_callback=on_chunk,
-                )
-
-            t0 = time.perf_counter()
-            async with self._agent.run_stream(
-                user_message,
-                deps=ctx,
-                message_history=snapshot,
-                instructions=runtime_ctx,
-            ) as result:
-                prev = ""
-                async for partial in result.stream_output(debounce_by=0.05):
-                    if isinstance(partial, ChatResponse):
-                        current = partial.message or ""
-                    elif isinstance(partial, LLMTestConfig):
-                        current = ""
-                    else:
-                        continue
-                    if current and len(current) > len(prev):
-                        delta = current[len(prev):]
-                        on_chunk(delta)
-                        prev = current
-
-                elapsed = time.perf_counter() - t0
-                print(f"[Timing] 单次 LLM 调用(流式): {elapsed:.1f}s")
-
-                output = await result.get_output()
-                stream_history = result.all_messages()
-
-            if isinstance(output, LLMTestConfig):
-                timing.append("gate=miss")
-                return await self._run_parallel_clarify(
-                    user_message,
-                    ctx,
-                    snapshot,
-                    runtime_ctx,
-                    t_start,
-                    timing,
-                    stream_callback=on_chunk,
-                    initial_sample=(result, output, elapsed),
-                )
-
-            timing.append(f"single={elapsed:.1f}s")
-            self.message_history = stream_history
-            return await self._process_single_output(
-                output, t_start, timing, on_chunk,
+        if self._is_current_config_query(user_message):
+            timing.append("local=current-config")
+            reply = self._current_config_query_reply()
+            on_chunk(reply)
+            return self._finalize(
+                None,
+                reply,
+                t_start,
+                timing,
+                "当前配置查询",
+                stream_callback=on_chunk,
             )
+
+        async def _flow_stream() -> tuple[TestConfig | None, str]:
+            http_client = httpx.AsyncClient()
+            try:
+                agent = self._make_agent(http_client)
+
+                if self._is_config_request(user_message):
+                    return await self._run_parallel_clarify(
+                        agent, user_message, ctx, snapshot, runtime_ctx,
+                        t_start, timing, stream_callback=on_chunk,
+                    )
+
+                t0 = time.perf_counter()
+                async with agent.run_stream(
+                    user_message,
+                    deps=ctx,
+                    message_history=snapshot,
+                    instructions=runtime_ctx,
+                ) as result:
+                    prev = ""
+                    async for partial in result.stream_output(debounce_by=0.05):
+                        if isinstance(partial, ChatResponse):
+                            current = partial.message or ""
+                        elif isinstance(partial, LLMTestConfig):
+                            current = ""
+                        else:
+                            continue
+                        if current and len(current) > len(prev):
+                            delta = current[len(prev):]
+                            on_chunk(delta)
+                            prev = current
+
+                    elapsed = time.perf_counter() - t0
+                    print(f"[Timing] 单次 LLM 调用(流式): {elapsed:.1f}s")
+                    timing.append(f"single={elapsed:.1f}s")
+
+                    output = await result.get_output()
+                    stream_history = result.all_messages()
+
+                if isinstance(output, LLMTestConfig):
+                    timing.append("gate=miss→chat")
+                    self.message_history = stream_history
+                    reply = output.reply_message or ""
+                    if not reply or self._looks_like_config_summary(reply):
+                        reply = "这个问题不涉及测试配置，当前配置保持不变。"
+                    on_chunk(reply)  # 流式 UI 需要正文，不能只靠 _finalize 的 timing hint
+                    return self._finalize(
+                        None, reply, t_start, timing, "ChatResponse(gate miss)",
+                        stream_callback=on_chunk,
+                    )
+
+                self.message_history = stream_history
+                return await self._process_single_output(
+                    output, t_start, timing, on_chunk,
+                )
+            finally:
+                await http_client.aclose()
 
         try:
             return asyncio.run(_flow_stream())
@@ -626,3 +715,4 @@ class LLMConfigAgent:
     def reset(self):
         """清空对话历史，开始新会话。"""
         self.message_history = None
+        self._last_config = None

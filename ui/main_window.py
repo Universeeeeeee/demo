@@ -33,6 +33,7 @@ from data.subject_store import SubjectProfile, SubjectStore
 from ui.session_controller import SessionController
 from ui.views.setup_view import SessionSetup, SetupView
 from ui.views.execution_view import ExecutionView
+from ui.views.history_view import HistoryView
 from ui.views.report_view import ReportView
 from ui.llm_client import LLMWorkerClient
 
@@ -49,8 +50,9 @@ except ImportError:
     LogiCameraWidget = None
 
 try:
-    from camera.tinyse_camera import TinySeCameraWidget
+    from camera.tinyse_camera import TinySeCameraControl, TinySeCameraWidget
 except ImportError:
+    TinySeCameraControl = None
     TinySeCameraWidget = None
 
 try:
@@ -63,6 +65,34 @@ from qtpy.QtCore import QTimer
 
 
 log = logging.getLogger(__name__)
+
+
+def _detect_tinyse_camera() -> bool:
+    if TinySeCameraControl is not None:
+        ctl = None
+        try:
+            ctl = TinySeCameraControl(0)
+            return ctl.init()
+        except Exception:
+            log.exception("Tiny SE SDK 检测失败")
+            return False
+        finally:
+            if ctl is not None:
+                try:
+                    ctl.close()
+                except Exception:
+                    log.exception("Tiny SE SDK 检测清理失败")
+
+    if TinySeDShowCapture is None:
+        return False
+
+    try:
+        probe = TinySeDShowCapture(device_needle="OBSBOT Tiny SE")
+        probe.close()
+        return True
+    except Exception:
+        log.exception("Tiny SE DirectShow 检测失败")
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -107,10 +137,12 @@ class MainWindow(QMainWindow):
         self._setup_view = SetupView(subject_store=self._subject_store, llm_client=self._llm_client)
         self._exec_view = ExecutionView()
         self._report_view = ReportView()
+        self._history_view = HistoryView(self._subject_store)
 
         self._stack.addWidget(self._setup_view)     # index 0
         self._stack.addWidget(self._exec_view)      # index 1
         self._stack.addWidget(self._report_view)    # index 2
+        self._stack.addWidget(self._history_view)   # index 3
 
         # ===== Camera =====
         self._logi_camera = None
@@ -139,6 +171,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         # SetupView → MainWindow
         self._setup_view.ready_signal.connect(self._on_ready)
+        self._setup_view.history_requested.connect(self._on_history_requested)
 
         # ExecutionView 控制 → MainWindow / Controller
         self._exec_view.start_requested.connect(self._on_start)
@@ -159,6 +192,10 @@ class MainWindow(QMainWindow):
         self._report_view.return_home.connect(self._go_to_setup)
         self._report_view.export_requested.connect(lambda: None)  # export handled internally
 
+        # HistoryView → MainWindow
+        self._history_view.return_setup.connect(self._go_to_setup)
+        self._history_view.load_config_requested.connect(self._on_history_load_config)
+
     # ------------------------------------------------------------------
     #  视图切换
     # ------------------------------------------------------------------
@@ -175,6 +212,9 @@ class MainWindow(QMainWindow):
     def _go_to_report(self):
         self._stack.setCurrentWidget(self._report_view)
 
+    def _go_to_history(self):
+        self._stack.setCurrentWidget(self._history_view)
+
     # ------------------------------------------------------------------
     #  事件处理
     # ------------------------------------------------------------------
@@ -189,6 +229,14 @@ class MainWindow(QMainWindow):
         self._exec_view.configure(config)
         self._controller.prepare(config)
         self._go_to_execution()
+
+    def _on_history_requested(self, subject_result):
+        self._history_view.load_subject(subject_result)
+        self._go_to_history()
+
+    def _on_history_load_config(self, config: TestConfig):
+        self._setup_view.load_config_from_history(config)
+        self._go_to_setup()
 
     def _on_start(self):
         """ExecutionView '开始采集' → 启动 Controller"""
@@ -229,15 +277,7 @@ class MainWindow(QMainWindow):
 
     def _detect_cameras(self):
         """异步检测可用相机设备, 控制 Tiny SE 按钮显隐。"""
-        has_tinyse = False
-        try:
-            probe = TinySeDShowCapture(device_needle="OBSBOT Tiny SE")
-            probe.close()
-            has_tinyse = True
-        except Exception:
-            log.exception("Tiny SE 检测失败")
-
-        self._exec_view.set_tinyse_available(has_tinyse)
+        self._exec_view.set_tinyse_available(_detect_tinyse_camera())
 
     def _check_llm_health(self):
         if not self._llm_client.is_running:

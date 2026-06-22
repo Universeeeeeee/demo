@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.models import LLMTestConfig
-from config.test_config import TestConfig
+from config.test_config import TestConfig as _TestConfig
 from config.param_schema import get_schema
 
 
@@ -17,7 +17,7 @@ def test_to_test_config_excludes_reply_message():
         min_contact_time=80,
     )
     cfg = llm_cfg.to_test_config()
-    assert isinstance(cfg, TestConfig)
+    assert isinstance(cfg, _TestConfig)
     assert not hasattr(cfg, "reply_message"), "reply_message 泄漏到 TestConfig"
 
 

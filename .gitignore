@@ -22,6 +22,8 @@ camera/recordings/
 data/led_frames_*.xlsx
 data/*.sqlite3
 data/*.sqlite3-*
+docs/步态参数相关/timing_diagnostics/
+docs/步态参数相关/session5_manual_timing.csv
 
 # IDE
 .idea/
@@ -31,6 +33,7 @@ data/*.sqlite3-*
 # Local assistant/tooling state
 .claude/skills/
 .sessions/
+.claude/settings.local.json
 
 # Local driver downloads/cache
 driver_temp/

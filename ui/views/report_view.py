@@ -149,9 +149,9 @@ class ReportView(QWidget):
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
         self._stats_layout.setSpacing(8)
 
-        # 预创建 8 个 StatCard 槽位 (4行x2列)
+        # 预创建统计卡片槽位，纵跳报告会展示更多统计项。
         self._stat_cards: list[StatCard] = []
-        for i in range(8):
+        for i in range(16):
             card = StatCard("")
             card.hide()
             row, col = divmod(i, 2)
@@ -245,10 +245,17 @@ class ReportView(QWidget):
             ("腾空次数", f"{r.lift_count}"),
             ("最大跳高", f"{r.max_jump_height:.3f} m"),
             ("平均跳高", f"{r.avg_jump_height:.3f} m"),
+            ("最小跳高", f"{r.min_jump_height:.3f} m"),
+            ("跳高标准差", f"{r.std_jump_height:.3f} m"),
             ("最大腾空", f"{r.max_air_time:.3f} s"),
             ("平均腾空", f"{r.avg_air_time:.3f} s"),
+            ("最小腾空", f"{r.min_air_time:.3f} s"),
+            ("腾空标准差", f"{r.std_air_time:.3f} s"),
+            ("最大触地", f"{r.max_contact_time:.3f} s"),
             ("平均触地", f"{r.avg_contact_time:.3f} s"),
-            ("平均步频", f"{r.avg_cadence:.1f} spm" if r.avg_cadence else "--"),
+            ("最小触地", f"{r.min_contact_time:.3f} s"),
+            ("触地标准差", f"{r.std_contact_time:.3f} s"),
+            ("平均跳跃节奏", f"{r.avg_cadence:.1f} jumps/min" if r.avg_cadence else "--"),
         ]
         self._fill_stat_cards(stats)
 
@@ -257,8 +264,8 @@ class ReportView(QWidget):
             self._stat_cards[2].set_color(dayu_theme.primary_color)
 
         # 图表: 全量数据
-        if _PG_AVAILABLE and r.air_times:
-            heights = [0.5 * G * (t / 2) ** 2 for t in r.air_times]
+        if _PG_AVAILABLE and r.jump_heights:
+            heights = list(r.jump_heights)
             x = list(range(1, len(heights) + 1))
 
             self._plot_1.clear()
@@ -337,9 +344,18 @@ class ReportView(QWidget):
 
         frames = self._report.export_frames
         timestamps = self._report.export_timestamps
+        has_jump_metrics = isinstance(self._report, JumpTestReport) and any(
+            (
+                self._report.air_times,
+                self._report.contact_times,
+                self._report.cycle_times,
+                self._report.jump_heights,
+                self._report.cadences,
+            )
+        )
 
-        if not frames:
-            QMessageBox.information(self, "导出", "本次测试无原始帧数据可导出。")
+        if not frames and not has_jump_metrics:
+            QMessageBox.information(self, "导出", "本次测试无可导出数据。")
             return
 
         reply = QMessageBox.question(
@@ -358,20 +374,66 @@ class ReportView(QWidget):
 
         try:
             wb = Workbook()
-            ws = wb.active
-            ws.title = "LED Frames"
-            ws.append(["timestamp", "hex_string"])
-            for ts, bits in zip(timestamps, frames):
-                hex_bytes = []
-                for i in range(0, min(96, len(bits)), 8):
-                    byte_val = 0
-                    for j in range(8):
-                        if i + j < len(bits):
-                            byte_val |= (bits[i + j] << j)
-                    hex_bytes.append(byte_val)
-                hex_str = " ".join(f"{b:02x}" for b in hex_bytes)
-                ws.append([ts, hex_str])
+            default_ws = wb.active
+            if frames:
+                default_ws.title = "LED Frames"
+                default_ws.append(["timestamp", "hex_string"])
+                for ts, bits in zip(timestamps, frames):
+                    hex_bytes = []
+                    for i in range(0, min(96, len(bits)), 8):
+                        byte_val = 0
+                        for j in range(8):
+                            if i + j < len(bits):
+                                byte_val |= (bits[i + j] << j)
+                        hex_bytes.append(byte_val)
+                    hex_str = " ".join(f"{b:02x}" for b in hex_bytes)
+                    default_ws.append([ts, hex_str])
+            else:
+                wb.remove(default_ws)
+
+            if isinstance(self._report, JumpTestReport):
+                ws = wb.create_sheet("Jump Metrics")
+                ws.append(
+                    [
+                        "index",
+                        "air_time_s",
+                        "contact_time_s",
+                        "cycle_time_s",
+                        "jump_height_m",
+                        "cadence_jumps_per_min",
+                    ]
+                )
+                for row in _jump_metric_rows(self._report):
+                    ws.append(row)
             wb.save(path)
             QMessageBox.information(self, "导出成功", f"数据已保存至：\n{path}")
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"保存文件失败：{e}")
+
+
+def _jump_metric_rows(report: JumpTestReport) -> list[list[object]]:
+    max_len = max(
+        len(report.air_times),
+        len(report.contact_times),
+        len(report.cycle_times),
+        len(report.jump_heights),
+        len(report.cadences),
+        0,
+    )
+    rows = []
+    for index in range(max_len):
+        rows.append(
+            [
+                index + 1,
+                _value_at(report.air_times, index),
+                _value_at(report.contact_times, index),
+                _value_at(report.cycle_times, index),
+                _value_at(report.jump_heights, index),
+                _value_at(report.cadences, index),
+            ]
+        )
+    return rows
+
+
+def _value_at(values: tuple, index: int):
+    return values[index] if index < len(values) else ""

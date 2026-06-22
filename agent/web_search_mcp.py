@@ -1,13 +1,8 @@
 """MCP server providing web search and web fetch tools via DuckDuckGo.
 
-Configure in Claude Code settings.json:
-  "mcpServers": {
-    "web-search": {
-      "type": "stdio",
-      "command": "D:/conda/envs/pydantic_ai/Scripts/python.exe",
-      "args": ["path/to/agent/web_search_mcp.py"]
-    }
-  }
+MCP 配置见项目根目录 .mcp.json。
+本地冒烟测试：
+    conda run -n pydantic_ai python agent/web_search_mcp.py
 """
 
 import logging

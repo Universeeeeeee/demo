@@ -210,7 +210,8 @@ class TinySeCameraControl:
     def __init__(self, device_index: int = 0):
         if not WRAPPER_DLL.exists():
             raise FileNotFoundError(f"wrapper DLL not found: {WRAPPER_DLL}")
-        os.add_dll_directory(str(BIN_DIR))
+        if hasattr(os, 'add_dll_directory'):
+            os.add_dll_directory(str(BIN_DIR))
         self._dll = ctypes.CDLL(str(WRAPPER_DLL))
         _bind_control_fns(self._dll)
         self._idx = device_index
@@ -276,10 +277,8 @@ class TinySeCameraControl:
         return self._dll.obsbot_set_wdr(self._idx, wdr)
 
     def close(self):
-        """释放 SDK 资源。"""
-        if self._dll is not None:
-            self._dll.obsbot_close()
-            self._dll = None
+        """Release this Python handle without shutting down the process SDK singleton."""
+        self._dll = None
 
 
 class TinySeCameraCapture(QObject):
@@ -570,10 +569,11 @@ class TinySeCameraWidget(QWidget):
         ctl.set_ai_mode(ai_sub)
         _log_timing(f"control.apply={time.perf_counter() - start:.3f}s")
 
-    def _ensure_control(self):
+    def _ensure_control(self, apply_settings: bool = True) -> bool:
         if self._control is not None:
-            self._apply_control_settings(self._control)
-            return
+            if apply_settings:
+                self._apply_control_settings(self._control)
+            return True
         try:
             start = time.perf_counter()
             ctl = TinySeCameraControl(0)
@@ -583,12 +583,20 @@ class TinySeCameraWidget(QWidget):
             _log_timing(f"control.init={time.perf_counter() - start:.3f}s ok={initialized}")
             if not initialized:
                 ctl.close()
-                return
+                QMessageBox.warning(self, "SDK 控制不可用", "未检测到 OBSBOT Tiny SE SDK 设备")
+                return False
             self._control = ctl
-            self._apply_control_settings(ctl)
+            if apply_settings:
+                self._apply_control_settings(ctl)
+            return True
         except Exception as exc:
             QMessageBox.warning(self, "SDK 控制不可用", str(exc))
             self._control = None
+            return False
+
+    def _report_control_result(self, action: str, ret: int):
+        if ret < 0:
+            QMessageBox.warning(self, "SDK 控制失败", f"{action}失败，返回码: {ret}")
 
     def _release_control(self):
         ctl = self._control
@@ -717,16 +725,19 @@ class TinySeCameraWidget(QWidget):
                 ctl.set_fov(int(data))
 
     def _on_ai_go(self):
+        if not self._ensure_control(apply_settings=False):
+            return
         ctl = self._ctl()
-        if ctl is not None:
-            data = self._cmb_ai.currentData()
-            if data is not None:
-                ctl.set_ai_mode(int(data))
+        data = self._cmb_ai.currentData()
+        if ctl is not None and data is not None:
+            self._report_control_result("AI 追踪", ctl.set_ai_mode(int(data)))
 
     def _on_ai_off(self):
+        if not self._ensure_control(apply_settings=False):
+            return
         ctl = self._ctl()
         if ctl is not None:
-            ctl.set_ai_off()
+            self._report_control_result("关闭 AI 追踪", ctl.set_ai_off())
 
     def _on_af_changed(self, _state: int):
         ctl = self._ctl()
