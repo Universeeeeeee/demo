@@ -13,6 +13,34 @@
 
 ---
 
+## 2026-06-23 状态校准与当前下一步
+
+### 已落地但旧计划未同步
+
+| 项目 | 当前代码事实 | 关键文件 |
+|---|---|---|
+| SubjectStore UI MVP | 已接入主 UI：受试者搜索/新建、加载上次参数、测试结束自动存档、历史记录回填配置 | `data/subject_store.py`, `ui/views/setup_view.py`, `ui/main_window.py`, `ui/views/history_view.py`, `tests/test_subject_store.py`, `tests/test_history_view.py` |
+| Agent 集成主 UI | 已完成：`AgentConfigPanel` 嵌入 `SetupView`，支持智能/手动配置切换 | `ui/views/agent_config_panel.py`, `ui/views/setup_view.py`, `tests/test_agent_config_panel.py` |
+| Phase 9.1 保护测试 | 已有小样本测试覆盖 single foot、spatial cluster、contact tracker、build_report | `tests/test_engine_protection.py`, `tests/test_jump_report.py` |
+
+### 当前执行顺序
+
+1. **论文 P0 主实验**：先设计步态参数准确性验证方案，确定参考标准、采集对照数据和评价指标。
+2. **论文 P0 Agent 辅助实验**：编写 10~30 条典型指令，并实现 Agent 评估脚本。
+3. **工程 Phase 9.2a → 9.2**：先确认纵跳时间戳语义是否也要改成“边界记录 + 确认后回填”，再抽出 `engine/gait_core.py`，让 `GaitEngine(QObject)` 逐步变成 Qt 适配壳。
+
+### 当前计算逻辑审计：边界记录 + 事件确认
+
+| 模式 | 当前逻辑 | 判断 |
+|---|---|---|
+| 原始帧导出 | `GaitEngine.process_raw_frame()` 先把每帧 `contact_bits` 和相对时间写入 FIFO 导出缓存，再进入算法处理 | 记录的是全量帧，不是只记录边界 |
+| 纵跳 Jump Test | `SingleFootDetector` 连续 `confirm_samples` 帧满足触地/离地条件后才发事件；事件时间使用**确认帧时间**。`GaitEngine._accumulate_hop_stats()` 用确认后的 touch/lift 时间计算腾空、接触、周期 | **事件确认已实现**；但不是严格的“边界时间回填”，确认会带来最多 `confirm_samples - 1` 帧的时间延迟 |
+| 步态 Gait Test | `extract_clusters()` 每帧提取簇 `start/end/centroid`；`ClusterTracker` 维护 `appear_time/disappear_time`；`ContactBasedGaitTracker` 先 candidate，连续帧确认后 touch_time 回填 `first_seen_time`，丢失多帧确认后 lift_time 回填 `last_seen_time` | 是“边界记录 + 事件确认”：触地/离地都先记录边界，再等待确认 |
+
+**待决问题**：如果论文或系统精度要求所有模式都采用“先记录边界、确认后回填边界时间”，下一步应先给纵跳补回归测试，再把 `SingleFootDetector` 改为保存 candidate touch/lift 的首帧边界时间，而不是直接使用确认帧时间。
+
+---
+
 ## 🔴 Phase 0: 论文创新点 — 面向步态分析系统的 Agent 参数配置与意图澄清模块（最高优先级）
 
 > **论文主线**：步态分析系统设计与实现（数据采集 → 参数计算 → 结果可视化 → 报告生成）
@@ -110,7 +138,7 @@
 - [ ] **P0（主实验）** 设计步态参数准确性验证方案：确定参考标准、采集对照数据、选定评价指标
 - [ ] **P0（Agent）** 编写 10~30 条典型用户指令测试用例，覆盖明确/缺参数/模糊/冲突/格式 5 类场景
 - [ ] **P0（Agent）** 实现 Agent 评估脚本：配置生成成功率 / 关键参数正确率 / 澄清有效率
-- [ ] **P1** Agent 集成到主 UI（SetupView 配置助手入口），不在独立 `agent_test_ui.py` 中验证
+- [x] **P1** Agent 集成到主 UI（SetupView 配置助手入口），不在独立 `agent_test_ui.py` 中验证
 - [ ] **P2** `LLMTestConfig` 新增 `confidence` 字段（锦上添花，非必需）
 
 ### 对应代码位置
@@ -189,6 +217,14 @@ LLM 输出 JSON
 
 > 根据数据库中的历史受试者信息，自动识别回访用户并加载上次的测试参数，减少重复配置。
 > 核心价值是**参数复用**，不是身份识别本身——不要过度设计识别环节。
+
+### 当前状态（2026-06-23）
+
+| 子阶段 | 状态 | 说明 |
+|---|---|---|
+| 4.8a MVP | ✅ 已完成 | 主 UI 支持打字搜索受试者、精确/LIKE 查询、创建受试者、加载上次参数、测试结束自动记录 session |
+| 4.8b 拼音匹配 | 📋 待开发 | 暂未引入 `pypinyin`，不做同音字匹配 |
+| 4.8c 语音输入优化 | 📋 按需 | 暂未做 ASR 热词或 N-best 候选匹配 |
 
 ### 设计决策
 
@@ -326,8 +362,8 @@ ClarifyGPT 原论文的核心方法论是"采样 N 个代码方案 → 按测试
 |---|---|---|
 | overload 参数 / 能量功率计算 | 需要 `body_weight` 输入，公式待确认 | 低 |
 | PDF 导出 | ReportView 增加 PDF 导出能力 | 低 |
-| 受试者档案管理 | Dashboard 页管理受试者信息，关联历史测试（基础识别见 Phase 4.8） | 低 |
-| Agent 集成到主 UI | 将 `agent_test_ui.py` 的功能嵌入 SetupView | 中 |
+| 受试者档案管理 | 基础受试者选择和历史记录已接入；Dashboard 页集中管理受试者信息仍可后续补 | 低 |
+| Agent 集成到主 UI | ✅ 已完成：`AgentConfigPanel` 已嵌入 SetupView | 已完成 |
 | Markdown 表格渲染 | ✅ 已解决：`QTextDocument.setDefaultStyleSheet()` 嵌入 table/td/th 边框 CSS + markdown-it-py.enable("table") | 中 |
 | 底层参数沉默 | min_contact_time/min_flight_time/max_flight_time 已加 SYSTEM_PROMPT 沉默规则 + 移出 ClarifyGPT 分歧检查，LLM 偶有违反 | 低 |
 
@@ -388,7 +424,8 @@ Iron_Jump/
 | 阶段 | 内容 | 验证 |
 |---|---|---|
 | ✅ 9.0 锁定现状 | 已补齐测试入口依赖并消除 pytest 收集警告；现有 `tests/` 可统一运行 | 2026-06-08: `python -m pytest -q tests` → 32 passed |
-| 9.1 加保护测试 | 给 `single_foot_tracker`、`spatial_clusterer`、`contact_tracker`、`build_report` 加小样本测试 | 不接硬件也能验证算法输出 |
+| ✅ 9.1 加保护测试 | 已给 `single_foot_tracker`、`spatial_clusterer`、`contact_tracker`、`build_report` 加小样本测试 | `tests/test_engine_protection.py`, `tests/test_jump_report.py` |
+| 9.2a 时间戳语义确认 | 在抽核心前决定纵跳是否也改成“边界记录 + 确认后回填边界时间”；若要改，先补失败测试再实现 | 保护 Jump Test 指标不被 confirm_samples 延迟污染 |
 | 9.2 抽纯算法核心 | 新增 `engine/gait_core.py`，迁出 `GaitEngine` 中的状态机、统计、停止判断；现有 `GaitEngine(QObject)` 先保留为 Qt 适配壳 | `gait_core` 无 Qt import；原 UI 流程不变 |
 | 9.3 拆 USB Worker | 把 bytes→bits、分包合并、contact_bits 转换抽到 `hardware/frame_decoder.py`；Qt 信号部分保留为薄 Worker | 帧解析可单测；Qt Worker 只负责生命周期和信号转发 |
 | 9.4 改报告边界 | 让算法核心输出 `SessionSnapshot/TestResult`，`build_report()` 不再读取 engine 私有状态 | `SessionController` 不再直接改 `_paused/_finished` |
