@@ -97,6 +97,65 @@ def test_onset_mode_uses_raw_small_cluster_for_time_and_valid_cluster_for_confir
     assert result.traces[2].valid_primary_cluster_length == 12
 
 
+def test_associated_mode_backfills_touch_to_same_raw_track_first_seen() -> None:
+    config = TimingConfig(confirm_samples=2)
+    frames = [
+        _frame(1, 0.00, _bits(20, 22)),  # first observable contact, not 1 LED
+        _frame(2, 0.01, _bits()),  # short drop-out should not break the track
+        _frame(3, 0.02, _bits(20, 25)),
+        _frame(4, 0.03, _bits(20, 31)),  # confirm frame 1
+        _frame(5, 0.04, _bits(20, 31)),  # confirm frame 2
+    ]
+
+    result = run_detector(frames, "associated", config)
+
+    assert len(result.events) == 1
+    touch = result.events[0]
+    assert touch.kind == "touch"
+    assert touch.time == 0.00
+    assert touch.first_confirm_frame_time == 0.03
+    assert touch.confirm_time == 0.04
+
+
+def test_associated_mode_does_not_attach_far_isolated_small_noise_to_touch() -> None:
+    config = TimingConfig(confirm_samples=2)
+    frames = [
+        _frame(1, 0.00, _bits(5, 5)),  # isolated 1 LED noise, far from touch
+        _frame(2, 0.01, _bits()),
+        _frame(3, 0.02, _bits(20, 22)),
+        _frame(4, 0.03, _bits(20, 31)),  # confirm frame 1
+        _frame(5, 0.04, _bits(20, 31)),  # confirm frame 2
+    ]
+
+    result = run_detector(frames, "associated", config)
+
+    assert len(result.events) == 1
+    assert result.events[0].kind == "touch"
+    assert result.events[0].time == 0.02
+
+
+def test_lift_associated_mode_backfills_last_seen_without_upgrading_confirmation() -> None:
+    config = TimingConfig(confirm_samples=2)
+    frames = [
+        _frame(1, 0.00, _bits(20, 31)),
+        _frame(2, 0.01, _bits(20, 31)),  # touch confirm
+        _frame(3, 0.02, _bits()),  # lift condition frame 1
+        _frame(4, 0.03, _bits(20, 24)),  # still cluster=None; lift confirms here
+        _frame(5, 0.04, _bits(20, 22)),  # too late to be bridged into lift
+        _frame(6, 0.05, _bits()),
+    ]
+
+    result = run_detector(frames, "lift_associated", config)
+
+    assert [(event.kind, event.confirm_time) for event in result.events] == [
+        ("touch", 0.01),
+        ("lift", 0.03),
+    ]
+    lift = result.events[1]
+    assert lift.time == 0.03
+    assert lift.first_confirm_frame_time == 0.02
+
+
 def test_excel_reader_preserves_all_zero_frames_and_timestamps(tmp_path: Path) -> None:
     from openpyxl import Workbook
 

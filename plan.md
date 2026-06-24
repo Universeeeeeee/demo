@@ -27,17 +27,33 @@
 
 1. **论文 P0 主实验**：先设计步态参数准确性验证方案，确定参考标准、采集对照数据和评价指标。
 2. **论文 P0 Agent 辅助实验**：编写 10~30 条典型指令，并实现 Agent 评估脚本。
-3. **工程 Phase 9.2a → 9.2**：先确认纵跳时间戳语义是否也要改成“边界记录 + 确认后回填”，再抽出 `engine/gait_core.py`，让 `GaitEngine(QObject)` 逐步变成 Qt 适配壳。
+3. **工程 Phase 9.2a → 9.2**：先升级纵跳离线诊断，验证“确认仍用高阈值、统计时间由关联原始轨迹回填”的方案；通过多 session 人工标注复验后，再小范围修改 `SingleFootDetector`。只有纵跳时间戳语义稳定后，才继续抽出 `engine/gait_core.py`，让 `GaitEngine(QObject)` 逐步变成 Qt 适配壳。
 
 ### 当前计算逻辑审计：边界记录 + 事件确认
 
 | 模式 | 当前逻辑 | 判断 |
 |---|---|---|
 | 原始帧导出 | `GaitEngine.process_raw_frame()` 先把每帧 `contact_bits` 和相对时间写入 FIFO 导出缓存，再进入算法处理 | 记录的是全量帧，不是只记录边界 |
-| 纵跳 Jump Test | `SingleFootDetector` 连续 `confirm_samples` 帧满足触地/离地条件后才发事件；事件时间使用**确认帧时间**。`GaitEngine._accumulate_hop_stats()` 用确认后的 touch/lift 时间计算腾空、接触、周期 | **事件确认已实现**；但不是严格的“边界时间回填”，确认会带来最多 `confirm_samples - 1` 帧的时间延迟 |
+| 纵跳 Jump Test | `SingleFootDetector` 连续 `confirm_samples` 帧满足触地/离地条件后才发事件；事件时间使用**确认成功帧时间**。当前 `Jump Test` 配置为 `touch_ratio_threshold=0.12`、`lift_ratio_threshold=0.05`、`confirm_samples=2`，且 `_extract_primary_cluster()` 会过滤 `<10 LED` 的主簇。因此当前 lift 近似等价于“连续 2 帧没有长度 `>=10 LED` 的有效主簇”。`GaitEngine._accumulate_hop_stats()` 用确认后的 touch/lift 时间计算腾空、接触、周期。 | **只有事件确认，没有边界回填**。session5 离线诊断支持边界回填方向，但只是一组探索数据，不能直接作为生产改造证据 |
 | 步态 Gait Test | `extract_clusters()` 每帧提取簇 `start/end/centroid`；`ClusterTracker` 维护 `appear_time/disappear_time`；`ContactBasedGaitTracker` 先 candidate，连续帧确认后 touch_time 回填 `first_seen_time`，丢失多帧确认后 lift_time 回填 `last_seen_time` | 是“边界记录 + 事件确认”：触地/离地都先记录边界，再等待确认 |
 
-**待决问题**：如果论文或系统精度要求所有模式都采用“先记录边界、确认后回填边界时间”，下一步应先给纵跳补回归测试，再把 `SingleFootDetector` 改为保存 candidate touch/lift 的首帧边界时间，而不是直接使用确认帧时间。
+**2026-06-24 修订准则**：若旧文档仍写成“touch/lift 统一候选起点回填”或“纵跳已经确定改为简单边界记录 + 事件确认”，以以下结论为准：
+
+1. 纵跳不拆成“小簇检测器”和“高阈值检测器”。每帧只做一次原始簇提取，得到 `raw_clusters`；`confirm_cluster` 是从同一份 `raw_clusters` 中按当前生产规则筛出的主簇。
+2. `confirm_cluster` 仍是唯一事件确认依据；原始小簇不直接输出 touch/lift，只维护候选接触轨迹和边界时间。
+3. touch 与 lift 不对称：touch 的统计边界是同一关联轨迹的 `first_seen_time`；lift 第一阶段只在**当前生产确认语义**成立时，回填确认前同一 active track 的 `last_seen_time`。
+4. 第一阶段不升级 lift 确认规则。像 `12 LED -> 0 -> 5 LED -> 3 LED -> 0 -> 0` 这种序列，在当前生产语义下会在 `5 LED` 帧附近确认 lift，不能为了回填后续 `3 LED` 而暗中改变确认机制。
+5. `FootEvent.time` 应表示统计用边界时间；`confirm_time` 表示确认成功帧时间；必要时再保留 `first_confirm_frame_time` 用于分析 `confirm_samples` 延迟。
+
+**Phase 9.2a 离线验证范围**：
+
+- 先扩展 `tools/jump_timing_diagnostics.py`，不要直接改 `GaitEngine`、UI、报告或生产纵跳链路。
+- 对照至少拆成：A 当前确认成功帧；B 首个满足当前确认条件帧；C touch-only 关联 `first_seen`；D lift-only 在当前确认语义下关联 `last_seen`；E touch+lift 同时关联回填。
+- `raw track` 匹配必须是一对一分配：一帧内一个 raw cluster 最多匹配一条 track，一条 active track 最多接收一个 raw cluster；可用稳定贪心评分，不需要先上 Hungarian。
+- 早期小簇是否能接到确认簇，必须看时空连续性，而不是简单取窗口内最早非零帧。`1 LED` 簇不能只靠质心距离连接，至少要满足区间重叠、边缘接近，或连续相邻帧持续出现。
+- `max_missing_frames`、`max_edge_gap_led`、`max_centroid_shift_led`、`max_touch_candidate_age_ms` 都是实验候选参数，不是生产常量。先输出 `candidate_to_confirm_ms` 分布，再决定是否硬过滤。
+- 主指标是 `contact_time MAE`、`air_time MAE` 和事件匹配稳定性；`jump_height MAE` 只是由 `air_time` 推导出的报告层影响，除非有独立参考设备，否则不作为独立证据。
+- 生产准入最低要求：至少 3 个独立采集 session、15~20 个已匹配完整跳跃；每个 session 单独算 MAE；多数 session 不劣于当前基线；不增加漏检、误检、配对失败；`fallback_rate` 必须为 0 或有可解释例外。
 
 ---
 
@@ -425,7 +441,7 @@ Iron_Jump/
 |---|---|---|
 | ✅ 9.0 锁定现状 | 已补齐测试入口依赖并消除 pytest 收集警告；现有 `tests/` 可统一运行 | 2026-06-08: `python -m pytest -q tests` → 32 passed |
 | ✅ 9.1 加保护测试 | 已给 `single_foot_tracker`、`spatial_clusterer`、`contact_tracker`、`build_report` 加小样本测试 | `tests/test_engine_protection.py`, `tests/test_jump_report.py` |
-| 9.2a 时间戳语义确认 | 在抽核心前决定纵跳是否也改成“边界记录 + 确认后回填边界时间”；若要改，先补失败测试再实现 | 保护 Jump Test 指标不被 confirm_samples 延迟污染 |
+| 9.2a 纵跳时间戳离线验证 | session5 仅证明“事件确认时间”和“统计边界时间”值得拆开验证；下一步先更新离线诊断工具，比较 A 当前确认帧、B 首个确认条件帧、C touch-only 关联 `first_seen`、D lift-only 关联 `last_seen`、E touch+lift 关联回填。第一阶段 lift 只回填当前确认前的 `last_seen`，不升级确认语义 | 保护 Jump Test 指标不被边界偏移污染；至少 3 个独立 session / 15~20 个完整跳跃通过后，再给 `SingleFootDetector` 写失败测试并实现 `FootEvent.time`=边界时间、`confirm_time`=确认帧时间 |
 | 9.2 抽纯算法核心 | 新增 `engine/gait_core.py`，迁出 `GaitEngine` 中的状态机、统计、停止判断；现有 `GaitEngine(QObject)` 先保留为 Qt 适配壳 | `gait_core` 无 Qt import；原 UI 流程不变 |
 | 9.3 拆 USB Worker | 把 bytes→bits、分包合并、contact_bits 转换抽到 `hardware/frame_decoder.py`；Qt 信号部分保留为薄 Worker | 帧解析可单测；Qt Worker 只负责生命周期和信号转发 |
 | 9.4 改报告边界 | 让算法核心输出 `SessionSnapshot/TestResult`，`build_report()` 不再读取 engine 私有状态 | `SessionController` 不再直接改 `_paused/_finished` |

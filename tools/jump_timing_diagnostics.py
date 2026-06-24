@@ -10,7 +10,14 @@ from typing import Iterable, Literal
 from openpyxl import load_workbook
 
 
-Mode = Literal["current", "compensated", "onset"]
+Mode = Literal[
+    "current",
+    "compensated",
+    "onset",
+    "touch_associated",
+    "lift_associated",
+    "associated",
+]
 PairingMode = Literal["raw_triplet", "production_equivalent"]
 
 
@@ -27,6 +34,10 @@ class TimingConfig:
     touch_onset_min_leds: int = 2
     lift_onset_max_leds: int = 3
     confirm_window_s: float = 0.10
+    raw_track_max_missing_frames: int = 2
+    raw_track_max_edge_gap_led: int = 4
+    raw_track_max_centroid_shift_led: float = 6.0
+    raw_track_max_touch_candidate_age_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -37,12 +48,54 @@ class FrameSample:
 
 
 @dataclass(frozen=True)
+class RawCluster:
+    start: int
+    end: int
+    length: int
+    centroid_idx: float
+    centroid_cm: float
+
+
+@dataclass(frozen=True)
 class ClusterStats:
     active_led_count: int
+    raw_clusters: tuple[RawCluster, ...]
+    primary_raw_cluster_index: int | None
     raw_primary_cluster_length: int
     valid_primary_cluster_length: int
     ratio: float
     centroid_cm: float | None
+
+
+@dataclass
+class RawTrack:
+    track_id: int
+    first_seen_frame: int
+    first_seen_time: float
+    last_seen_frame: int
+    last_seen_time: float
+    last_start: int
+    last_end: int
+    last_centroid_idx: float
+    max_length: int
+    seen_count: int = 1
+    miss_count: int = 0
+    is_active: bool = True
+
+    def update(self, frame: FrameSample, cluster: RawCluster) -> None:
+        self.last_seen_frame = frame.index
+        self.last_seen_time = frame.timestamp
+        self.last_start = cluster.start
+        self.last_end = cluster.end
+        self.last_centroid_idx = cluster.centroid_idx
+        self.max_length = max(self.max_length, cluster.length)
+        self.seen_count += 1
+        self.miss_count = 0
+
+    def miss(self, config: TimingConfig) -> None:
+        self.miss_count += 1
+        if self.miss_count > config.raw_track_max_missing_frames:
+            self.is_active = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +108,9 @@ class EventRecord:
     confirm_time: float
     first_confirm_frame_time: float
     onset_time: float | None
+    associated_track_id: int | None = None
+    boundary_time: float | None = None
+    fallback_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +133,9 @@ class FrameTrace:
     event_time_first_confirm_frame: float | None
     onset_time: float | None
     confirm_time: float | None
+    associated_track_id: int | None
+    boundary_time: float | None
+    fallback_reason: str
 
 
 @dataclass(frozen=True)
@@ -139,33 +198,63 @@ def iter_excel_led_frames(path: str | Path) -> Iterable[FrameSample]:
         workbook.close()
 
 
-def _cluster_stats(bits: list[int], config: TimingConfig) -> ClusterStats:
+def _extract_raw_clusters(bits: list[int], config: TimingConfig) -> tuple[RawCluster, ...]:
     active_indices = [index for index, value in enumerate(bits[: config.cols]) if value]
     if not active_indices:
-        return ClusterStats(0, 0, 0, 0.0, None)
+        return ()
 
-    clusters: list[tuple[int, int]] = []
+    ranges: list[tuple[int, int]] = []
     start = previous = active_indices[0]
     for index in active_indices[1:]:
         if index - previous > config.gap_threshold:
-            clusters.append((start, previous))
+            ranges.append((start, previous))
             start = index
         previous = index
-    clusters.append((start, previous))
+    ranges.append((start, previous))
 
-    raw_start, raw_end = max(clusters, key=lambda item: item[1] - item[0] + 1)
-    raw_length = raw_end - raw_start + 1
+    return tuple(
+        RawCluster(
+            start=start,
+            end=end,
+            length=end - start + 1,
+            centroid_idx=(start + end) / 2.0,
+            centroid_cm=((start + end) / 2.0) * config.spacing_cm,
+        )
+        for start, end in ranges
+    )
+
+
+def _cluster_stats(bits: list[int], config: TimingConfig) -> ClusterStats:
+    raw_clusters = _extract_raw_clusters(bits, config)
+    active_count = sum(cluster.length for cluster in raw_clusters)
+    if not raw_clusters:
+        return ClusterStats(0, (), None, 0, 0, 0.0, None)
+
+    primary_index, primary_cluster = max(
+        enumerate(raw_clusters),
+        key=lambda item: (item[1].length, -item[1].start),
+    )
+    raw_length = primary_cluster.length
     if raw_length < config.min_valid_cluster_length:
-        return ClusterStats(len(active_indices), raw_length, 0, 0.0, None)
+        return ClusterStats(
+            active_count,
+            raw_clusters,
+            primary_index,
+            raw_length,
+            0,
+            0.0,
+            None,
+        )
 
-    centroid_idx = (raw_start + raw_end) / 2.0
     valid_length = raw_length
     return ClusterStats(
-        active_led_count=len(active_indices),
+        active_led_count=active_count,
+        raw_clusters=raw_clusters,
+        primary_raw_cluster_index=primary_index,
         raw_primary_cluster_length=raw_length,
         valid_primary_cluster_length=valid_length,
         ratio=valid_length / config.cols,
-        centroid_cm=centroid_idx * config.spacing_cm,
+        centroid_cm=primary_cluster.centroid_cm,
     )
 
 
@@ -176,16 +265,144 @@ def _decay_streak(streak: int, condition_times: list[float]) -> int:
     return next_streak
 
 
+def _edge_gap(track: RawTrack, cluster: RawCluster) -> int:
+    if cluster.end < track.last_start:
+        return track.last_start - cluster.end
+    if cluster.start > track.last_end:
+        return cluster.start - track.last_end
+    return 0
+
+
+def _overlap_length(track: RawTrack, cluster: RawCluster) -> int:
+    start = max(track.last_start, cluster.start)
+    end = min(track.last_end, cluster.end)
+    return max(0, end - start + 1)
+
+
+def _raw_track_match_score(
+    track: RawTrack,
+    cluster: RawCluster,
+    config: TimingConfig,
+) -> tuple[int, int, float, int, int] | None:
+    overlap = _overlap_length(track, cluster)
+    edge_gap = _edge_gap(track, cluster)
+    centroid_shift = abs(cluster.centroid_idx - track.last_centroid_idx)
+
+    if overlap > 0:
+        match_type = 0
+    elif edge_gap <= config.raw_track_max_edge_gap_led:
+        match_type = 1
+    elif (
+        cluster.length > 1
+        and centroid_shift <= config.raw_track_max_centroid_shift_led
+    ):
+        match_type = 2
+    else:
+        return None
+
+    return (
+        match_type,
+        edge_gap,
+        centroid_shift,
+        track.miss_count,
+        -overlap,
+    )
+
+
+def _new_raw_track(track_id: int, frame: FrameSample, cluster: RawCluster) -> RawTrack:
+    return RawTrack(
+        track_id=track_id,
+        first_seen_frame=frame.index,
+        first_seen_time=frame.timestamp,
+        last_seen_frame=frame.index,
+        last_seen_time=frame.timestamp,
+        last_start=cluster.start,
+        last_end=cluster.end,
+        last_centroid_idx=cluster.centroid_idx,
+        max_length=cluster.length,
+    )
+
+
+def _update_raw_tracks(
+    tracks: list[RawTrack],
+    next_track_id: int,
+    frame: FrameSample,
+    clusters: tuple[RawCluster, ...],
+    config: TimingConfig,
+) -> tuple[int, dict[int, int]]:
+    active_tracks = [track for track in tracks if track.is_active]
+    cluster_to_track: dict[int, int] = {}
+    assigned_tracks: set[int] = set()
+    assigned_clusters: set[int] = set()
+    candidates: list[tuple[tuple[int, int, float, int, int], int, int, RawTrack]] = []
+
+    for track in active_tracks:
+        for cluster_index, cluster in enumerate(clusters):
+            score = _raw_track_match_score(track, cluster, config)
+            if score is not None:
+                candidates.append((score, track.track_id, cluster_index, track))
+
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+            clusters[item[2]].start,
+            item[2],
+        )
+    )
+
+    for _score, track_id, cluster_index, track in candidates:
+        if track_id in assigned_tracks or cluster_index in assigned_clusters:
+            continue
+        track.update(frame, clusters[cluster_index])
+        assigned_tracks.add(track_id)
+        assigned_clusters.add(cluster_index)
+        cluster_to_track[cluster_index] = track_id
+
+    for track in active_tracks:
+        if track.track_id not in assigned_tracks:
+            track.miss(config)
+
+    for cluster_index, cluster in enumerate(clusters):
+        if cluster_index in assigned_clusters:
+            continue
+        track = _new_raw_track(next_track_id, frame, cluster)
+        tracks.append(track)
+        cluster_to_track[cluster_index] = next_track_id
+        next_track_id += 1
+
+    return next_track_id, cluster_to_track
+
+
+def _find_raw_track(tracks: list[RawTrack], track_id: int | None) -> RawTrack | None:
+    if track_id is None:
+        return None
+    for track in tracks:
+        if track.track_id == track_id:
+            return track
+    return None
+
+
 def _event_time_for_mode(
     mode: Mode,
+    kind: str,
     confirm_time: float,
     first_confirm_frame_time: float,
     onset_time: float | None,
+    boundary_time: float | None,
     confirm_window_s: float,
 ) -> float:
     if mode == "current":
         return confirm_time
     if mode == "compensated":
+        return first_confirm_frame_time
+    if mode == "associated" and boundary_time is not None:
+        return boundary_time
+    if mode == "touch_associated" and kind == "touch" and boundary_time is not None:
+        return boundary_time
+    if mode == "lift_associated" and kind == "lift" and boundary_time is not None:
+        return boundary_time
+    if mode in {"associated", "touch_associated", "lift_associated"}:
         return first_confirm_frame_time
     if onset_time is not None and confirm_time - onset_time <= confirm_window_s:
         return onset_time
@@ -199,7 +416,14 @@ def run_detector(
 ) -> DetectorResult:
     if config is None:
         config = TimingConfig()
-    if mode not in {"current", "compensated", "onset"}:
+    if mode not in {
+        "current",
+        "compensated",
+        "onset",
+        "touch_associated",
+        "lift_associated",
+        "associated",
+    }:
         raise ValueError(f"Unknown mode: {mode}")
 
     state = "air"
@@ -209,11 +433,26 @@ def run_detector(
     lift_condition_times: list[float] = []
     touch_onset_time: float | None = None
     lift_onset_time: float | None = None
+    raw_tracks: list[RawTrack] = []
+    next_track_id = 0
+    active_contact_track_id: int | None = None
     events: list[EventRecord] = []
     traces: list[FrameTrace] = []
 
     for frame in frames:
         stats = _cluster_stats(frame.bits, config)
+        next_track_id, cluster_to_track = _update_raw_tracks(
+            raw_tracks,
+            next_track_id,
+            frame,
+            stats.raw_clusters,
+            config,
+        )
+        primary_track_id = (
+            cluster_to_track.get(stats.primary_raw_cluster_index)
+            if stats.primary_raw_cluster_index is not None
+            else None
+        )
         state_before = state
         touch_condition = (
             state == "air"
@@ -269,11 +508,26 @@ def run_detector(
             lift_streak = _decay_streak(lift_streak, lift_condition_times)
             if touch_streak >= config.confirm_samples:
                 first_time = touch_condition_times[0]
+                boundary_time: float | None = None
+                fallback_reason = ""
+                boundary_track = _find_raw_track(raw_tracks, primary_track_id)
+                if boundary_track is None:
+                    fallback_reason = "no_associated_track"
+                elif (
+                    config.raw_track_max_touch_candidate_age_s is not None
+                    and first_time - boundary_track.first_seen_time
+                    > config.raw_track_max_touch_candidate_age_s
+                ):
+                    fallback_reason = "touch_candidate_too_old"
+                else:
+                    boundary_time = boundary_track.first_seen_time
                 event_time = _event_time_for_mode(
                     mode,
+                    "touch",
                     frame.timestamp,
                     first_time,
                     touch_onset_time,
+                    boundary_time,
                     config.confirm_window_s,
                 )
                 event = EventRecord(
@@ -285,9 +539,13 @@ def run_detector(
                     confirm_time=frame.timestamp,
                     first_confirm_frame_time=first_time,
                     onset_time=touch_onset_time,
+                    associated_track_id=primary_track_id,
+                    boundary_time=boundary_time,
+                    fallback_reason=fallback_reason,
                 )
                 events.append(event)
                 state = "ground"
+                active_contact_track_id = primary_track_id
                 touch_streak = 0
                 touch_condition_times.clear()
                 touch_onset_time = None
@@ -300,11 +558,20 @@ def run_detector(
             touch_streak = _decay_streak(touch_streak, touch_condition_times)
             if lift_streak >= config.confirm_samples:
                 first_time = lift_condition_times[0]
+                boundary_time = None
+                fallback_reason = ""
+                boundary_track = _find_raw_track(raw_tracks, active_contact_track_id)
+                if boundary_track is None:
+                    fallback_reason = "no_active_contact_track"
+                else:
+                    boundary_time = boundary_track.last_seen_time
                 event_time = _event_time_for_mode(
                     mode,
+                    "lift",
                     frame.timestamp,
                     first_time,
                     lift_onset_time,
+                    boundary_time,
                     config.confirm_window_s,
                 )
                 event = EventRecord(
@@ -316,9 +583,13 @@ def run_detector(
                     confirm_time=frame.timestamp,
                     first_confirm_frame_time=first_time,
                     onset_time=lift_onset_time,
+                    associated_track_id=active_contact_track_id,
+                    boundary_time=boundary_time,
+                    fallback_reason=fallback_reason,
                 )
                 events.append(event)
                 state = "air"
+                active_contact_track_id = None
                 lift_streak = 0
                 lift_condition_times.clear()
                 lift_onset_time = None
@@ -349,6 +620,9 @@ def run_detector(
                 ),
                 onset_time=event.onset_time if event else None,
                 confirm_time=event.confirm_time if event else None,
+                associated_track_id=event.associated_track_id if event else None,
+                boundary_time=event.boundary_time if event else None,
+                fallback_reason=event.fallback_reason if event else "",
             )
         )
 
@@ -595,14 +869,34 @@ def write_summary(path: Path, comparisons: list[dict[str, object]]) -> None:
         for key, value in aggregates.items()
         if key[0] == "onset" and key[1] == "production_equivalent"
     }
-    best_onset_key = min(
-        onset_prod,
-        key=lambda key: (
-            (onset_prod[key]["contact_mae"] or math.inf)
-            + (onset_prod[key]["air_mae"] or math.inf)
-        ),
-    )
-    best_onset = onset_prod[best_onset_key]
+    associated_prod = {
+        key: value
+        for key, value in aggregates.items()
+        if key[0] in {"touch_associated", "lift_associated", "associated"}
+        and key[1] == "production_equivalent"
+    }
+    best_onset_key = None
+    best_onset = None
+    if onset_prod:
+        best_onset_key = min(
+            onset_prod,
+            key=lambda key: (
+                (onset_prod[key]["contact_mae"] or math.inf)
+                + (onset_prod[key]["air_mae"] or math.inf)
+            ),
+        )
+        best_onset = onset_prod[best_onset_key]
+    best_associated_key = None
+    best_associated = None
+    if associated_prod:
+        best_associated_key = min(
+            associated_prod,
+            key=lambda key: (
+                (associated_prod[key]["contact_mae"] or math.inf)
+                + (associated_prod[key]["air_mae"] or math.inf)
+            ),
+        )
+        best_associated = associated_prod[best_associated_key]
 
     lines.extend(["", "## Findings", ""])
     if current_prod:
@@ -632,6 +926,13 @@ def write_summary(path: Path, comparisons: list[dict[str, object]]) -> None:
             f"{best_onset_key[2]:.2f}s: contact MAE {_fmt(best_onset['contact_mae'])}s, "
             f"air MAE {_fmt(best_onset['air_mae'])}s."
         )
+    if best_associated:
+        lines.append(
+            "- Best associated-track production-equivalent variant is "
+            f"{best_associated_key[0]}: contact MAE "
+            f"{_fmt(best_associated['contact_mae'])}s, air MAE "
+            f"{_fmt(best_associated['air_mae'])}s."
+        )
     lines.append(
         "- raw_triplet includes the initial stance contact period; production_equivalent "
         "matches the current GaitEngine reporting rules better."
@@ -653,6 +954,21 @@ def run_diagnostics(
     traces: list[FrameTrace] = []
 
     for mode in ("current", "compensated"):
+        config = TimingConfig()
+        result = run_detector(frames, mode, config)
+        traces.extend(result.traces)
+        for pairing_mode in ("raw_triplet", "production_equivalent"):
+            comparisons.extend(
+                compare_rows(
+                    manual_rows,
+                    compute_jump_rows(result.events, pairing_mode),
+                    mode,
+                    pairing_mode,
+                    config.confirm_window_s,
+                )
+            )
+
+    for mode in ("touch_associated", "lift_associated", "associated"):
         config = TimingConfig()
         result = run_detector(frames, mode, config)
         traces.extend(result.traces)
