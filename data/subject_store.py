@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from config.test_config import TestConfig
+from config.test_config import AnyTestConfig, TestConfig
 from config.test_report import GaitTestReport, JumpTestReport, TestReport
 from path_utils import get_base_dir
 
@@ -264,7 +264,7 @@ class SubjectStore:
     def record_session(
         self,
         subject_id: int,
-        config: TestConfig,
+        config: AnyTestConfig,
         report: TestReport,
         *,
         started_at: str | None = None,

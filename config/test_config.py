@@ -11,7 +11,9 @@ test_config.py — 测试运行时配置容器
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 
 
 @dataclass
@@ -112,6 +114,23 @@ class TestConfig:
             "Static Test (Sway)": "静态测试",
         }
         return labels.get(self.test_type, self.test_type)
+
+
+# ---- 多态配置类型别名 ----
+
+AnyTestConfig = Union[TestConfig, TreadmillGaitConfig, TreadmillRunningConfig]
+
+
+def config_from_dict(data: dict[str, Any]) -> AnyTestConfig:
+    """根据 test_type 分发构造对应配置对象。所有字段名与 JSON/UI 一致，无需映射。"""
+    test_type = data.get("test_type", "Jump Test")
+    payload = {key: value for key, value in data.items() if key != "test_type"}
+
+    if test_type == "Treadmill Gait Test":
+        return TreadmillGaitConfig(**payload)
+    if test_type == "Treadmill Running Test":
+        return TreadmillRunningConfig(**payload)
+    return TestConfig.from_dict(data)
 
 
 # ---- 预设配置工厂 ----

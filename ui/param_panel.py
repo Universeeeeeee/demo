@@ -28,7 +28,7 @@ from dayu_widgets.switch import MSwitch
 from dayu_widgets.collapse import MSectionItem
 
 from config.param_schema import ParamSchema, ParamDef, get_schema
-from config.test_config import TestConfig
+from config.test_config import AnyTestConfig, TestConfig
 
 
 class ParamPanel(QWidget):
@@ -77,7 +77,7 @@ class ParamPanel(QWidget):
     #  公共方法
     # ==================================================================
 
-    def get_config(self) -> TestConfig:
+    def get_config(self) -> AnyTestConfig:
         """收集所有控件当前值，构建 TestConfig。不可见的条件字段设为 None。"""
         values = self._current_values()
 
@@ -117,7 +117,7 @@ class ParamPanel(QWidget):
 
         return config
 
-    def set_config(self, config: TestConfig) -> None:
+    def set_config(self, config: AnyTestConfig) -> None:
         """从 TestConfig 反向填充控件值。用于加载历史配置。"""
         mapping = config.to_dict()
 

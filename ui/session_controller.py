@@ -20,7 +20,7 @@ from typing import Optional
 
 from qtpy.QtCore import QObject, Signal, Slot, QThread, Qt
 
-from config.test_config import TestConfig
+from config.test_config import AnyTestConfig, TestConfig
 from config.test_report import TestReport, build_report
 from hardware.usb_worker import UsbWorker
 from engine.gait_engine import GaitEngine
@@ -67,7 +67,7 @@ class SessionController(QObject):
         self._chunk_size = self._parse_int_env("DAYU_CHUNK", 512)
 
         # 会话状态
-        self._config: Optional[TestConfig] = None
+        self._config: Optional[AnyTestConfig] = None
         self._start_time: Optional[float] = None
         self._finish_reason: Optional[str] = None
         self._is_running = False
@@ -76,7 +76,7 @@ class SessionController(QObject):
     #  公共方法
     # ------------------------------------------------------------------
 
-    def prepare(self, config: TestConfig):
+    def prepare(self, config: AnyTestConfig):
         """创建后台资源（QThread + UsbWorker + GaitEngine），但不启动。
 
         调用此方法后，资源已就绪，等待 start() 启动线程。
@@ -170,7 +170,7 @@ class SessionController(QObject):
         return self._engine
 
     @property
-    def config(self) -> Optional[TestConfig]:
+    def config(self) -> Optional[AnyTestConfig]:
         return self._config
 
     @property

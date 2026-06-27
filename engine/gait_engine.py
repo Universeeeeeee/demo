@@ -25,7 +25,7 @@ from qtpy.QtCore import QObject, Signal, Slot, QTimer
 
 # 配置容器
 try:
-    from config.test_config import TestConfig
+    from config.test_config import AnyTestConfig, TestConfig
 except ImportError:
     from ..config.test_config import TestConfig
 
@@ -80,7 +80,7 @@ class GaitEngine(QObject):
     # === 自动停止信号 ===
     test_finished = Signal(str)           # 结束原因: "jump_count_reached" | "time_up"
 
-    def __init__(self, config: TestConfig | None = None, *, mode: str = "纵跳", parent=None):
+    def __init__(self, config: AnyTestConfig | None = None, *, mode: str = "纵跳", parent=None):
         """
         初始化算法引擎。
 
@@ -158,7 +158,7 @@ class GaitEngine(QObject):
         return self._mode
 
     @property
-    def config(self) -> TestConfig:
+    def config(self) -> AnyTestConfig:
         return self._config
 
     @property
