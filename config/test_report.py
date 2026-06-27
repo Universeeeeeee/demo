@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import math
 from typing import Optional, Union
 
+from config.treadmill_report import TreadmillGaitReport, TreadmillRunningReport
+
 G = 9.81  # 重力加速度
 
 
@@ -101,7 +103,12 @@ class GaitTestReport:
 
 
 # 统一类型别名
-TestReport = Union[JumpTestReport, GaitTestReport]
+TestReport = Union[
+    JumpTestReport,
+    GaitTestReport,
+    TreadmillGaitReport,
+    TreadmillRunningReport,
+]
 
 
 def build_report(engine, reason: str = "manual") -> TestReport:
