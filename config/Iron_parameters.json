@@ -473,10 +473,21 @@
             "applicable_tests": [
               "Sprint and Gait Test",
               "Treadmill Running Test",
-              "Treadmill Gait Test",
               "Tapping Test"
             ],
             "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "min_step_length",
+            "display_name": "最小步长 Minimum Step Length",
+            "description": "跑步机步态测试使用的最小步长过滤参数",
+            "type": "float",
+            "unit": "cm",
+            "applicable_tests": [
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.6",
             "priority": "core"
           },
           {
