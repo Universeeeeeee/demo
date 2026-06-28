@@ -470,6 +470,7 @@
             "description": "前脚脚尖与后脚脚跟之间的最小间隔距离",
             "type": "float",
             "unit": "cm",
+            "default": 10.0,
             "applicable_tests": [
               "Sprint and Gait Test",
               "Treadmill Running Test",
@@ -484,6 +485,7 @@
             "description": "跑步机步态测试使用的最小步长过滤参数",
             "type": "float",
             "unit": "cm",
+            "default": 10.0,
             "applicable_tests": [
               "Treadmill Gait Test"
             ],
