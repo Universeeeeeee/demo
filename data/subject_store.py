@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from config.test_config import AnyTestConfig, TestConfig
+from config.test_config import AnyTestConfig, TestConfig, config_from_dict
 from config.test_report import GaitTestReport, JumpTestReport, TestReport
 from config.treadmill_report import TreadmillGaitReport, TreadmillRunningReport
 from path_utils import get_base_dir
@@ -62,8 +62,8 @@ class SessionRecord:
     export_path: str | None = None
 
     @property
-    def config(self) -> TestConfig:
-        return TestConfig.from_dict(json.loads(self.config_json))
+    def config(self) -> AnyTestConfig:
+        return config_from_dict(json.loads(self.config_json))
 
     @property
     def report_summary(self) -> dict[str, Any]:
@@ -533,27 +533,27 @@ def _history_from_session(session: SessionRecord) -> dict[str, Any]:
 
 
 def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict[str, Any]:
+    from dataclasses import asdict as _asdict
+
+    if isinstance(report, TreadmillGaitReport):
+        report_type = "treadmill_gait"
+    else:
+        report_type = "treadmill_running"
+
     return {
+        "report_type": report_type,
+        "report_schema_version": 1,
         "finish_reason": report.finish_reason,
         "touch_count": report.touch_count,
         "lift_count": report.lift_count,
         "resolved_starting_foot": report.resolved_starting_foot,
         "starting_foot_source": report.starting_foot_source,
-        "per_step_results_summary": {
-            "total": len(report.per_step_results),
-            "valid": sum(1 for r in report.per_step_results if r.is_included_in_statistics),
-        },
-        "metric_summaries": {
-            k: {
-                "count": v.count,
-                "mean": v.mean,
-                "min": v.min,
-                "max": v.max,
-                "std": v.std,
-                "cv_percent": v.cv_percent,
-            }
-            for k, v in report.metric_summaries.items()
-        },
+        "foot_length_cm_snapshot": report.foot_length_cm_snapshot,
+        "foot_length_source": report.foot_length_source,
+        "per_step_results": [_asdict(r) for r in report.per_step_results],
+        "metric_summaries": {k: _asdict(v) for k, v in report.metric_summaries.items()},
+        "left_right_results": {k: _asdict(v) for k, v in report.left_right_results.items()},
+        "asymmetry_metrics": report.asymmetry_metrics,
         "report_config_snapshot": report.report_config_snapshot,
     }
 

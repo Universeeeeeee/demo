@@ -128,10 +128,14 @@ def config_from_dict(data: dict[str, Any]) -> AnyTestConfig:
 
     if test_type == "Treadmill Gait Test":
         known = {f.name for f in TreadmillGaitConfig.__dataclass_fields__.values()}
-        return TreadmillGaitConfig(**{k: v for k, v in payload.items() if k in known})
+        filtered = {k: v for k, v in payload.items() if k in known}
+        filtered.setdefault("test_length", None)
+        return TreadmillGaitConfig(**filtered)
     if test_type == "Treadmill Running Test":
         known = {f.name for f in TreadmillRunningConfig.__dataclass_fields__.values()}
-        return TreadmillRunningConfig(**{k: v for k, v in payload.items() if k in known})
+        filtered = {k: v for k, v in payload.items() if k in known}
+        filtered.setdefault("test_length", None)
+        return TreadmillRunningConfig(**filtered)
     return TestConfig.from_dict(data)
 
 
