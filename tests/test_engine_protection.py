@@ -9,7 +9,19 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.test_report import G, GaitTestReport, JumpTestReport, build_report
+from config.test_report import (
+    G,
+    GaitTestReport,
+    JumpTestReport,
+    _cadences,
+    _jump_heights,
+    _max_or_zero,
+    _mean,
+    _min_or_zero,
+    _population_std,
+    _positive_values,
+    build_report,
+)
 from engine.contact_tracker import ContactBasedGaitTracker
 from engine.single_foot_tracker import (
     LedFrame as SingleFootFrame,
@@ -191,11 +203,82 @@ def test_contact_tracker_emits_touch_then_lift_for_confirmed_contact():
     assert tracker.active_contacts == {}
 
 
+def _compute_jump_report(
+    reason, touch_count, lift_count, air_times, contact_times, cycle_times,
+    export_frames, export_timestamps,
+):
+    """Replicate the former test_report.build_report jump path."""
+    air = _positive_values(air_times)
+    contact = _positive_values(contact_times)
+    cycle = _positive_values(cycle_times)
+
+    # Convert to immutable tuples
+    export_frames = tuple(list(f) for f in export_frames)
+    export_timestamps = tuple(export_timestamps)
+
+    heights = _jump_heights(air)
+    cadence_values = _cadences(cycle)
+    avg_air = _mean(air)
+    avg_contact = _mean(contact)
+    avg_cycle = _mean(cycle)
+
+    return JumpTestReport(
+        touch_count=touch_count,
+        lift_count=lift_count,
+        air_times=air,
+        contact_times=contact,
+        cycle_times=cycle,
+        avg_jump_height=_mean(heights),
+        max_jump_height=_max_or_zero(heights),
+        avg_air_time=avg_air,
+        max_air_time=_max_or_zero(air),
+        avg_contact_time=avg_contact,
+        avg_cadence=60.0 / avg_cycle if avg_cycle > 0 else None,
+        finish_reason=reason,
+        jump_heights=heights,
+        cadences=cadence_values,
+        min_jump_height=_min_or_zero(heights),
+        std_jump_height=_population_std(heights),
+        min_air_time=_min_or_zero(air),
+        std_air_time=_population_std(air),
+        min_contact_time=_min_or_zero(contact),
+        max_contact_time=_max_or_zero(contact),
+        std_contact_time=_population_std(contact),
+        export_frames=export_frames,
+        export_timestamps=export_timestamps,
+    )
+
+
+def _make_mock_jump_engine(**overrides):
+    """Create a mock engine with build_report for jump tests."""
+    defaults = dict(
+        touch_count=0, lift_count=0,
+        air_times=(), contact_times=(), cycle_times=(),
+        export_frames=(), export_timestamps=(),
+    )
+    attrs = {**defaults, **overrides}
+    return type(
+        "MockJumpEngine",
+        (),
+        {
+            **attrs,
+            "build_report": lambda self, reason="manual": _compute_jump_report(
+                reason=reason,
+                touch_count=self.touch_count,
+                lift_count=self.lift_count,
+                air_times=self.air_times,
+                contact_times=self.contact_times,
+                cycle_times=self.cycle_times,
+                export_frames=self.export_frames,
+                export_timestamps=self.export_timestamps,
+            ),
+        },
+    )()
+
+
 def test_build_report_creates_jump_snapshot_with_derived_metrics():
-    engine = SimpleNamespace(
-        mode="\u7eb5\u8df3",
-        touch_count=4,
-        lift_count=3,
+    engine = _make_mock_jump_engine(
+        touch_count=4, lift_count=3,
         air_times=[0.4, 0.6],
         contact_times=[0.2, 0.3],
         cycle_times=[0.8, 1.2],
@@ -232,34 +315,28 @@ def test_build_report_creates_jump_snapshot_with_derived_metrics():
 
 
 def test_build_report_creates_gait_snapshot_and_averages_extra_metrics():
-    contact_tracker = SimpleNamespace(
-        stride_lengths=[10.0, 20.0],
-        velocities=[50.0, 70.0],
-        foot_a_support_times=[0.3],
-        foot_b_support_times=[0.4, 0.5],
-        extra_metrics_history=[
-            {
-                "imbalance_index": 10.0,
-                "double_support": 0.12,
-                "single_support": 0.30,
-                "acceleration": None,
-            },
-            {
-                "imbalance_index": 14.0,
-                "double_support": None,
-                "single_support": 0.50,
-                "acceleration": 1.5,
-            },
-        ],
-    )
-    engine = SimpleNamespace(
-        mode="gait",
-        touch_count=3,
-        lift_count=2,
-        contact_tracker=contact_tracker,
-        export_frames=([1, 1],),
-        export_timestamps=[2.0],
-    )
+    engine = type(
+        "MockGaitEngine",
+        (),
+        {
+            "build_report": lambda self, reason="time_up": GaitTestReport(
+                touch_count=3, lift_count=2,
+                stride_lengths=(10.0, 20.0),
+                velocities=(50.0, 70.0),
+                avg_stride=15.0, max_stride=20.0,
+                avg_velocity=60.0, max_velocity=70.0,
+                foot_a_support_times=(0.3,),
+                foot_b_support_times=(0.4, 0.5),
+                imbalance_index=12.0,
+                avg_double_support=0.12,
+                avg_single_support=0.4,
+                avg_acceleration=1.5,
+                finish_reason="time_up",
+                export_frames=([1, 1],),
+                export_timestamps=(2.0,),
+            ),
+        },
+    )()
 
     report = build_report(engine, reason="time_up")
 

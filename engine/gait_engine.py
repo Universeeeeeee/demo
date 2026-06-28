@@ -49,6 +49,12 @@ try:
 except ImportError:
     from contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 
+# 模式处理器
+try:
+    from .modes.jump_processor import JumpProcessor
+except ImportError:
+    from modes.jump_processor import JumpProcessor
+
 
 G = 9.81  # 重力加速度
 MAX_EXPORT_FRAMES = 600_000  # 导出缓存上限 (10 分钟 @1000Hz, ~230MB)
@@ -57,6 +63,9 @@ MAX_EXPORT_FRAMES = 600_000  # 导出缓存上限 (10 分钟 @1000Hz, ~230MB)
 class GaitEngine(QObject):
     """
     算法引擎 — 纯计算，无 UI 依赖。
+
+    目前作为 facade: 根据 config.test_type 选择对应的 ModeProcessor，
+    将 process_raw_frame、build_report 委托给 processor。
 
     信号流:
         UsbWorker.raw_contact_signal  →  process_raw_frame()  →  hop_event / gait_step_event  →  UI
@@ -104,26 +113,20 @@ class GaitEngine(QObject):
             if mode != "纵跳":
                 self._config.test_type = "Sprint and Gait Test"
 
-        self._mode = "纵跳" if self._config.test_type == "Jump Test" else "步态分析"
         self._start_time: Optional[float] = None
         self._paused = False
         self._finished = False  # 防止重复发射 test_finished
 
-        # ---- 纵跳模式内部状态 ----
-        self._detector: Optional[SingleFootDetector] = None
+        # ---- 处理器 ----
+        self._processor = self._select_processor()
 
-        # 纵跳统计 (镜像原 data_show 的字段，供 UI 结束时读取)
-        self.touch_count = 0
-        self.lift_count = 0
-        self.last_touch_time: Optional[float] = None
-        self.last_lift_time: Optional[float] = None
-        self.cycle_times: List[float] = []
-        self.air_times: List[float] = []
-        self.contact_times: List[float] = []
-
-        # ---- 步态模式内部状态 ----
+        # ---- 步态模式内部状态 (仍直接持有，尚无步态 processor) ----
         self._cluster_tracker: Optional[ClusterTracker] = None
         self._contact_tracker: Optional[ContactBasedGaitTracker] = None
+
+        # 步态统计
+        self.touch_count = 0
+        self.lift_count = 0
 
         # ---- 导出缓存 (FIFO 有限队列，防止长期运行 OOM) ----
         self._export_frames: deque = deque(maxlen=MAX_EXPORT_FRAMES)
@@ -136,12 +139,36 @@ class GaitEngine(QObject):
         # ---- End of Time 倒计时 ----
         self._stop_timer: Optional[QTimer] = None
 
-        # 初始化检测器
-        self._init_detectors()
+        # 初始化步态检测器
+        self._init_gait_detectors()
 
     # ---------------------------------------------------------------
     #  配置
     # ---------------------------------------------------------------
+
+    def _select_processor(self):
+        """根据 config.test_type 选择对应的 ModeProcessor。
+
+        Mode selection rules:
+          - "Jump Test" → JumpProcessor
+          - "Treadmill Gait Test" / "Treadmill Running Test" → placeholder (NotImplementedError)
+          - "Sprint and Gait Test" → no processor (gait handled inline)
+        """
+        from .modes.jump_processor import JumpProcessor
+
+        test_type = self._config.test_type
+
+        if test_type == "Jump Test":
+            return JumpProcessor(self._config)
+        elif test_type == "Treadmill Gait Test":
+            from .modes.treadmill_processor import TreadmillProcessor
+            return TreadmillProcessor(self._config, mode_name="treadmill_gait")
+        elif test_type == "Treadmill Running Test":
+            from .modes.treadmill_processor import TreadmillProcessor
+            return TreadmillProcessor(self._config, mode_name="treadmill_running")
+        else:
+            # 步态分析模式 — 尚无独立 processor，返回 None
+            return None
 
     def set_start_time(self, t: float):
         """设置时间基准（由 UI 在点击'开始分析'时调用），并启动倒计时。"""
@@ -150,12 +177,25 @@ class GaitEngine(QObject):
 
     def set_mode(self, mode: str):
         """切换模式并重置内部状态"""
-        self._mode = mode
+        if mode == "纵跳":
+            self._config.test_type = "Jump Test"
+        else:
+            self._config.test_type = "Sprint and Gait Test"
         self.reset()
 
     @property
     def mode(self) -> str:
-        return self._mode
+        """返回当前模式的中文显示标签。委托给 processor 或回退旧逻辑。"""
+        if self._processor is not None:
+            return self._processor.display_mode
+        return "步态分析"
+
+    @property
+    def processor_name(self) -> str:
+        """返回当前 processor 的内部标识名。"""
+        if self._processor is not None:
+            return self._processor.name
+        return "gait"
 
     @property
     def config(self) -> AnyTestConfig:
@@ -169,36 +209,35 @@ class GaitEngine(QObject):
     def paused(self, val: bool):
         self._paused = val
         # 暂停时重置检测器的连续帧计数器，避免恢复后读到过时的 streak
-        if val and self._detector is not None:
-            self._detector._touch_streak = 0
-            self._detector._lift_streak = 0
+        if val and self._processor is not None:
+            if hasattr(self._processor, '_detector') and self._processor._detector is not None:
+                self._processor._detector._touch_streak = 0
+                self._processor._detector._lift_streak = 0
 
-    def _init_detectors(self):
-        """根据当前模式初始化对应的检测器实例，滤波参数从 TestConfig 读取"""
-        if self._mode == "纵跳":
-            self._detector = SingleFootDetector(
-                touch_ratio_threshold=0.12,
-                lift_ratio_threshold=0.05,
-                confirm_samples=2,
-            )
+    def _init_gait_detectors(self):
+        """初始化步态模式检测器（仅在非纵跳模式时）。"""
+        if self._config.test_type == "Jump Test":
             self._cluster_tracker = None
             self._contact_tracker = None
         else:
             self._cluster_tracker = ClusterTracker()
             self._contact_tracker = ContactBasedGaitTracker()
-            self._detector = None
 
     def reset(self):
         """重置所有算法和统计状态"""
-        # 纵跳统计
+        # 步态统计
         self.touch_count = 0
         self.lift_count = 0
-        self.last_touch_time = None
-        self.last_lift_time = None
-        self.cycle_times = []
-        self.air_times = []
-        self.contact_times = []
         self._finished = False
+
+        # 处理器
+        if self._processor is not None:
+            self._processor.reset()
+            # 重新选择 processor（可能配置已变更）
+            self._processor = self._select_processor()
+        else:
+            # 重新初始化 processor
+            self._processor = self._select_processor()
 
         # 步态追踪器
         if self._contact_tracker is not None:
@@ -216,8 +255,8 @@ class GaitEngine(QObject):
             self._stop_timer.stop()
             self._stop_timer = None
 
-        # 重新初始化检测器
-        self._init_detectors()
+        # 重新初始化步态检测器
+        self._init_gait_detectors()
 
     # ---------------------------------------------------------------
     #  导出数据访问 (供 UI 结束时读取)
@@ -263,86 +302,18 @@ class GaitEngine(QObject):
         self._export_timestamps.append(rel_time)
 
         # 分发到对应模式的处理器
-        if self._mode == "纵跳":
-            self._process_hop(contact_bits, rel_time)
+        if self._processor is not None:
+            events = self._processor.process_raw_frame(contact_bits, rel_time, timestamp)
+            for ev in events:
+                self.hop_event.emit(ev)
+            # 纵跳模式下每次 touch 后检查停止条件
+            if isinstance(self._processor, JumpProcessor):
+                self._check_stop_condition()
         else:
             self._process_gait(contact_bits, rel_time, timestamp)
 
     # ---------------------------------------------------------------
-    #  纵跳模式处理
-    # ---------------------------------------------------------------
-
-    def _process_hop(self, bits: list, rel_time: float):
-        """纵跳模式：使用 SingleFootDetector 逐帧检测"""
-        frame = LedFrame(timestamp=rel_time, bits=bits)
-        for ev in self._detector.consume(frame):
-            self._accumulate_hop_stats(ev)
-            self.hop_event.emit(ev)  # → UI (低频)
-
-    def _accumulate_hop_stats(self, ev: FootEvent):
-        """累积纵跳统计数据，并将计算值附加到事件对象（避免跨线程取值竞态）。
-
-        滤波规则 (来自 OptoJump 说明书 4.2.2.2):
-          - min_contact_time: 低于此值的接触时间合并到关联腾空时间
-          - min_flight_time:  低于此值的腾空时间合并到关联接触时间
-          - max_flight_time:  超过此值的腾空时间直接丢弃
-        """
-        ev._air_time = None
-        ev._contact_time = None
-        ev._hop_height = None
-
-        cfg = self._config
-
-        if ev.kind.lower() == "touch":
-            self.touch_count += 1
-            if self.last_lift_time is not None:
-                air_time = ev.time - self.last_lift_time
-                if air_time > 0:
-                    # 滤波: max_flight_time — 超过上限的腾空直接丢弃
-                    if cfg.max_flight_time > 0 and air_time * 1000 > cfg.max_flight_time:
-                        log.debug("air_time %.1fms > max_flight_time %dms, discarded",
-                                  air_time * 1000, cfg.max_flight_time)
-                    # 滤波: min_flight_time — 低于下限的腾空合并到接触时间
-                    elif cfg.min_flight_time > 0 and air_time * 1000 < cfg.min_flight_time:
-                        log.debug("air_time %.1fms < min_flight_time %dms, merged to contact",
-                                  air_time * 1000, cfg.min_flight_time)
-                        if self.contact_times:
-                            self.contact_times[-1] += air_time
-                    else:
-                        self.air_times.append(air_time)
-                        ev._air_time = air_time
-                        ev._hop_height = 0.5 * G * (air_time / 2) ** 2
-                        ev._contact_time = self.contact_times[-1] if self.contact_times else None
-            # cycle_times: 跳跃周期 = 连续两次落地的时间差。
-            # 跳过第一个周期（touch_count==2，含初始站立时间，不是有效跳跃周期）。
-            if self.last_touch_time is not None and self.touch_count > 2:
-                cycle = ev.time - self.last_touch_time
-                if cycle > 0:
-                    self.cycle_times.append(cycle)
-            self.last_touch_time = ev.time
-
-            # 检查自动停止条件
-            self._check_stop_condition()
-
-        elif ev.kind.lower() == "lift":
-            self.lift_count += 1
-            # contact_times: 落地后的地面接触时间。
-            # 跳过第一次 lift（lift_count==1，从初始站立起跳，不是跳跃周期接触阶段）。
-            if self.last_touch_time is not None and self.lift_count > 1:
-                contact_time = ev.time - self.last_touch_time
-                if contact_time > 0:
-                    # 滤波: min_contact_time — 低于下限的接触合并到关联腾空时间
-                    if cfg.min_contact_time > 0 and contact_time * 1000 < cfg.min_contact_time:
-                        log.debug("contact_time %.1fms < min_contact_time %dms, merged to flight",
-                                  contact_time * 1000, cfg.min_contact_time)
-                        if self.air_times:
-                            self.air_times[-1] += contact_time
-                    else:
-                        self.contact_times.append(contact_time)
-            self.last_lift_time = ev.time
-
-    # ---------------------------------------------------------------
-    #  步态模式处理
+    #  步态模式处理 (尚未提取为 processor)
     # ---------------------------------------------------------------
 
     def _process_gait(self, bits: list, rel_time: float, abs_time: float):
@@ -410,6 +381,74 @@ class GaitEngine(QObject):
         self.gait_status_snapshot.emit(snapshot)
 
     # ---------------------------------------------------------------
+    #  build_report 委托
+    # ---------------------------------------------------------------
+
+    def build_report(self, reason: str = "manual"):
+        """构建不可变测试报告，委托给当前 mode processor。
+
+        Must be called after the test has stopped.
+        """
+        export_frames = tuple(list(frame) for frame in self._export_frames)
+        export_timestamps = tuple(self._export_timestamps)
+
+        if self._processor is not None:
+            return self._processor.build_report(reason, export_frames, export_timestamps)
+
+        # 回退到旧步态报告逻辑
+        return self._build_gait_report(reason, export_frames, export_timestamps)
+
+    def _build_gait_report(self, reason: str, export_frames: tuple, export_timestamps: tuple):
+        """构建步态报告 (内联逻辑，尚未提取为 processor)。"""
+        from config.test_report import GaitTestReport
+
+        ct = self._contact_tracker
+        strides = tuple(ct.stride_lengths) if ct and ct.stride_lengths else ()
+        vels = tuple(ct.velocities) if ct and ct.velocities else ()
+        fa = tuple(ct.foot_a_support_times) if ct and ct.foot_a_support_times else ()
+        fb = tuple(ct.foot_b_support_times) if ct and ct.foot_b_support_times else ()
+
+        avg_stride = sum(strides) / len(strides) if strides else 0.0
+        max_stride = max(strides) if strides else 0.0
+        avg_vel = sum(vels) / len(vels) if vels else 0.0
+        max_vel = max(vels) if vels else 0.0
+
+        imbalance = None
+        avg_ds = None
+        avg_ss = None
+        avg_acc = None
+        if ct and ct.extra_metrics_history:
+            _extract = lambda key: [m[key] for m in ct.extra_metrics_history if m.get(key) is not None]
+            ii_vals = _extract("imbalance_index")
+            ds_vals = _extract("double_support")
+            ss_vals = _extract("single_support")
+            acc_vals = _extract("acceleration")
+            imbalance = sum(ii_vals) / len(ii_vals) if ii_vals else None
+            avg_ds = sum(ds_vals) / len(ds_vals) if ds_vals else None
+            avg_ss = sum(ss_vals) / len(ss_vals) if ss_vals else None
+            avg_acc = sum(acc_vals) / len(acc_vals) if acc_vals else None
+
+        return GaitTestReport(
+            touch_count=self.touch_count,
+            lift_count=self.lift_count,
+            stride_lengths=strides,
+            velocities=vels,
+            avg_stride=avg_stride,
+            max_stride=max_stride,
+            avg_velocity=avg_vel,
+            max_velocity=max_vel,
+            foot_a_support_times=fa,
+            foot_b_support_times=fb,
+            imbalance_index=imbalance,
+            avg_double_support=avg_ds,
+            avg_single_support=avg_ss,
+            avg_acceleration=avg_acc,
+            finish_reason=reason,
+            export_frames=export_frames,
+            export_timestamps=export_timestamps,
+        )
+
+    # ---------------------------------------------------------------
     #  自动停止逻辑
     # ---------------------------------------------------------------
 
@@ -420,14 +459,15 @@ class GaitEngine(QObject):
 
         cfg = self._config
 
-        # Status change + number_of_jumps: 跳够指定次数
         if cfg.stop_type == "Status change" and cfg.number_of_jumps:
-            # 用 lift_count 计数实际跳跃次数，避免初始踩上设备的第一次 touch 被误计
-            if self.lift_count >= cfg.number_of_jumps:
-                self._finished = True
-                log.info("自动停止: 已完成 %d/%d 次跳跃",
-                         self.lift_count, cfg.number_of_jumps)
-                self.test_finished.emit("jump_count_reached")
+            # 从 processor 获取 lift_count
+            if self._processor is not None and hasattr(self._processor, 'lift_count'):
+                lift_count = self._processor.lift_count
+                if lift_count >= cfg.number_of_jumps:
+                    self._finished = True
+                    log.info("自动停止: 已完成 %d/%d 次跳跃",
+                             lift_count, cfg.number_of_jumps)
+                    self.test_finished.emit("jump_count_reached")
 
     def _start_timer(self):
         """如果 stop_type=End of Time，启动倒计时。在 set_start_time 中调用。"""
