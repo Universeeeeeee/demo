@@ -19,7 +19,8 @@ TreadmillTestType = Literal["Treadmill Gait Test", "Treadmill Running Test"]
 TreadmillStopType = Literal["Software command", "End of Time"]
 Direction = Literal["Interface side", "Opposite side"]
 StepLengthCalculation = Literal["Tip-to-Tip", "Heel-to-Heel"]
-FootSide = Literal["left", "right", "unknown"]
+FootSide = Literal["left", "right", "unknown"]        # 脚的标识
+FootSideOverride = Literal["left", "right"]          # starting_foot_override 不允许 unknown
 FootLengthSource = Literal["captured", "manual", "unknown"]
 StartingFootSource = Literal[
     "auto_first_contact",
@@ -33,9 +34,13 @@ StartingFootSource = Literal[
 # ---- 校验辅助函数 ----
 
 def _is_mmss(value: str) -> bool:
-    """校验 mm:ss 格式。"""
+    """校验 mm:ss 格式 + 说明书范围 00:01-59:59。"""
     import re as _re
-    return bool(_re.match(r"^\d{1,2}:\d{2}$", value))
+    m = _re.match(r"^(\d{1,2}):(\d{2})$", value)
+    if not m:
+        return False
+    minutes, seconds = int(m.group(1)), int(m.group(2))
+    return 0 <= minutes <= 59 and 0 <= seconds <= 59 and (minutes > 0 or seconds > 0)
 
 
 def get_test_length_seconds(value: str | None) -> int | None:
@@ -64,7 +69,7 @@ class TreadmillBaseConfig:
     filter_gaitr_out: int = 0
     foot_length_cm_snapshot: float | None = None
     foot_length_source: FootLengthSource = "unknown"
-    starting_foot_override: FootSide | None = None
+    starting_foot_override: FootSideOverride | None = None
 
     def __post_init__(self) -> None:
         if not 0.1 <= self.treadmill_speed <= 20.0:
