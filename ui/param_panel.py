@@ -16,7 +16,7 @@ param_panel.py — Jump Test 参数配置面板
 
 from __future__ import annotations
 
-from qtpy.QtCore import Signal, Qt, QTime
+from qtpy.QtCore import QSignalBlocker, Signal, Qt, QTime
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox,
     QDoubleSpinBox, QSizePolicy,
@@ -132,8 +132,24 @@ class ParamPanel(QWidget):
     def set_config(self, config: AnyTestConfig) -> None:
         """从 TestConfig 反向填充控件值。用于加载历史配置。"""
         mapping = config.to_dict()
+        target_test_type = config.test_type
 
-        for name, widget in self._widgets.items():
+        test_type_widget = self._widgets.get("test_type")
+        if isinstance(test_type_widget, QComboBox):
+            blocker = QSignalBlocker(test_type_widget)
+            try:
+                idx = test_type_widget.findText(target_test_type)
+                if idx >= 0:
+                    test_type_widget.setCurrentIndex(idx)
+            finally:
+                del blocker
+
+        self._test_type = target_test_type
+        self._rebuild_mode_fields()
+
+        for name, widget in list(self._widgets.items()):
+            if name == "test_type":
+                continue
             val = mapping.get(name)
             if val is None:
                 continue

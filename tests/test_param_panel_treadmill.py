@@ -146,6 +146,38 @@ class TestParamPanelTreadmill:
         config = self._panel.get_config()
         assert isinstance(config, TestConfig)
 
+    def test_set_config_treadmill_gait_rebuilds_without_dict_runtime_error(self) -> None:
+        config = TreadmillGaitConfig(
+            stop_type="End of Time",
+            test_length="02:30",
+            treadmill_speed=6.5,
+            direction="Opposite side",
+        )
+
+        self._panel.set_config(config)
+
+        assert self._panel._test_type == "Treadmill Gait Test"
+        assert "treadmill_speed" in self._panel._widgets
+        assert self._panel._widgets["treadmill_speed"].value() == 6.5
+
+    def test_set_config_can_switch_from_treadmill_back_to_jump(self) -> None:
+        from config.test_config import TestConfig
+
+        self._panel.set_config(
+            TreadmillGaitConfig(
+                stop_type="End of Time",
+                test_length="02:30",
+                treadmill_speed=6.5,
+                direction="Opposite side",
+            )
+        )
+
+        self._panel.set_config(TestConfig(number_of_jumps=7))
+
+        assert self._panel._test_type == "Jump Test"
+        assert "treadmill_speed" not in self._panel._widgets
+        assert self._panel.get_config().number_of_jumps == 7
+
     # ------------------------------------------------------------------
     #  Default values
     # ------------------------------------------------------------------
