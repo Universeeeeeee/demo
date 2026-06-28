@@ -32,6 +32,11 @@ from dayu_widgets.push_button import MPushButton
 from dayu_widgets import dayu_theme
 
 from config.test_report import TestReport, JumpTestReport, GaitTestReport
+from config.treadmill_report import (
+    TreadmillGaitReport,
+    TreadmillRunningReport,
+    TreadmillStepResult,
+)
 from path_utils import get_base_dir as _get_base_dir
 
 # pyqtgraph 可选
@@ -231,6 +236,8 @@ class ReportView(QWidget):
             self._load_jump_report(report)
         elif isinstance(report, GaitTestReport):
             self._load_gait_report(report)
+        elif isinstance(report, (TreadmillGaitReport, TreadmillRunningReport)):
+            self._load_treadmill_report(report)
 
     # ------------------------------------------------------------------
     #  纵跳报告
@@ -320,6 +327,183 @@ class ReportView(QWidget):
             self._plot_2.setLabel('bottom', '步数')
             bar2 = pg.BarGraphItem(x=x2, height=list(r.velocities), width=0.65, brush='#52c41a')
             self._plot_2.addItem(bar2)
+
+    # ------------------------------------------------------------------
+    #  跑步机报告
+    # ------------------------------------------------------------------
+
+    def _load_treadmill_report(self, r: TreadmillGaitReport | TreadmillRunningReport):
+        test_type_label = "跑步机步态" if isinstance(r, TreadmillGaitReport) else "跑步机跑步"
+        self._title.setText(f"测试报告 — {test_type_label}")
+
+        # 配置快照
+        snap = r.report_config_snapshot
+        speed = snap.get("treadmill_speed", "--")
+        direction = snap.get("direction", "--")
+        foot_length = r.foot_length_cm_snapshot
+
+        # 总览指标
+        stats = [
+            ("触地次数", f"{r.touch_count}"),
+            ("腾空次数", f"{r.lift_count}"),
+            ("有效步数", f"{sum(1 for s in r.per_step_results if s.is_included_in_statistics)}"),
+            ("起始脚", r.resolved_starting_foot),
+        ]
+        self._fill_stat_cards(stats)
+
+        # 逐步详情表
+        if r.per_step_results:
+            self._build_treadmill_step_table(r.per_step_results)
+
+        # 指标汇总
+        if r.metric_summaries:
+            self._build_treadmill_metric_summary(r.metric_summaries)
+
+        # 左右侧对比
+        if r.left_right_results:
+            self._build_treadmill_left_right(r.left_right_results)
+
+    def _build_treadmill_step_table(self, steps: tuple[TreadmillStepResult, ...]):
+        """Build step detail table below the stat cards."""
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        columns = [
+            "#", "脚", "状态", "有效", "纳入统计",
+            "触地时间(s)", "离地时间(s)", "步长(cm)", "步速(m/s)",
+        ]
+        table = QTableWidget(len(steps), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
+            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
+            "QHeaderView::section { background-color: #333; color: #ccc; "
+            "border: 1px solid #555; padding: 4px; }"
+        )
+
+        for row_idx, step in enumerate(steps):
+            items = [
+                str(step.index),
+                step.side,
+                step.row_status,
+                "yes" if step.is_event_valid else "no",
+                "yes" if step.is_included_in_statistics else "no",
+                _fmt(step.contact_time_s),
+                _fmt(step.flight_time_s),
+                _fmt(step.step_length_cm),
+                _fmt(step.speed_m_s),
+            ]
+            for col_idx, text in enumerate(items):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_idx, col_idx, item)
+
+        # Resize columns
+        header = table.horizontalHeader()
+        for col in range(len(columns)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+        table.setMinimumHeight(min(len(steps) * 30 + 30, 400))
+
+        # Insert table below stat cards
+        layout = self.layout()
+        layout.insertWidget(layout.count() - 1, table)
+
+    def _build_treadmill_metric_summary(self, summaries: dict[str, "MetricSummary"]):
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        rows_data = []
+        for metric_name, summary in summaries.items():
+            display_name = metric_name.replace("_", " ")
+            rows_data.append((
+                display_name,
+                str(summary.count),
+                _fmt(summary.mean),
+                _fmt(summary.min),
+                _fmt(summary.max),
+                _fmt(summary.std),
+                _fmt(summary.cv_percent),
+            ))
+
+        columns = ["指标", "计数", "均值", "最小值", "最大值", "标准差", "CV(%)"]
+        table = QTableWidget(len(rows_data), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
+            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
+            "QHeaderView::section { background-color: #333; color: #ccc; "
+            "border: 1px solid #555; padding: 4px; }"
+        )
+
+        for row_idx, row in enumerate(rows_data):
+            for col_idx, text in enumerate(row):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_idx, col_idx, item)
+
+        header = table.horizontalHeader()
+        for col in range(len(columns)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+        table.setMinimumHeight(min(len(rows_data) * 30 + 30, 300))
+
+        layout = self.layout()
+        layout.insertWidget(layout.count() - 1, table)
+
+    def _build_treadmill_left_right(self, lr: dict[str, "MetricSummary"]):
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        rows_data = []
+        for metric_name, summary in lr.items():
+            display_name = metric_name.replace("_", " ")
+            rows_data.append((
+                display_name,
+                str(summary.count),
+                _fmt(summary.mean),
+                _fmt(summary.min),
+                _fmt(summary.max),
+                _fmt(summary.std),
+                _fmt(summary.cv_percent),
+            ))
+
+        if not rows_data:
+            return
+
+        columns = ["左右指标", "计数", "均值", "最小值", "最大值", "标准差", "CV(%)"]
+        table = QTableWidget(len(rows_data), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
+            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
+            "QHeaderView::section { background-color: #333; color: #ccc; "
+            "border: 1px solid #555; padding: 4px; }"
+        )
+
+        for row_idx, row in enumerate(rows_data):
+            for col_idx, text in enumerate(row):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_idx, col_idx, item)
+
+        header = table.horizontalHeader()
+        for col in range(len(columns)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+        table.setMinimumHeight(min(len(rows_data) * 30 + 30, 300))
+
+        layout = self.layout()
+        layout.insertWidget(layout.count() - 1, table)
 
     # ------------------------------------------------------------------
     #  辅助方法
@@ -437,3 +621,28 @@ def _jump_metric_rows(report: JumpTestReport) -> list[list[object]]:
 
 def _value_at(values: tuple, index: int):
     return values[index] if index < len(values) else ""
+
+
+def _fmt(value: float | None) -> str:
+    """Format an optional float value for table display."""
+    if value is None:
+        return ""
+    return f"{value:.3f}"
+
+
+def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport) -> list[list[object]]:
+    """Extract key columns from per_step_results for Excel export and testing."""
+    rows = []
+    for step in report.per_step_results:
+        rows.append(
+            [
+                step.index,
+                step.side,
+                step.row_status,
+                step.is_event_valid,
+                step.is_included_in_statistics,
+                step.contact_time_s,
+                step.step_length_cm,
+            ]
+        )
+    return rows

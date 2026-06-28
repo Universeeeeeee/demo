@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from config.treadmill_report import (
     TreadmillGaitReport,
     TreadmillRunningReport,
@@ -70,3 +72,34 @@ def test_running_report_uses_running_test_type():
     )
 
     assert report.test_type == "Treadmill Running Test"
+
+
+def test_treadmill_metric_rows_include_validity_columns():
+    pytest.importorskip("dayu_widgets", reason="UI dependency not installed")
+    from ui.views.report_view import _treadmill_metric_rows
+
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=1,
+        lift_count=1,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        per_step_results=(
+            TreadmillStepResult(
+                index=1,
+                side="left",
+                row_status="valid",
+                is_event_valid=True,
+                is_included_in_statistics=True,
+                correction_source="none",
+                contact_time_s=0.25,
+                step_length_cm=70.0,
+            ),
+        ),
+        metric_summaries={},
+        report_config_snapshot={"treadmill_speed": 5.0},
+    )
+
+    rows = _treadmill_metric_rows(report)
+
+    assert rows == [[1, "left", "valid", True, True, 0.25, 70.0]]
