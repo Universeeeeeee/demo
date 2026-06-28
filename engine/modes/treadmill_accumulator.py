@@ -19,10 +19,8 @@ from config.treadmill_config import (
 )
 from config.treadmill_report import (
     CorrectionSource,
-    MetricSummary,
     RowStatus,
     TreadmillStepResult,
-    summarize,
 )
 
 
@@ -169,7 +167,7 @@ class TreadmillAccumulator:
                 if step_time_s is not None and step_time_s > 0:
                     step_length_cm = speed_m_s * step_time_s * 100.0
                     cadence_steps_per_s = 1.0 / step_time_s
-            step_time_s = None  # Will be set post-hoc — see note below
+            pass  # step_time_s preserved in row
 
         result = TreadmillStepResult(
             index=self._next_index,
