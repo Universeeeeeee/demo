@@ -102,4 +102,7 @@ def test_treadmill_metric_rows_include_validity_columns():
 
     rows = _treadmill_metric_rows(report)
 
-    assert rows == [[1, "left", "valid", True, True, 0.25, 70.0]]
+    assert rows == [[
+        1, "left", "valid", True, True, 0.25, 70.0,
+        None, None, None, None, "none", None,
+    ]]

@@ -120,6 +120,7 @@ class ReportView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._report: Optional[TestReport] = None
+        self._dynamic_widgets: list[QWidget] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -348,8 +349,14 @@ class ReportView(QWidget):
             ("腾空次数", f"{r.lift_count}"),
             ("有效步数", f"{sum(1 for s in r.per_step_results if s.is_included_in_statistics)}"),
             ("起始脚", r.resolved_starting_foot),
+            ("速度", f"{speed} km/h"),
+            ("方向", direction),
+            ("足长", f"{foot_length} cm" if foot_length else "--"),
         ]
         self._fill_stat_cards(stats)
+
+        # 清除旧动态组件
+        self._clear_dynamic_widgets()
 
         # 逐步详情表
         if r.per_step_results:
@@ -411,6 +418,7 @@ class ReportView(QWidget):
         # Insert table below stat cards
         layout = self.layout()
         layout.insertWidget(layout.count() - 1, table)
+        self._dynamic_widgets.append(table)
 
     def _build_treadmill_metric_summary(self, summaries: dict[str, "MetricSummary"]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -456,6 +464,7 @@ class ReportView(QWidget):
 
         layout = self.layout()
         layout.insertWidget(layout.count() - 1, table)
+        self._dynamic_widgets.append(table)
 
     def _build_treadmill_left_right(self, lr: dict[str, "MetricSummary"]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -504,10 +513,18 @@ class ReportView(QWidget):
 
         layout = self.layout()
         layout.insertWidget(layout.count() - 1, table)
+        self._dynamic_widgets.append(table)
 
     # ------------------------------------------------------------------
     #  辅助方法
     # ------------------------------------------------------------------
+
+    def _clear_dynamic_widgets(self):
+        """Remove and delete all dynamically-added widgets to avoid stale tables."""
+        for w in self._dynamic_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._dynamic_widgets.clear()
 
     def _fill_stat_cards(self, stats: list[tuple[str, str]]):
         """填充统计卡片。stats 为 (label, value) 列表。"""
@@ -538,7 +555,11 @@ class ReportView(QWidget):
             )
         )
 
-        if not frames and not has_jump_metrics:
+        has_treadmill_steps = isinstance(
+            self._report, (TreadmillGaitReport, TreadmillRunningReport)
+        ) and bool(self._report.per_step_results)
+
+        if not frames and not has_jump_metrics and not has_treadmill_steps:
             QMessageBox.information(self, "导出", "本次测试无可导出数据。")
             return
 
@@ -589,6 +610,33 @@ class ReportView(QWidget):
                 )
                 for row in _jump_metric_rows(self._report):
                     ws.append(row)
+
+            if isinstance(self._report, (TreadmillGaitReport, TreadmillRunningReport)):
+                # Sheet 2: Treadmill Steps
+                ws_steps = wb.create_sheet("Treadmill Steps")
+                columns = [
+                    "index", "side", "row_status", "is_event_valid",
+                    "is_included_in_statistics", "contact_time_s",
+                    "flight_time_s", "step_time_s", "step_length_cm",
+                    "distance_cm", "speed_m_s", "correction_source",
+                    "statistics_exclusion_reason",
+                ]
+                ws_steps.append(columns)
+                for row in _treadmill_metric_rows(self._report):
+                    ws_steps.append(row)
+
+                # Sheet 3 (optional): Metric Summaries
+                metric_summaries = self._report.metric_summaries
+                if metric_summaries:
+                    ws_metrics = wb.create_sheet("Metric Summaries")
+                    ws_metrics.append(["metric", "count", "mean", "min", "max", "std", "cv_percent"])
+                    for name, sm in metric_summaries.items():
+                        ws_metrics.append([
+                            name, sm.count,
+                            _fmt(sm.mean), _fmt(sm.min), _fmt(sm.max),
+                            _fmt(sm.std), _fmt(sm.cv_percent),
+                        ])
+
             wb.save(path)
             QMessageBox.information(self, "导出成功", f"数据已保存至：\n{path}")
         except Exception as e:
@@ -643,6 +691,12 @@ def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport)
                 step.is_included_in_statistics,
                 step.contact_time_s,
                 step.step_length_cm,
+                step.flight_time_s,
+                step.step_time_s,
+                step.distance_cm,
+                step.speed_m_s,
+                step.correction_source,
+                step.statistics_exclusion_reason,
             ]
         )
     return rows
