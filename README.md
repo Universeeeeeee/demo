@@ -18,6 +18,19 @@
 
 系统架构详见 **[docs/architecture.md](docs/architecture.md)**。
 
+### 术语对照
+
+项目中涉及"参数"一词时有四种不同含义，代码和文档中不应混用：
+
+| 中文术语 | 代码类型 | 含义 |
+|:---|:---|:---|
+| 配置参数 | `TestConfig` (dataclass) | 测试开始前由用户或系统设定，参与采集、停止、过滤、计算 |
+| 会话元数据 | `SessionMetadata` | 测试开始时冻结的受试者或环境信息，不一定是算法阈值 |
+| 结果参数 | `ResultMetric` | 测试后从光栅事件和配置计算出的逐步或逐周期结果 |
+| 汇总统计 | `MetricSummary` (dataclass) | 对结果参数做 min/max/mean/std/CV、左右脚、不对称性统计 |
+
+数据库保存的配置快照称为"配置快照"，报告快照称为"报告快照"。
+
 ### 参数分层 (来自 Iron_parameters.json)
 
 | Layer | 内容 | 示例 |
