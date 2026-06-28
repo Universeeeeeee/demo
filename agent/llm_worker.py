@@ -135,10 +135,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         agent = _get_agent()
         message = data.get("message", "")
+        agent_mode = data.get("agent_mode", "jump")
         profile = _profile_from_dict(data.get("athlete", {}))
         try:
             with _agent_lock:
-                config, reply = agent.chat_online(message, profile)
+                config, reply = agent.chat_online(message, profile, agent_mode=agent_mode)
             result: dict = {"reply": reply}
             if config is not None:
                 result["config"] = config.to_dict()
@@ -154,6 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         agent = _get_agent()
         message = data.get("message", "")
+        agent_mode = data.get("agent_mode", "jump")
         profile = _profile_from_dict(data.get("athlete", {}))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -164,7 +166,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {chunk}\n\n".encode())
                 self.wfile.flush()
             with _agent_lock:
-                config, reply = agent.chat_online_stream(message, profile, on_chunk)
+                config, reply = agent.chat_online_stream(
+                    message, profile, on_chunk, agent_mode=agent_mode
+                )
             done = json.dumps({"reply": reply, "config": config.to_dict() if config else None}, ensure_ascii=False)
             self.wfile.write(f"data: {done}\n\n".encode())
         except Exception:

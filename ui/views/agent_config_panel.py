@@ -20,7 +20,7 @@ from dayu_widgets.spin_box import MDoubleSpinBox, MSpinBox
 
 from agent.models import AthleteProfile
 from agent.rule_engine import RuleEngine
-from config.test_config import TestConfig
+from config.test_config import AnyTestConfig, config_from_dict
 from data.subject_store import SubjectSearchResult, SubjectStore
 from ui.llm_client import LLMWorkerClient
 
@@ -104,16 +104,17 @@ def _md_to_html(text: str) -> str:
 
 class _LLMHttpWorker(QThread):
     """在线模式：通过 HTTP 调用 llm_worker 进程（阻塞式，v1 无流式）。"""
-    finished = Signal(object, str)  # (TestConfig | None, reply_text)
+    finished = Signal(object, str)  # (AnyTestConfig | None, reply_text)
     error = Signal(str)
 
     def __init__(self, client: LLMWorkerClient, message: str, athlete: AthleteProfile,
-                 request_id: int = 0):
+                 request_id: int = 0, agent_mode: str = "jump"):
         super().__init__()
         self._client = client
         self._message = message
         self._athlete = athlete
         self.request_id = request_id
+        self._agent_mode = agent_mode
 
     def run(self):
         try:
@@ -126,13 +127,15 @@ class _LLMHttpWorker(QThread):
                 "device_channels": self._athlete.device_channels,
                 "history": self._athlete.history,
             }
-            result = self._client.chat(self._message, profile_dict)
+            result = self._client.chat(
+                self._message, profile_dict, agent_mode=self._agent_mode
+            )
             if "error" in result:
                 self.error.emit(result["error"])
                 return
             config_dict = result.get("config")
             if config_dict:
-                config = TestConfig(**config_dict)
+                config = config_from_dict(config_dict)
             else:
                 config = None
             self.finished.emit(config, result.get("reply", ""))
@@ -143,7 +146,7 @@ class _LLMHttpWorker(QThread):
 class AgentConfigPanel(QWidget):
     """智能配置面板：生成建议配置，确认后交给 SetupView。"""
 
-    config_confirmed = Signal(object)  # TestConfig
+    config_confirmed = Signal(object)  # AnyTestConfig
 
     def __init__(
         self,
@@ -159,7 +162,7 @@ class AgentConfigPanel(QWidget):
         self._worker_ready = False
         self._worker_error: str | None = None
         self._worker_start_requested = False
-        self._pending_config: TestConfig | None = None
+        self._pending_config: AnyTestConfig | None = None
         self._history: list[dict] = []
         self._worker_status_timer = QTimer(self)
         self._worker_status_timer.setInterval(1000)
@@ -275,6 +278,12 @@ class AgentConfigPanel(QWidget):
         header = QHBoxLayout()
         header.addWidget(self._card_title("配置助手"))
         header.addStretch()
+        self._test_type_combo = QComboBox()
+        self._test_type_combo.addItem("Jump Test", "jump")
+        self._test_type_combo.addItem("Treadmill Gait Test", "treadmill_gait")
+        self._test_type_combo.addItem("Treadmill Running Test", "treadmill_running")
+        self._test_type_combo.setMaximumWidth(190)
+        header.addWidget(self._test_type_combo)
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(["在线 LLM", "离线规则"])
         self._mode_combo.setMaximumWidth(125)
@@ -345,6 +354,8 @@ class AgentConfigPanel(QWidget):
         main_layout.addWidget(suggestion_card)
 
     def _connect_signals(self) -> None:
+        self._test_type_combo.currentIndexChanged.connect(self._clear_pending_config)
+        self._test_type_combo.currentIndexChanged.connect(lambda *_: self._sync_mode_state())
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._send_btn.clicked.connect(self._on_send_message)
         self._chat_input.returnPressed.connect(self._on_send_message)
@@ -405,6 +416,9 @@ class AgentConfigPanel(QWidget):
             focus_side=self._focus_combo.currentData() or "",
             history=list(self._history),
         )
+
+    def _current_agent_mode(self) -> str:
+        return self._test_type_combo.currentData() or "jump"
 
     def _clear_pending_config(self, *_args) -> None:
         if self._pending_config is None:
@@ -506,6 +520,7 @@ class AgentConfigPanel(QWidget):
         self._llm_worker = _LLMHttpWorker(
             self._llm_client, message, self._current_athlete_profile(),
             request_id=self._active_request_id,
+            agent_mode=self._current_agent_mode(),
         )
         self._llm_worker.finished.connect(self._on_llm_finished)
         self._llm_worker.error.connect(self._on_llm_error)
@@ -555,6 +570,11 @@ class AgentConfigPanel(QWidget):
         self._chat_display.clear()
 
     def _on_offline_generate(self) -> None:
+        if self._current_agent_mode() != "jump":
+            self._chat_display.append(
+                "<b>AI:</b> 离线规则暂不支持跑步机模式，请使用在线 LLM 或手动配置。"
+            )
+            return
         try:
             config = self._rule_engine.configure(
                 "Jump Test", self._current_athlete_profile(),
@@ -576,16 +596,17 @@ class AgentConfigPanel(QWidget):
     # Suggestion card
     # ------------------------------------------------------------------
 
-    def _set_pending_config(self, config: TestConfig, reason: str) -> None:
+    def _set_pending_config(self, config: AnyTestConfig, reason: str) -> None:
         self._pending_config = config
         self._confirm_btn.setEnabled(True)
         self._suggestion_text.setText(self._format_config(config, reason))
 
-    def _format_config(self, config: TestConfig, reason: str) -> str:
+    def _format_config(self, config: AnyTestConfig, reason: str) -> str:
         stop_labels = {
             "Status change": "按跳跃次数结束",
             "End of Time": f"按测试时长结束（{config.test_length}）",
             "External impulse": "手动控制结束",
+            "Software command": "软件指令停止",
         }
         start_labels = {
             "Status change": "踩上设备后开始",
@@ -601,19 +622,26 @@ class AgentConfigPanel(QWidget):
             "Left": "左脚",
         }
         rows = [
-            ("测试类型", config.mode_label),
+            ("测试类型", getattr(config, "mode_label", config.test_type)),
             ("结束方式", stop_labels.get(config.stop_type, config.stop_type)),
         ]
-        if config.number_of_jumps:
+        if getattr(config, "number_of_jumps", None):
             rows.append(("测试次数", f"{config.number_of_jumps} 次"))
-        if config.test_length:
+        if getattr(config, "test_length", None):
             rows.append(("测试时长", config.test_length))
-        rows.extend([
-            ("开始方式", start_labels.get(config.start_type, config.start_type)),
-            ("起始位置", position_labels.get(config.start_position, config.start_position)),
-            ("起跳脚", foot_labels.get(config.starting_foot, config.starting_foot)),
-            ("节拍器", "开启" if config.metronome_enabled else "关闭"),
-        ])
+        if hasattr(config, "treadmill_speed"):
+            rows.append(("跑步机速度", f"{config.treadmill_speed:g} km/h"))
+        if hasattr(config, "direction"):
+            rows.append(("行进方向", config.direction))
+        if hasattr(config, "start_type"):
+            rows.append(("开始方式", start_labels.get(config.start_type, config.start_type)))
+        if hasattr(config, "start_position"):
+            rows.append(("起始位置", position_labels.get(config.start_position, config.start_position)))
+        if hasattr(config, "starting_foot"):
+            rows.append(("起跳脚", foot_labels.get(config.starting_foot, config.starting_foot)))
+        if hasattr(config, "metronome_enabled"):
+            rows.append(("节拍器", "开启" if config.metronome_enabled else "关闭"))
+        rows.append(("接触/腾空阈值", f">{config.min_contact_time}ms / >{config.min_flight_time}ms"))
 
         row_html = "".join(
             "<tr>"

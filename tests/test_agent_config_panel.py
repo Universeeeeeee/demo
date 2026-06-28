@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qtpy.QtWidgets import QApplication
 
+from config.treadmill_config import TreadmillGaitConfig
 from ui.views.agent_config_panel import AgentConfigPanel, _LLMHttpWorker
 
 
@@ -35,7 +36,7 @@ class _FakeClient:
     def worker_status(self, timeout=0.25):
         return "ready"
 
-    def chat(self, message, athlete):
+    def chat(self, message, athlete, agent_mode="jump"):
         return {"reply": f"reply: {message}"}
 
     def reset(self):
@@ -56,9 +57,48 @@ class _RestartingClient:
         self.status_calls.append(timeout)
         return "starting"
 
-    def chat(self, message, athlete):
+    def chat(self, message, athlete, agent_mode="jump"):
         self.chat_calls.append(message)
         return {"error": "worker 未启动"}
+
+
+class _ModeCapturingClient:
+    is_running = True
+
+    def __init__(self):
+        self.chat_calls = []
+
+    def start(self):
+        return True
+
+    def worker_status(self, timeout=0.25):
+        return "ready"
+
+    def chat(self, message, athlete, agent_mode="jump"):
+        self.chat_calls.append(
+            {"message": message, "athlete": athlete, "agent_mode": agent_mode}
+        )
+        return {"reply": f"reply: {message}"}
+
+    def reset(self):
+        pass
+
+
+class _TreadmillConfigClient(_ModeCapturingClient):
+    def chat(self, message, athlete, agent_mode="jump"):
+        self.chat_calls.append(
+            {"message": message, "athlete": athlete, "agent_mode": agent_mode}
+        )
+        return {
+            "reply": "configured",
+            "config": {
+                "test_type": "Treadmill Gait Test",
+                "stop_type": "Software command",
+                "test_length": None,
+                "treadmill_speed": 5.5,
+                "direction": "Interface side",
+            },
+        }
 
     def reset(self):
         pass
@@ -116,6 +156,49 @@ class AgentConfigPanelRequestLifecycleTest(unittest.TestCase):
         self.assertFalse(panel._worker_ready)
         self.assertNotIn("worker 未启动", panel._chat_display.toPlainText())
         self.assertIn("初始化", panel._status_label.text())
+
+    def test_agent_panel_sends_treadmill_gait_agent_mode(self):
+        client = _ModeCapturingClient()
+        panel = AgentConfigPanel(llm_client=client)
+        panel._worker_ready = True
+        panel._sync_mode_state()
+        panel._test_type_combo.setCurrentText("Treadmill Gait Test")
+        panel._chat_input.setText("帮我配置跑步机步态测试")
+        original_start = _LLMHttpWorker.start
+        _LLMHttpWorker.start = lambda self: None
+        try:
+            panel._on_send_message()
+        finally:
+            _LLMHttpWorker.start = original_start
+
+        self.assertIsNotNone(panel._llm_worker)
+        self.assertEqual(panel._llm_worker._agent_mode, "treadmill_gait")
+
+    def test_llm_worker_deserializes_treadmill_config_with_config_from_dict(self):
+        client = _TreadmillConfigClient()
+        worker = _LLMHttpWorker(
+            client,
+            "帮我配置跑步机步态测试",
+            self.panel._current_athlete_profile(),
+            agent_mode="treadmill_gait",
+        )
+        finished = []
+        worker.finished.connect(lambda config, reply: finished.append((config, reply)))
+
+        worker.run()
+
+        self.assertEqual(client.chat_calls[0]["agent_mode"], "treadmill_gait")
+        self.assertIsInstance(finished[0][0], TreadmillGaitConfig)
+        self.assertEqual(finished[0][0].treadmill_speed, 5.5)
+
+    def test_offline_rule_mode_rejects_treadmill_mode_without_crash(self):
+        self.panel._test_type_combo.setCurrentText("Treadmill Gait Test")
+        self.panel._mode_combo.setCurrentText("离线规则")
+
+        self.panel._on_offline_generate()
+
+        self.assertIsNone(self.panel._pending_config)
+        self.assertIn("离线规则暂不支持", self.panel._chat_display.toPlainText())
 
 
 if __name__ == "__main__":

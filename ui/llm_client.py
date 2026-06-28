@@ -152,7 +152,7 @@ class LLMWorkerClient:
     def health_check(self, timeout: float = 0.5) -> bool:
         return self.worker_status(timeout=timeout) == "ready"
 
-    def chat(self, message: str, athlete: dict) -> dict:
+    def chat(self, message: str, athlete: dict, agent_mode: str = "jump") -> dict:
         """POST /chat, 返回 {"reply": "...", "config": {...}|null} 或 {"error": "..."}"""
         url = self._base_url()
         if url is None:
@@ -162,6 +162,7 @@ class LLMWorkerClient:
         r = requests.post(f"{url}/chat", json={
             "message": message,
             "athlete": athlete,
+            "agent_mode": agent_mode,
         }, timeout=120)
         return r.json()
 
