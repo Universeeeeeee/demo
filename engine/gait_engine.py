@@ -230,14 +230,8 @@ class GaitEngine(QObject):
         self.lift_count = 0
         self._finished = False
 
-        # 处理器
-        if self._processor is not None:
-            self._processor.reset()
-            # 重新选择 processor（可能配置已变更）
-            self._processor = self._select_processor()
-        else:
-            # 重新初始化 processor
-            self._processor = self._select_processor()
+        # 处理器（重新选择，丢弃旧实例）
+        self._processor = self._select_processor()
 
         # 步态追踪器
         if self._contact_tracker is not None:
@@ -461,7 +455,7 @@ class GaitEngine(QObject):
 
         if cfg.stop_type == "Status change" and cfg.number_of_jumps:
             # 从 processor 获取 lift_count
-            if self._processor is not None and hasattr(self._processor, 'lift_count'):
+            if self._processor is not None:
                 lift_count = self._processor.lift_count
                 if lift_count >= cfg.number_of_jumps:
                     self._finished = True
