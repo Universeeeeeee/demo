@@ -30,15 +30,12 @@ from config.treadmill_config import (  # noqa: E402
 from ui.param_panel import ParamPanel  # noqa: E402
 
 
-_APP: QApplication | None = None
-
-
 def _ensure_app() -> QApplication:
     """Create (or reuse) a QApplication instance for headless tests."""
-    global _APP
-    if _APP is None:
-        _APP = QApplication(sys.argv if sys.argv else [])
-    return _APP
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv if sys.argv else [])
+    return app
 
 
 class TestParamPanelTreadmill:
