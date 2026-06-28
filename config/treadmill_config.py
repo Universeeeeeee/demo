@@ -86,6 +86,13 @@ class TreadmillBaseConfig:
     def to_dict(self) -> dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
 
+    def get_test_length_seconds(self) -> int | None:
+        """将 test_length 'mm:ss' 格式转换为总秒数。"""
+        if not self.test_length:
+            return None
+        minute_text, second_text = self.test_length.split(":", 1)
+        return int(minute_text) * 60 + int(second_text)
+
 
 @dataclass(frozen=True)
 class TreadmillGaitConfig(TreadmillBaseConfig):
