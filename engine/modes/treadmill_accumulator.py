@@ -62,6 +62,9 @@ class TreadmillAccumulator:
         # Counter for row indices
         self._next_index = 0
 
+        # Track previous touch time for inter-touch step_time calculation
+        self._last_touch_time_s: float | None = None
+
     # ---- Properties ----
 
     @property
@@ -84,6 +87,7 @@ class TreadmillAccumulator:
         """Record a touch (foot-down) event and start a new partial row.
 
         Resolves starting foot on the first call if not already resolved.
+        Stores the touch time for inter-touch step_time computation.
         """
         # Resolve starting foot from first contact
         if not self._first_contact_resolved:
@@ -131,9 +135,13 @@ class TreadmillAccumulator:
         step_time_s: float | None = None
         gait_cycle_s: float | None = None
 
-        # Compute flight time from gap to previous row's contact
+        # Compute flight time from gap to previous row's lift time
         if self._rows and self._rows[-1].time_s is not None and row_status != "no_step":
             flight_time_s = p.touch_time_s - self._rows[-1].time_s  # type: ignore[operator]
+
+        # P1-4b: Compute step_time as inter-touch interval
+        if self._last_touch_time_s is not None and row_status != "no_step":
+            step_time_s = p.touch_time_s - self._last_touch_time_s
 
         is_event_valid = row_status == "valid"
         is_included_in_statistics = is_event_valid
@@ -150,6 +158,19 @@ class TreadmillAccumulator:
         else:
             correction_source = "none"
 
+        # P1-4a: Flight time threshold validation
+        if row_status == "valid" and flight_time_s is not None:
+            min_ft = self._config.min_flight_time
+            max_ft = self._config.max_flight_time
+            ft_ms = flight_time_s * 1000.0
+            if (min_ft > 0 and ft_ms < min_ft) or (max_ft > 0 and ft_ms > max_ft):
+                row_status = "tf_not_valid"
+                is_event_valid = False
+                is_included_in_statistics = False
+                correction_source = "threshold_filter"
+                event_invalid_reason = "Flight time outside acceptable range"
+                statistics_exclusion_reason = "Flight time outside acceptable range"
+
         # Compute derived metrics for valid rows
         time: float | None = time_s
         distance_cm: float | None = None
@@ -163,11 +184,16 @@ class TreadmillAccumulator:
             # Use the current row time as elapsed time
             distance_cm = speed_m_s * time_s * 100.0
             if p.lift_time_s is not None:
-                step_time_s = contact_time_s  # step_time_s ~ contact_time for single-step
                 if step_time_s is not None and step_time_s > 0:
                     step_length_cm = speed_m_s * step_time_s * 100.0
                     cadence_steps_per_s = 1.0 / step_time_s
-            pass  # step_time_s preserved in row
+
+        # P1-4c: step_length_calculation reference point — record toe or heel
+        reference_cm: float | None = None
+        if self._config.step_length_calculation == "Tip-to-Tip":
+            reference_cm = p.toe_cm
+        elif self._config.step_length_calculation == "Heel-to-Heel":
+            reference_cm = p.heel_cm
 
         result = TreadmillStepResult(
             index=self._next_index,
@@ -181,6 +207,7 @@ class TreadmillAccumulator:
             time_s=time,
             contact_time_s=contact_time_s,
             flight_time_s=flight_time_s,
+            step_time_s=step_time_s,
             speed_m_s=speed_m_s,
             distance_cm=distance_cm,
             step_length_cm=step_length_cm,
@@ -190,6 +217,8 @@ class TreadmillAccumulator:
         self._rows.append(result)
         self._next_index += 1
         self._pending = None
+        # Record this row's touch time for inter-touch step_time on the NEXT row
+        self._last_touch_time_s = p.touch_time_s
 
     def _resolve_starting_foot_from_contact(self, side: str) -> None:
         """Resolve starting foot from the first contact event."""
