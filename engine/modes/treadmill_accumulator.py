@@ -211,6 +211,7 @@ class TreadmillAccumulator:
             speed_m_s=speed_m_s,
             distance_cm=distance_cm,
             step_length_cm=step_length_cm,
+            step_reference_cm=reference_cm,
             stride_length_cm=stride_length_cm,
             cadence_steps_per_s=cadence_steps_per_s,
         )
@@ -304,6 +305,7 @@ class TreadmillAccumulator:
                     step_time_s=row.step_time_s,
                     gait_cycle_s=row.gait_cycle_s,
                     step_length_cm=row.step_length_cm,
+                    step_reference_cm=row.step_reference_cm,
                     stride_length_cm=row.stride_length_cm,
                     speed_m_s=row.speed_m_s,
                     cadence_steps_per_s=row.cadence_steps_per_s,

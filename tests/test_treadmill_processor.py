@@ -4,7 +4,7 @@ test_treadmill_processor.py — Tests for treadmill processor and accumulator
 
 import pytest
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
-from config.treadmill_report import TreadmillRunningReport
+from config.treadmill_report import TreadmillRunningReport, TreadmillStepResult
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_processor import TreadmillProcessor
 
@@ -62,6 +62,57 @@ def test_gait_automatic_data_filter_excludes_outlier_from_statistics():
     assert acc.rows[2].is_event_valid is True
     assert acc.rows[2].is_included_in_statistics is False
     assert acc.rows[2].correction_source == "automatic_data_filter"
+
+
+def test_gait_automatic_data_filter_preserves_step_reference():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        automatic_data_filter=20,
+    )
+    acc = TreadmillAccumulator(config)
+    acc._rows.extend([
+        TreadmillStepResult(
+            index=0,
+            side="left",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            contact_time_s=0.30,
+            step_length_cm=60.0,
+            step_reference_cm=35.0,
+        ),
+        TreadmillStepResult(
+            index=1,
+            side="right",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            contact_time_s=0.31,
+            step_length_cm=62.0,
+            step_reference_cm=40.0,
+        ),
+        TreadmillStepResult(
+            index=2,
+            side="left",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            contact_time_s=0.90,
+            step_length_cm=130.0,
+            step_reference_cm=37.0,
+        ),
+    ])
+
+    acc.apply_automatic_data_filter()
+
+    assert acc.rows[2].is_included_in_statistics is False
+    assert acc.rows[2].step_reference_cm == 37.0
 
 
 def test_treadmill_processor_builds_running_report_with_config_snapshot():
@@ -255,3 +306,69 @@ def test_step_length_calculation_does_not_alter_formula():
     assert r_heel.step_length_cm == pytest.approx(expected_step_length, abs=0.01)
     # Both produce identical step_length_cm
     assert abs(r_tip.step_length_cm - r_heel.step_length_cm) < 0.001
+
+
+def test_step_length_calculation_records_toe_reference():
+    cfg = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        step_length_calculation="Tip-to-Tip",
+    )
+    acc = TreadmillAccumulator(cfg)
+
+    acc.record_touch(0.0, "left", heel_cm=10.0, toe_cm=35.0)
+    acc.record_lift(0.30, "left")
+    acc.record_touch(0.80, "right", heel_cm=15.0, toe_cm=40.0)
+    acc.record_lift(1.10, "right")
+
+    assert acc.rows[1].step_reference_cm == 40.0
+
+
+def test_step_length_calculation_records_heel_reference():
+    cfg = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        step_length_calculation="Heel-to-Heel",
+    )
+    acc = TreadmillAccumulator(cfg)
+
+    acc.record_touch(0.0, "left", heel_cm=10.0, toe_cm=35.0)
+    acc.record_lift(0.30, "left")
+    acc.record_touch(0.80, "right", heel_cm=15.0, toe_cm=40.0)
+    acc.record_lift(1.10, "right")
+
+    assert acc.rows[1].step_reference_cm == 15.0
+
+
+def test_step_reference_does_not_change_speed_time_step_length():
+    cfg_tip = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        step_length_calculation="Tip-to-Tip",
+    )
+    cfg_heel = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        step_length_calculation="Heel-to-Heel",
+    )
+
+    rows = []
+    for cfg in (cfg_tip, cfg_heel):
+        acc = TreadmillAccumulator(cfg)
+        acc.record_touch(0.0, "left", heel_cm=10.0, toe_cm=35.0)
+        acc.record_lift(0.30, "left")
+        acc.record_touch(0.80, "right", heel_cm=15.0, toe_cm=40.0)
+        acc.record_lift(1.10, "right")
+        rows.append(acc.rows[1])
+
+    assert rows[0].step_reference_cm != rows[1].step_reference_cm
+    assert rows[0].step_time_s == pytest.approx(rows[1].step_time_s)
+    assert rows[0].step_length_cm == pytest.approx(rows[1].step_length_cm)

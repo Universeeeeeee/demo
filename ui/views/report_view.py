@@ -376,7 +376,7 @@ class ReportView(QWidget):
 
         columns = [
             "#", "脚", "状态", "有效", "纳入统计",
-            "触地时间(s)", "离地时间(s)", "步长(cm)", "步速(m/s)",
+            "触地时间(s)", "离地时间(s)", "步长(cm)", "参考点(cm)", "步速(m/s)",
         ]
         table = QTableWidget(len(steps), len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -401,6 +401,7 @@ class ReportView(QWidget):
                 _fmt(step.contact_time_s),
                 _fmt(step.flight_time_s),
                 _fmt(step.step_length_cm),
+                _fmt(step.step_reference_cm),
                 _fmt(step.speed_m_s),
             ]
             for col_idx, text in enumerate(items):

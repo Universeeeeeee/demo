@@ -100,6 +100,7 @@ class TreadmillStepResult:
     step_time_s: float | None = None
     gait_cycle_s: float | None = None
     step_length_cm: float | None = None
+    step_reference_cm: float | None = None
     stride_length_cm: float | None = None
     speed_m_s: float | None = None
     cadence_steps_per_s: float | None = None
