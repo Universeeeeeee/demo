@@ -2,8 +2,10 @@
 test_treadmill_processor.py — Tests for treadmill processor and accumulator
 """
 
-from config.treadmill_config import TreadmillGaitConfig
+from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
+from config.treadmill_report import TreadmillRunningReport
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
+from engine.modes.treadmill_processor import TreadmillProcessor
 
 
 def test_accumulator_resolves_starting_foot_from_first_contact():
@@ -59,6 +61,23 @@ def test_gait_automatic_data_filter_excludes_outlier_from_statistics():
     assert acc.rows[2].is_event_valid is True
     assert acc.rows[2].is_included_in_statistics is False
     assert acc.rows[2].correction_source == "automatic_data_filter"
+
+
+def test_treadmill_processor_builds_running_report_with_config_snapshot():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=10.0,
+        direction="Interface side",
+        foot_length_cm_snapshot=26.0,
+        foot_length_source="manual",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+    report = processor.build_report(reason="manual", export_frames=(), export_timestamps=())
+
+    assert isinstance(report, TreadmillRunningReport)
+    assert report.report_config_snapshot["treadmill_speed"] == 10.0
+    assert report.report_config_snapshot["foot_length_cm_snapshot"] == 26.0
 
 
 def test_treadmill_distance_metrics_are_derived_from_belt_speed_and_time():

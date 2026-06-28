@@ -151,7 +151,8 @@ class GaitEngine(QObject):
 
         Mode selection rules:
           - "Jump Test" → JumpProcessor
-          - "Treadmill Gait Test" / "Treadmill Running Test" → placeholder (NotImplementedError)
+          - "Treadmill Gait Test" → TreadmillProcessor(mode_name="treadmill_gait")
+          - "Treadmill Running Test" → TreadmillProcessor(mode_name="treadmill_running")
           - "Sprint and Gait Test" → no processor (gait handled inline)
         """
         from .modes.jump_processor import JumpProcessor
