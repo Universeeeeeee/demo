@@ -299,11 +299,14 @@ class GaitEngine(QObject):
         # 分发到对应模式的处理器
         if self._processor is not None:
             events = self._processor.process_raw_frame(contact_bits, rel_time, timestamp)
-            for ev in events:
-                self.hop_event.emit(ev)
-            # 纵跳模式下每次 touch 后检查停止条件
+            # 纵跳事件 → hop_event；步态/跑步机事件 → gait_step_event
             if isinstance(self._processor, JumpProcessor):
+                for ev in events:
+                    self.hop_event.emit(ev)
                 self._check_stop_condition()
+            else:
+                for ev in events:
+                    self.gait_step_event.emit(ev)
         else:
             self._process_gait(contact_bits, rel_time, timestamp)
 
