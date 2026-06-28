@@ -17,19 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Final, List
 
-from config.treadmill_config import (
-    Direction,
-    TreadmillBaseConfig,
-    TreadmillGaitConfig,
-    TreadmillRunningConfig,
-)
+from config.treadmill_config import Direction, TreadmillBaseConfig, TreadmillRunningConfig
 from config.treadmill_report import (
-    CorrectionSource,
     MetricSummary,
-    RowStatus,
     TreadmillGaitReport,
     TreadmillRunningReport,
-    TreadmillStepResult,
     summarize,
 )
 from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
