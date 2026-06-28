@@ -201,10 +201,7 @@ class HistoryView(QWidget):
             f"结束原因: {_finish_reason_label(session.finish_reason)}",
             "",
             "参数摘要:",
-            f"启动: {config.start_type} / {config.start_position}",
-            f"停止: {config.stop_type} / {config.finish_position or '-'}",
-            f"目标跳跃: {config.number_of_jumps or '-'} 次",
-            f"接触/腾空阈值: >{config.min_contact_time}ms / >{config.min_flight_time}ms",
+            *_config_detail_lines(config),
             "",
             "结果摘要:",
             _session_summary(session),
@@ -249,6 +246,41 @@ def _finish_reason_label(reason: str | None) -> str:
     if not reason:
         return "-"
     return labels.get(reason, reason)
+
+
+def _config_detail_lines(config: Any) -> list[str]:
+    lines: list[str] = []
+    if hasattr(config, "start_type"):
+        lines.append(f"启动: {config.start_type} / {config.start_position}")
+
+    stop_detail = getattr(config, "finish_position", None) or "-"
+    lines.append(f"停止: {config.stop_type} / {stop_detail}")
+
+    number_of_jumps = getattr(config, "number_of_jumps", None)
+    if number_of_jumps is not None:
+        lines.append(f"目标跳跃: {number_of_jumps or '-'} 次")
+
+    if getattr(config, "test_length", None):
+        lines.append(f"测试时长: {config.test_length}")
+    if hasattr(config, "treadmill_speed"):
+        lines.append(f"跑步机速度: {config.treadmill_speed:g} km/h")
+    if hasattr(config, "direction"):
+        lines.append(f"行进方向: {config.direction}")
+
+    lines.append(
+        f"接触/腾空阈值: >{config.min_contact_time}ms / >{config.min_flight_time}ms"
+    )
+
+    max_flight_time = getattr(config, "max_flight_time", None)
+    if max_flight_time:
+        lines.append(f"最大腾空过滤: <{max_flight_time}ms")
+    min_foot_length = getattr(config, "min_foot_length", None)
+    if min_foot_length is not None:
+        lines.append(f"最小足长: {min_foot_length:g} cm")
+    automatic_data_filter = getattr(config, "automatic_data_filter", None)
+    if automatic_data_filter:
+        lines.append(f"自动数据过滤: {automatic_data_filter}%")
+    return lines
 
 
 def _session_summary(session: SessionRecord) -> str:

@@ -104,6 +104,10 @@ class TreadmillGaitConfig(TreadmillBaseConfig):
     def test_type(self) -> str:
         return "Treadmill Gait Test"
 
+    @property
+    def mode_label(self) -> str:
+        return "跑步机步态"
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.min_step_length <= 0:
@@ -125,6 +129,10 @@ class TreadmillRunningConfig(TreadmillBaseConfig):
     @property
     def test_type(self) -> str:
         return "Treadmill Running Test"
+
+    @property
+    def mode_label(self) -> str:
+        return "跑步机跑步"
 
     def __post_init__(self) -> None:
         super().__post_init__()

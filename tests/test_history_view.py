@@ -11,6 +11,8 @@ from qtpy.QtWidgets import QApplication
 
 from config.test_config import TestConfig as _TestConfig
 from config.test_report import JumpTestReport
+from config.treadmill_config import TreadmillGaitConfig
+from config.treadmill_report import TreadmillGaitReport
 from data.subject_store import SubjectStore
 from ui.views.history_view import HistoryView
 
@@ -58,6 +60,18 @@ def _jump_report(**overrides):
     return JumpTestReport(**values)
 
 
+def _treadmill_gait_report(**overrides):
+    values = {
+        "finish_reason": "manual",
+        "touch_count": 4,
+        "lift_count": 4,
+        "resolved_starting_foot": "left",
+        "starting_foot_source": "auto_first_contact",
+    }
+    values.update(overrides)
+    return TreadmillGaitReport(**values)
+
+
 class HistoryViewTest(unittest.TestCase):
     def setUp(self):
         _app()
@@ -96,6 +110,34 @@ class HistoryViewTest(unittest.TestCase):
         self.assertIn("手动结束", view._detail_label.text())
         self.assertIn("跳高标准差", view._detail_label.text())
         self.assertEqual(received[0].number_of_jumps, 6)
+
+    def test_history_view_loads_treadmill_config_without_attribute_error(self):
+        subject_id = self.store.create_subject("Bob", 1988)
+        result = self.store.search_subjects("Bob")[0]
+        config = TreadmillGaitConfig(
+            stop_type="End of Time",
+            test_length="05:00",
+            treadmill_speed=5.5,
+            direction="Interface side",
+        )
+        self.store.record_session(
+            subject_id,
+            config,
+            _treadmill_gait_report(),
+            started_at="2026-05-14 13:00:00",
+        )
+        view = HistoryView(self.store)
+        received = []
+        view.load_config_requested.connect(received.append)
+
+        view.load_subject(result)
+        view._session_table.selectRow(0)
+        view._on_load_config_clicked()
+
+        detail_text = view._detail_label.text()
+        self.assertIn("跑步机速度: 5.5 km/h", detail_text)
+        self.assertIn("行进方向: Interface side", detail_text)
+        self.assertIsInstance(received[0], TreadmillGaitConfig)
 
 
 if __name__ == "__main__":
