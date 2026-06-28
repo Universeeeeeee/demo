@@ -103,6 +103,47 @@ def test_treadmill_metric_rows_include_validity_columns():
     rows = _treadmill_metric_rows(report)
 
     assert rows == [[
-        1, "left", "valid", True, True, 0.25, 70.0,
-        None, None, None, None, "none", None,
+        1, "left", "valid", True, True, 0.25, None,
+        None, 70.0, None, None, "none", None, None,
     ]]
+
+
+def test_treadmill_metric_rows_match_export_header_order():
+    pytest.importorskip("dayu_widgets", reason="UI dependency not installed")
+    from ui.views.report_view import TREADMILL_EXPORT_COLUMNS, _treadmill_metric_rows
+
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=1,
+        lift_count=1,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        per_step_results=(
+            TreadmillStepResult(
+                index=1,
+                side="left",
+                row_status="valid",
+                is_event_valid=True,
+                is_included_in_statistics=True,
+                correction_source="none",
+                contact_time_s=0.25,
+                flight_time_s=0.05,
+                step_time_s=0.70,
+                step_length_cm=70.0,
+                distance_cm=123.0,
+                speed_m_s=1.5,
+                step_reference_cm=42.0,
+            ),
+        ),
+        metric_summaries={},
+        report_config_snapshot={"treadmill_speed": 5.0},
+    )
+
+    row = _treadmill_metric_rows(report)[0]
+    values = dict(zip(TREADMILL_EXPORT_COLUMNS, row))
+
+    assert len(row) == len(TREADMILL_EXPORT_COLUMNS)
+    assert values["flight_time_s"] == 0.05
+    assert values["step_time_s"] == 0.70
+    assert values["step_length_cm"] == 70.0
+    assert values["step_reference_cm"] == 42.0

@@ -615,14 +615,7 @@ class ReportView(QWidget):
             if isinstance(self._report, (TreadmillGaitReport, TreadmillRunningReport)):
                 # Sheet 2: Treadmill Steps
                 ws_steps = wb.create_sheet("Treadmill Steps")
-                columns = [
-                    "index", "side", "row_status", "is_event_valid",
-                    "is_included_in_statistics", "contact_time_s",
-                    "flight_time_s", "step_time_s", "step_length_cm",
-                    "distance_cm", "speed_m_s", "correction_source",
-                    "statistics_exclusion_reason",
-                ]
-                ws_steps.append(columns)
+                ws_steps.append(TREADMILL_EXPORT_COLUMNS)
                 for row in _treadmill_metric_rows(self._report):
                     ws_steps.append(row)
 
@@ -642,6 +635,24 @@ class ReportView(QWidget):
             QMessageBox.information(self, "导出成功", f"数据已保存至：\n{path}")
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"保存文件失败：{e}")
+
+
+TREADMILL_EXPORT_COLUMNS = [
+    "index",
+    "side",
+    "row_status",
+    "is_event_valid",
+    "is_included_in_statistics",
+    "contact_time_s",
+    "flight_time_s",
+    "step_time_s",
+    "step_length_cm",
+    "distance_cm",
+    "speed_m_s",
+    "correction_source",
+    "statistics_exclusion_reason",
+    "step_reference_cm",
+]
 
 
 def _jump_metric_rows(report: JumpTestReport) -> list[list[object]]:
@@ -691,13 +702,14 @@ def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport)
                 step.is_event_valid,
                 step.is_included_in_statistics,
                 step.contact_time_s,
-                step.step_length_cm,
                 step.flight_time_s,
                 step.step_time_s,
+                step.step_length_cm,
                 step.distance_cm,
                 step.speed_m_s,
                 step.correction_source,
                 step.statistics_exclusion_reason,
+                step.step_reference_cm,
             ]
         )
     return rows
