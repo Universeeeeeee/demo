@@ -78,44 +78,35 @@ class ParamPanel(QWidget):
     # ==================================================================
 
     def get_config(self) -> AnyTestConfig:
-        """收集所有控件当前值，构建 TestConfig。不可见的条件字段设为 None。"""
-        values = self._current_values()
+        """
+        收集所有控件当前值，构建对应测试类型的配置对象。
 
-        # 获取当前可见参数
-        visible_params = self._schema.get_visible_params(self._test_type, values)
+        利用 config_from_dict() 根据 test_type 自动分发到正确的 Config 类
+        (TestConfig / TreadmillGaitConfig / TreadmillRunningConfig)。
+        不可见的条件字段设为 None。只传递当前 test_type 适用的参数。
+        """
+        values = self._current_values()
+        test_type = self._test_type
+
+        # 获取当前可见参数（同时过滤 applicable_tests 和 visibility_condition）
+        visible_params = self._schema.get_visible_params(test_type, values)
         visible_names = {p.name for p in visible_params}
 
-        config = TestConfig()
-        config.test_type = self._test_type
-        config.start_type = values.get("start_type", "Status change")
-        config.start_position = values.get("start_position", "Inside area")
-        config.stop_type = values.get("stop_type", "Status change")
+        # 获取当前 test_type 适用的所有参数（仅 applicable_tests 过滤）
+        applicable = self._schema.visible_params_for_test(test_type)
+        applicable_names = {p.name for p in applicable}
 
-        # 条件字段: 仅在可见时赋值
-        config.finish_position = (
-            values.get("finish_position") if "finish_position" in visible_names else None
-        )
-        config.number_of_jumps = (
-            values.get("number_of_jumps") if "number_of_jumps" in visible_names else None
-        )
-        config.test_length = (
-            values.get("test_length") if "test_length" in visible_names else None
-        )
+        # 构建配置 dict: 仅包含 applicable 且可见的参数 + test_type
+        config_data: dict[str, object] = {"test_type": test_type}
+        for name in values:
+            if name not in applicable_names:
+                continue  # 跳过不适用的参数（如 start_type 对 treadmill）
+            if name in visible_names:
+                config_data[name] = values[name]
+            else:
+                config_data[name] = None
 
-        config.starting_foot = values.get("starting_foot", "Not defined")
-
-        # 滤波参数: 始终赋值
-        config.min_contact_time = values.get("min_contact_time", 60)
-        config.min_flight_time = values.get("min_flight_time", 0)
-        config.max_flight_time = values.get("max_flight_time", 0)
-
-        # 可选参数
-        config.metronome_enabled = values.get("metronome_enabled", False)
-        config.metronome_bpm = (
-            values.get("metronome_bpm", 120) if config.metronome_enabled else 120
-        )
-
-        return config
+        return config_from_dict(config_data)
 
     def set_config(self, config: AnyTestConfig) -> None:
         """从 TestConfig 反向填充控件值。用于加载历史配置。"""

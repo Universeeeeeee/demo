@@ -127,9 +127,11 @@ def config_from_dict(data: dict[str, Any]) -> AnyTestConfig:
     payload = {key: value for key, value in data.items() if key != "test_type"}
 
     if test_type == "Treadmill Gait Test":
-        return TreadmillGaitConfig(**payload)
+        known = {f.name for f in TreadmillGaitConfig.__dataclass_fields__.values()}
+        return TreadmillGaitConfig(**{k: v for k, v in payload.items() if k in known})
     if test_type == "Treadmill Running Test":
-        return TreadmillRunningConfig(**payload)
+        known = {f.name for f in TreadmillRunningConfig.__dataclass_fields__.values()}
+        return TreadmillRunningConfig(**{k: v for k, v in payload.items() if k in known})
     return TestConfig.from_dict(data)
 
 

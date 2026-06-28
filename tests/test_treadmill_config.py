@@ -3,6 +3,7 @@
 import pytest
 from typing import get_args
 
+from config.param_schema import get_schema
 from config.test_config import AnyTestConfig, config_from_dict
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 
@@ -97,3 +98,27 @@ def test_config_from_dict_returns_treadmill_config():
     )
 
     assert isinstance(cfg, TreadmillGaitConfig)
+
+
+# ---- Schema filtering tests ----
+
+def test_treadmill_gait_schema_has_min_step_length_not_min_gap():
+    schema = get_schema()
+    names = {param.name for param in schema.visible_params_for_test("Treadmill Gait Test")}
+
+    assert "treadmill_speed" in names
+    assert "direction" in names
+    assert "min_step_length" in names
+    assert "automatic_data_filter" in names
+    assert "min_gap_between_feet" not in names
+
+
+def test_treadmill_running_schema_has_min_gap_not_automatic_filter():
+    schema = get_schema()
+    names = {param.name for param in schema.visible_params_for_test("Treadmill Running Test")}
+
+    assert "treadmill_speed" in names
+    assert "direction" in names
+    assert "min_gap_between_feet" in names
+    assert "automatic_data_filter" not in names
+    assert "min_step_length" not in names
