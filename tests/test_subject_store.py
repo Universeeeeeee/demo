@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.models import AthleteProfile
 from config.test_config import TestConfig as _TestConfig
 from config.test_report import JumpTestReport
+from config.treadmill_config import TreadmillGaitConfig
+from config.treadmill_report import TreadmillGaitReport, summarize
 from data.subject_store import SubjectProfile, SubjectStore
 
 
@@ -206,6 +208,54 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertTrue(self.store.get_subject(used_id).archived)
         self.assertEqual(self.store.search_subjects("Used"), [])
         self.assertEqual(len(self.store.search_subjects("Used", include_archived=True)), 1)
+
+
+    def test_subject_store_persists_measured_foot_length_and_treadmill_detail(self):
+        subject_id = self.store.create_subject(
+            display_name="Runner",
+            sex="",
+            birth_year=1990,
+            height_cm=175.0,
+            weight_kg=70.0,
+            level="intermediate",
+            focus_side="",
+            notes="",
+        )
+        self.store.update_subject_measurements(
+            subject_id,
+            height_cm=175.0,
+            weight_kg=70.0,
+            measured_foot_length_cm=26.5,
+        )
+        config = TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Interface side",
+            foot_length_cm_snapshot=26.5,
+            foot_length_source="manual",
+        )
+
+        report = TreadmillGaitReport(
+            finish_reason="manual",
+            touch_count=0,
+            lift_count=0,
+            resolved_starting_foot="unknown",
+            starting_foot_source="unknown",
+            per_step_results=(),
+            metric_summaries={"contact_time_s": summarize(())},
+            report_config_snapshot=config.to_dict(),
+        )
+
+        session_id = self.store.record_session(
+            subject_id,
+            config=config,
+            report=report,
+        )
+        session = self.store.get_session(session_id)
+
+        self.assertEqual(session.report_summary["report_type"], "treadmill_gait")
+        self.assertEqual(session.report_detail["report_config_snapshot"]["treadmill_speed"], 5.0)
 
 
 if __name__ == "__main__":

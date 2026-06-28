@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from config.test_config import AnyTestConfig, TestConfig
 from config.test_report import GaitTestReport, JumpTestReport, TestReport
+from config.treadmill_report import TreadmillGaitReport, TreadmillRunningReport
 from path_utils import get_base_dir
 
 
@@ -28,6 +29,7 @@ class SubjectProfile:
     birth_year: int
     height_cm: float | None = None
     weight_kg: float | None = None
+    measured_foot_length_cm: float | None = None
     level: str = "intermediate"
     focus_side: str = ""
     notes: str = ""
@@ -56,6 +58,7 @@ class SessionRecord:
     total_jumps: int | None = None
     finish_reason: str | None = None
     report_summary_json: str | None = None
+    report_detail_json: str | None = None
     export_path: str | None = None
 
     @property
@@ -67,6 +70,12 @@ class SessionRecord:
         if not self.report_summary_json:
             return {}
         return json.loads(self.report_summary_json)
+
+    @property
+    def report_detail(self) -> dict[str, Any]:
+        if not self.report_detail_json:
+            return {}
+        return json.loads(self.report_detail_json)
 
 
 def default_db_path() -> Path:
@@ -233,6 +242,13 @@ class SubjectStore:
             row = conn.execute(sql, params).fetchone()
         return _session_from_row(row) if row else None
 
+    def get_session(self, session_id: int) -> SessionRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM test_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return _session_from_row(row) if row else None
+
     def get_sessions(self, subject_id: int, *, limit: int = 50) -> list[SessionRecord]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -282,9 +298,9 @@ class SubjectStore:
                 INSERT INTO test_sessions (
                     subject_id, started_at, finished_at, test_type, config_json,
                     height_cm, weight_kg, total_jumps, finish_reason,
-                    report_summary_json, export_path
+                    report_summary_json, report_detail_json, export_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     subject_id,
@@ -297,11 +313,27 @@ class SubjectStore:
                     summary.get("total_jumps"),
                     finish_reason,
                     json.dumps(summary, ensure_ascii=False),
+                    json.dumps(_report_detail(report), ensure_ascii=False)
+                    if isinstance(report, (TreadmillGaitReport, TreadmillRunningReport))
+                    else None,
                     export_path,
                 ),
             )
             self._update_subject_measurements(conn, subject_id, height_cm, weight_kg)
             return int(cur.lastrowid)
+
+    def update_subject_measurements(
+        self,
+        subject_id: int,
+        *,
+        height_cm: float | None = None,
+        weight_kg: float | None = None,
+        measured_foot_length_cm: float | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            self._update_subject_measurements(
+                conn, subject_id, height_cm, weight_kg, measured_foot_length_cm
+            )
 
     def subject_to_athlete_profile(
         self,
@@ -367,6 +399,13 @@ class SubjectStore:
                 """
             )
 
+            _ensure_column(
+                conn, "subjects", "measured_foot_length_cm", "measured_foot_length_cm REAL"
+            )
+            _ensure_column(
+                conn, "test_sessions", "report_detail_json", "report_detail_json TEXT"
+            )
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
@@ -398,12 +437,15 @@ class SubjectStore:
         subject_id: int,
         height_cm: float | None,
         weight_kg: float | None,
+        measured_foot_length_cm: float | None = None,
     ) -> None:
         updates: dict[str, Any] = {}
         if height_cm is not None:
             updates["height_cm"] = height_cm
         if weight_kg is not None:
             updates["weight_kg"] = weight_kg
+        if measured_foot_length_cm is not None:
+            updates["measured_foot_length_cm"] = measured_foot_length_cm
         if updates:
             assignments = [f"{name} = ?" for name in updates]
             values = list(updates.values())
@@ -431,6 +473,10 @@ class SubjectStore:
 
 
 def _subject_from_row(row: sqlite3.Row) -> SubjectProfile:
+    try:
+        measured_foot_length_cm = row["measured_foot_length_cm"]
+    except (IndexError, KeyError):
+        measured_foot_length_cm = None
     return SubjectProfile(
         id=int(row["id"]),
         display_name=row["display_name"],
@@ -438,6 +484,7 @@ def _subject_from_row(row: sqlite3.Row) -> SubjectProfile:
         birth_year=int(row["birth_year"]),
         height_cm=row["height_cm"],
         weight_kg=row["weight_kg"],
+        measured_foot_length_cm=measured_foot_length_cm,
         level=row["level"],
         focus_side=row["focus_side"],
         notes=row["notes"],
@@ -448,6 +495,10 @@ def _subject_from_row(row: sqlite3.Row) -> SubjectProfile:
 
 
 def _session_from_row(row: sqlite3.Row) -> SessionRecord:
+    try:
+        report_detail_json = row["report_detail_json"]
+    except (IndexError, KeyError):
+        report_detail_json = None
     return SessionRecord(
         id=int(row["id"]),
         subject_id=int(row["subject_id"]),
@@ -460,6 +511,7 @@ def _session_from_row(row: sqlite3.Row) -> SessionRecord:
         total_jumps=row["total_jumps"],
         finish_reason=row["finish_reason"],
         report_summary_json=row["report_summary_json"],
+        report_detail_json=report_detail_json,
         export_path=row["export_path"],
     )
 
@@ -478,6 +530,38 @@ def _history_from_session(session: SessionRecord) -> dict[str, Any]:
         "total_jumps": session.total_jumps,
         "summary": summary,
     }
+
+
+def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict[str, Any]:
+    return {
+        "finish_reason": report.finish_reason,
+        "touch_count": report.touch_count,
+        "lift_count": report.lift_count,
+        "resolved_starting_foot": report.resolved_starting_foot,
+        "starting_foot_source": report.starting_foot_source,
+        "per_step_results_summary": {
+            "total": len(report.per_step_results),
+            "valid": sum(1 for r in report.per_step_results if r.is_included_in_statistics),
+        },
+        "metric_summaries": {
+            k: {
+                "count": v.count,
+                "mean": v.mean,
+                "min": v.min,
+                "max": v.max,
+                "std": v.std,
+                "cv_percent": v.cv_percent,
+            }
+            for k, v in report.metric_summaries.items()
+        },
+        "report_config_snapshot": report.report_config_snapshot,
+    }
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
 def _report_summary(report: TestReport) -> dict[str, Any]:
@@ -518,6 +602,24 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
                 "avg_double_support": report.avg_double_support,
                 "avg_single_support": report.avg_single_support,
                 "avg_acceleration": report.avg_acceleration,
+            }
+        )
+    elif isinstance(report, TreadmillGaitReport):
+        base.update(
+            {
+                "report_type": "treadmill_gait",
+                "valid_step_count": sum(
+                    1 for row in report.per_step_results if row.is_included_in_statistics
+                ),
+            }
+        )
+    elif isinstance(report, TreadmillRunningReport):
+        base.update(
+            {
+                "report_type": "treadmill_running",
+                "valid_step_count": sum(
+                    1 for row in report.per_step_results if row.is_included_in_statistics
+                ),
             }
         )
     return base
