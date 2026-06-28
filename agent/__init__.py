@@ -1,10 +1,12 @@
 """Agent package exports."""
 
-from .models import AthleteProfile
+from .models import AthleteProfile, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
 
 __all__ = [
     "AthleteProfile",
     "GaitAgent",
+    "LLMTreadmillGaitConfig",
+    "LLMTreadmillRunningConfig",
 ]
 
 

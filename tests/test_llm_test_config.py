@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent.models import LLMTestConfig
+from agent.models import LLMTestConfig, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
 from config.test_config import TestConfig as _TestConfig
 from config.param_schema import get_schema
 
@@ -94,6 +94,26 @@ def test_to_test_config_with_exclude_none_preserves_defaults():
     assert cfg.metronome_enabled is False
 
 
+def test_jump_llm_config_does_not_accept_treadmill_speed():
+    """LLMTestConfig schema 不应包含 treadmill 专属字段"""
+    schema = LLMTestConfig.model_json_schema()
+    assert "treadmill_speed" not in schema["properties"]
+
+
+def test_treadmill_gait_llm_config_requires_speed_and_duration_or_manual_stop():
+    """LLMTreadmillGaitConfig 应接受 treadmill 字段并自动设置 test_type"""
+    cfg = LLMTreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        foot_length_cm_snapshot=26.0,
+        foot_length_source="manual",
+    )
+    assert cfg.test_type == "Treadmill Gait Test"
+    assert cfg.treadmill_speed == 5.0
+
+
 if __name__ == "__main__":
     tests = [
         test_to_test_config_excludes_reply_message,
@@ -101,6 +121,8 @@ if __name__ == "__main__":
         test_to_test_config_passes_validation,
         test_to_test_config_none_excluded,
         test_to_test_config_with_exclude_none_preserves_defaults,
+        test_jump_llm_config_does_not_accept_treadmill_speed,
+        test_treadmill_gait_llm_config_requires_speed_and_duration_or_manual_stop,
     ]
     passed = 0
     for t in tests:
