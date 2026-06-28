@@ -70,7 +70,7 @@ class LLMConfigAgentRegressionTest(unittest.TestCase):
     def test_current_config_table_request_uses_last_config_without_regenerating(self):
         fake_agent = _FakeConfigAgent()
         original_make_agent = LLMConfigAgent._make_agent
-        LLMConfigAgent._make_agent = staticmethod(lambda http_client: fake_agent)
+        LLMConfigAgent._make_agent = staticmethod(lambda http_client, mode="jump": fake_agent)
         try:
             agent = LLMConfigAgent()
             ctx = AthleteProfile(age=30, weight=70, height=170)
@@ -90,7 +90,7 @@ class LLMConfigAgentRegressionTest(unittest.TestCase):
 
     def test_chat_stream_gate_miss_emits_fallback_body_before_timing(self):
         original_make_agent = LLMConfigAgent._make_agent
-        LLMConfigAgent._make_agent = staticmethod(lambda http_client: _FakeStreamAgent())
+        LLMConfigAgent._make_agent = staticmethod(lambda http_client, mode="jump": _FakeStreamAgent())
         try:
             agent = LLMConfigAgent()
             chunks = []

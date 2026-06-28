@@ -268,6 +268,15 @@ class LLMTreadmillGaitConfig(BaseModel):
         return self.model_dump(exclude_none=True, exclude={"reply_message"})
 
 
+    def to_test_config(self):
+        """转换为系统通用的 TreadmillGaitConfig dataclass。
+
+        exclude_none=True 确保 None 字段不传入，
+        exclude={"reply_message"} 排除 LLM 专用字段。
+        """
+        from config.treadmill_config import TreadmillGaitConfig
+        return TreadmillGaitConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
+
 # ---- LLM 结构化输出模型：跑步机跑步 ----
 
 class LLMTreadmillRunningConfig(BaseModel):
@@ -384,6 +393,15 @@ class LLMTreadmillRunningConfig(BaseModel):
         """转换为字典，排除 reply_message 和 None 字段。"""
         return self.model_dump(exclude_none=True, exclude={"reply_message"})
 
+
+    def to_test_config(self):
+        """转换为系统通用的 TreadmillRunningConfig dataclass。
+
+        exclude_none=True 确保 None 字段不传入，
+        exclude={"reply_message"} 排除 LLM 专用字段。
+        """
+        from config.treadmill_config import TreadmillRunningConfig
+        return TreadmillRunningConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
 
 # ---- Agent 输入模型 ----
 
