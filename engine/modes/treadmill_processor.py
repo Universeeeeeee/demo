@@ -17,7 +17,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Final, List
 
-from config.treadmill_config import Direction, TreadmillBaseConfig, TreadmillRunningConfig
+from config.treadmill_config import (
+    Direction,
+    TreadmillBaseConfig,
+    TreadmillGaitConfig,
+    TreadmillRunningConfig,
+)
 from config.treadmill_report import (
     MetricSummary,
     TreadmillGaitReport,
@@ -27,6 +32,8 @@ from config.treadmill_report import (
 from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 from engine.modes.base import ModeProcessor
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
+from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
+from engine.modes.treadmill_running_accumulator import TreadmillRunningAccumulator
 from engine.spatial_clusterer import ClusterTracker, extract_clusters
 
 log = logging.getLogger(__name__)
@@ -87,7 +94,7 @@ class TreadmillProcessor:
 
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker = ContactBasedGaitTracker()
-        self._accumulator = TreadmillAccumulator(self._config)
+        self._accumulator = self._make_accumulator()
 
     # ---- ModeProcessor interface ----
 
@@ -96,7 +103,7 @@ class TreadmillProcessor:
         self.lift_count = 0
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker.reset()
-        self._accumulator = TreadmillAccumulator(self._config)
+        self._accumulator = self._make_accumulator()
 
     def process_raw_frame(
         self, contact_bits: List[int], rel_time: float, abs_time: float
@@ -138,6 +145,7 @@ class TreadmillProcessor:
         Delegates to TreadmillAccumulator for per-step data and metric
         summaries, then wraps everything in the appropriate report type.
         """
+        self._accumulator.apply_automatic_data_filter()
         rows = self._accumulator.rows
         config_snapshot = self._config.to_dict()
 
@@ -228,6 +236,13 @@ class TreadmillProcessor:
         return TreadmillGaitReport(**base_kwargs)
 
     # ---- Internal helpers ----
+
+    def _make_accumulator(self) -> TreadmillAccumulator:
+        if isinstance(self._config, TreadmillGaitConfig):
+            return TreadmillGaitAccumulator(self._config)
+        if isinstance(self._config, TreadmillRunningConfig):
+            return TreadmillRunningAccumulator(self._config)
+        raise TypeError(f"Unsupported treadmill config: {type(self._config).__name__}")
 
     def _handle_step_event(self, ev: object, rel_time: float) -> None:
         """

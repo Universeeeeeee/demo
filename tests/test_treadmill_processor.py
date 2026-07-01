@@ -6,7 +6,12 @@ import pytest
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 from config.treadmill_report import TreadmillRunningReport, TreadmillStepResult
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
+from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_processor import TreadmillProcessor
+from engine.modes.treadmill_running_accumulator import (
+    RUNNING_OVERLAP_TOLERANCE_S,
+    TreadmillRunningAccumulator,
+)
 
 
 def test_accumulator_resolves_starting_foot_from_first_contact():
@@ -132,6 +137,32 @@ def test_treadmill_processor_builds_running_report_with_config_snapshot():
     assert report.report_config_snapshot["foot_length_cm_snapshot"] == 26.0
 
 
+def test_processor_selects_gait_accumulator_for_gait_config():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+    )
+
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    assert isinstance(processor._accumulator, TreadmillGaitAccumulator)
+
+
+def test_processor_selects_running_accumulator_for_running_config():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=8.0,
+        direction="Interface side",
+    )
+
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    assert isinstance(processor._accumulator, TreadmillRunningAccumulator)
+
+
 def test_treadmill_distance_metrics_are_derived_from_belt_speed_and_time():
     config = TreadmillGaitConfig(
         stop_type="Software command",
@@ -152,6 +183,56 @@ def test_treadmill_distance_metrics_are_derived_from_belt_speed_and_time():
     assert row.distance_cm == 2000.0
     assert row.step_length_cm == 100.0
     assert row.stride_length_cm == 200.0
+
+
+def test_gait_accumulator_allows_double_support_without_no_step():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    acc = TreadmillGaitAccumulator(config)
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_touch(0.5, "right", 15.0, 40.0)
+    acc.record_lift(0.8, "left")
+    acc.record_lift(1.3, "right")
+
+    rows = acc.rows
+    assert len(rows) == 2
+    assert [row.row_status for row in rows] == ["valid", "valid"]
+    assert rows[0].contact_time_s == pytest.approx(0.8)
+    assert rows[1].contact_time_s == pytest.approx(0.8)
+    assert rows[0].double_support_s == pytest.approx(0.3)
+    assert rows[1].double_support_s == pytest.approx(0.3)
+    assert rows[1].step_time_s == pytest.approx(0.5)
+    assert rows[1].step_length_cm == pytest.approx(50.0)
+    assert rows[0].flight_time_s is None
+    assert rows[1].flight_time_s is None
+
+
+def test_gait_accumulator_filters_step_length_below_minimum():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        min_step_length=60.0,
+    )
+    acc = TreadmillGaitAccumulator(config)
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_lift(0.3, "left")
+    acc.record_touch(0.5, "right", 15.0, 40.0)
+    acc.record_lift(0.8, "right")
+
+    row = acc.rows[1]
+    assert row.step_length_cm == pytest.approx(50.0)
+    assert row.is_event_valid is True
+    assert row.is_included_in_statistics is False
+    assert row.correction_source == "threshold_filter"
+    assert row.statistics_exclusion_reason == "Step length below minimum threshold"
 
 
 # ---- P1-4 tests: flight time thresholds, step_time semantics, step_length_calculation ----
@@ -372,3 +453,91 @@ def test_step_reference_does_not_change_speed_time_step_length():
     assert rows[0].step_reference_cm != rows[1].step_reference_cm
     assert rows[0].step_time_s == pytest.approx(rows[1].step_time_s)
     assert rows[0].step_length_cm == pytest.approx(rows[1].step_length_cm)
+
+
+def test_running_accumulator_records_airborne_flight_time():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_lift(0.25, "left")
+    acc.record_touch(0.45, "right", 15.0, 40.0)
+    acc.record_lift(0.70, "right")
+
+    row = acc.rows[1]
+    assert row.flight_time_s == pytest.approx(0.20)
+    assert row.step_time_s == pytest.approx(0.45)
+    assert row.step_length_cm == pytest.approx(90.0)
+
+
+def test_running_accumulator_allows_short_overlap():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+    overlap = RUNNING_OVERLAP_TOLERANCE_S / 2
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_touch(0.25 - overlap, "right", 15.0, 40.0)
+    acc.record_lift(0.25, "left")
+    acc.record_lift(0.50, "right")
+
+    assert acc.rows[1].is_event_valid is True
+    assert acc.rows[1].is_included_in_statistics is True
+    assert acc.rows[1].statistics_exclusion_reason is None
+
+
+def test_running_accumulator_excludes_long_overlap():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+    overlap = RUNNING_OVERLAP_TOLERANCE_S + 0.02
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_touch(0.25 - overlap, "right", 15.0, 40.0)
+    acc.record_lift(0.25, "left")
+    acc.record_lift(0.50, "right")
+
+    assert acc.rows[1].is_event_valid is True
+    assert acc.rows[1].is_included_in_statistics is False
+    assert acc.rows[1].correction_source == "threshold_filter"
+    assert acc.rows[1].statistics_exclusion_reason == "Running overlap above tolerance"
+
+
+def test_running_accumulator_filters_gap_between_feet_below_minimum():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=20.0,
+        step_length_calculation="Tip-to-Tip",
+    )
+    acc = TreadmillRunningAccumulator(config)
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_lift(0.25, "left")
+    acc.record_touch(0.45, "right", 15.0, 45.0)
+    acc.record_lift(0.70, "right")
+
+    row = acc.rows[1]
+    assert row.step_reference_cm == 45.0
+    assert row.is_event_valid is True
+    assert row.is_included_in_statistics is False
+    assert row.correction_source == "threshold_filter"
+    assert row.statistics_exclusion_reason == "Gap between feet below minimum threshold"

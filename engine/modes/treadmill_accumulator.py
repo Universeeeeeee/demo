@@ -8,7 +8,7 @@ distance/speed metrics derived from belt speed and timing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from typing import Any, List, Tuple
 
 from config.treadmill_config import (
@@ -24,6 +24,36 @@ from config.treadmill_report import (
 )
 
 
+def normalize_foot_side(side: str) -> FootSide:
+    """Return a stable FootSide label from tracker output."""
+    return side if side in ("left", "right") else "unknown"
+
+
+def belt_speed_m_s(config: TreadmillBaseConfig) -> float:
+    """Convert treadmill speed from km/h to m/s."""
+    return config.treadmill_speed / 3.6
+
+
+def step_reference_cm(
+    config: TreadmillBaseConfig, heel_cm: float, toe_cm: float
+) -> float | None:
+    """Select the configured foot reference point for a step row."""
+    if config.step_length_calculation == "Tip-to-Tip":
+        return toe_cm
+    if config.step_length_calculation == "Heel-to-Heel":
+        return heel_cm
+    return None
+
+
+def step_length_from_time_cm(
+    config: TreadmillBaseConfig, step_time_s: float | None
+) -> float | None:
+    """Compute treadmill step length from belt speed and inter-touch time."""
+    if step_time_s is None or step_time_s <= 0:
+        return None
+    return belt_speed_m_s(config) * step_time_s * 100.0
+
+
 @dataclass
 class _PartialRow:
     """Internal mutable state for an in-progress step row."""
@@ -32,6 +62,11 @@ class _PartialRow:
     lift_time_s: float | None = None
     heel_cm: float = 0.0
     toe_cm: float = 0.0
+    step_time_s: float | None = None
+    flight_time_s: float | None = None
+    step_length_cm: float | None = None
+    step_reference_cm: float | None = None
+    gap_between_feet_cm: float | None = None
     is_valid: bool = True
     invalid_reason: str | None = None
 
@@ -259,8 +294,11 @@ class TreadmillAccumulator:
         Excludes rows from statistics where contact_time_s or step_length_cm
         deviate beyond the configured percentage from the mean.
         """
+        if not isinstance(self._config, TreadmillGaitConfig):
+            return
+
         threshold = self._config.automatic_data_filter
-        if not isinstance(self._config, TreadmillGaitConfig) or threshold <= 0:
+        if threshold <= 0:
             return
 
         # Gather valid rows that are currently included in statistics
@@ -289,26 +327,11 @@ class TreadmillAccumulator:
             ct_dev = abs(row.contact_time_s - ct_mean) / ct_mean * 100 if ct_mean != 0 else 0.0
             sl_dev = abs(row.step_length_cm - sl_mean) / sl_mean * 100 if sl_mean != 0 else 0.0
             if ct_dev > threshold or sl_dev > threshold:
-                self._rows[idx] = TreadmillStepResult(
-                    index=row.index,
-                    side=row.side,
-                    row_status=row.row_status,
-                    is_event_valid=row.is_event_valid,
+                self._rows[idx] = replace(
+                    row,
                     is_included_in_statistics=False,
                     correction_source="automatic_data_filter",
-                    event_invalid_reason=row.event_invalid_reason,
                     statistics_exclusion_reason="Excluded by automatic_data_filter",
-                    time_s=row.time_s,
-                    distance_cm=row.distance_cm,
-                    contact_time_s=row.contact_time_s,
-                    flight_time_s=row.flight_time_s,
-                    step_time_s=row.step_time_s,
-                    gait_cycle_s=row.gait_cycle_s,
-                    step_length_cm=row.step_length_cm,
-                    step_reference_cm=row.step_reference_cm,
-                    stride_length_cm=row.stride_length_cm,
-                    speed_m_s=row.speed_m_s,
-                    cadence_steps_per_s=row.cadence_steps_per_s,
                 )
 
     def build_valid_row_for_test(
