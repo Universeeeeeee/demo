@@ -460,6 +460,7 @@ class SetupView(QWidget):
                 finally:
                     self._syncing_config_to_panel = False
             elif self._current_config is None:
+                self.param_panel.set_test_type(self._agent_panel.current_test_type())
                 self._set_current_config(self.param_panel.get_config(), "manual")
 
     def _update_mode_status(self) -> None:

@@ -172,6 +172,29 @@ class ParamPanel(QWidget):
 
         self._refresh_visibility()
 
+    def set_test_type(self, test_type: str) -> None:
+        """切换测试类型并重建手动配置字段。"""
+        if test_type == self._test_type:
+            return
+
+        test_type_widget = self._widgets.get("test_type")
+        if not isinstance(test_type_widget, QComboBox):
+            return
+
+        idx = test_type_widget.findText(test_type)
+        if idx < 0:
+            return
+
+        blocker = QSignalBlocker(test_type_widget)
+        try:
+            test_type_widget.setCurrentIndex(idx)
+        finally:
+            del blocker
+
+        self._test_type = test_type
+        self._rebuild_mode_fields()
+        self._refresh_visibility()
+
     def set_enabled(self, enabled: bool) -> None:
         """锁定/解锁面板。测试运行中调用 set_enabled(False)。"""
         for widget in self._widgets.values():

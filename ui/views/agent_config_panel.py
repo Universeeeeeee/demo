@@ -206,6 +206,10 @@ class AgentConfigPanel(QWidget):
         count_text = f"最近 {len(self._history)} 次已加载" if self._history else "暂无"
         self._history_label.setText(f"历史记录：{count_text}")
 
+    def current_test_type(self) -> str:
+        """Return the test type currently selected in the assistant panel."""
+        return self._test_type_combo.currentText()
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
