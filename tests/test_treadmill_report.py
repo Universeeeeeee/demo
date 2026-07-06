@@ -10,6 +10,7 @@ from config.treadmill_report import (
     TreadmillStepResult,
     summarize,
 )
+from engine.footprint_visualization import FootprintVisualFrame
 
 
 def test_metric_summary_computes_population_std_and_cv():
@@ -72,6 +73,32 @@ def test_running_report_uses_running_test_type():
     )
 
     assert report.test_type == "Treadmill Running Test"
+
+
+def test_treadmill_report_defaults_visual_timeline_to_empty_tuple():
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=0,
+        lift_count=0,
+        resolved_starting_foot="unknown",
+        starting_foot_source="unknown",
+    )
+
+    assert report.visual_timeline == ()
+
+
+def test_treadmill_report_accepts_visual_timeline_frames():
+    frame = FootprintVisualFrame(timestamp_s=0.0, contact_bits=(0,) * 96)
+    report = TreadmillRunningReport(
+        finish_reason="manual",
+        touch_count=0,
+        lift_count=0,
+        resolved_starting_foot="unknown",
+        starting_foot_source="unknown",
+        visual_timeline=(frame,),
+    )
+
+    assert report.visual_timeline == (frame,)
 
 
 def test_treadmill_metric_rows_include_validity_columns():

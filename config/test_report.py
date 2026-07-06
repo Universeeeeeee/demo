@@ -100,6 +100,7 @@ class GaitTestReport:
     # 原始导出帧
     export_frames: tuple = ()
     export_timestamps: tuple = ()
+    visual_timeline: tuple = ()
 
 
 # 统一类型别名

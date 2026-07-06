@@ -135,6 +135,7 @@ class TreadmillReportBase:
     report_config_snapshot: dict[str, Any] = field(default_factory=dict)
     export_frames: tuple = ()
     export_timestamps: tuple = ()
+    visual_timeline: tuple = ()
 
 
 # ---- 具体报告类型 ----

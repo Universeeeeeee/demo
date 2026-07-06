@@ -203,6 +203,21 @@ def test_contact_tracker_emits_touch_then_lift_for_confirmed_contact():
     assert tracker.active_contacts == {}
 
 
+def test_gait_report_defaults_visual_timeline_to_empty_tuple():
+    report = GaitTestReport(
+        touch_count=0,
+        lift_count=0,
+        stride_lengths=(),
+        velocities=(),
+        avg_stride=0.0,
+        max_stride=0.0,
+        avg_velocity=0.0,
+        max_velocity=0.0,
+    )
+
+    assert report.visual_timeline == ()
+
+
 def _compute_jump_report(
     reason, touch_count, lift_count, air_times, contact_times, cycle_times,
     export_frames, export_timestamps,

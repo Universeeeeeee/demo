@@ -38,6 +38,7 @@ from config.treadmill_report import (
     TreadmillStepResult,
 )
 from path_utils import get_base_dir as _get_base_dir
+from ui.footprint_channel import FootprintReplayPanel
 
 # pyqtgraph 可选
 try:
@@ -171,26 +172,38 @@ class ReportView(QWidget):
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
+        self._right_layout = right_layout
 
         right_layout.addWidget(MDivider("数据回顾"))
+
+        self._replay_panel = FootprintReplayPanel()
+        self._replay_panel.hide()
+        right_layout.addWidget(self._replay_panel, 1)
+
+        self._plot_container = QWidget()
+        self._plot_container_layout = QVBoxLayout(self._plot_container)
+        self._plot_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._plot_container_layout.setSpacing(8)
 
         if _PG_AVAILABLE:
             self._plot_1 = pg.PlotWidget()
             self._plot_1.setBackground(dayu_theme.background_in_color)
             self._plot_1.showGrid(x=True, y=True, alpha=0.1)
             self._plot_1.enableAutoRange()
-            right_layout.addWidget(self._plot_1, 1)
+            self._plot_container_layout.addWidget(self._plot_1, 1)
 
             self._plot_2 = pg.PlotWidget()
             self._plot_2.setBackground(dayu_theme.background_in_color)
             self._plot_2.showGrid(x=True, y=True, alpha=0.1)
             self._plot_2.enableAutoRange()
-            right_layout.addWidget(self._plot_2, 1)
+            self._plot_container_layout.addWidget(self._plot_2, 1)
         else:
             placeholder = QLabel("未安装 pyqtgraph — 图表不可用")
             placeholder.setAlignment(Qt.AlignCenter)
             placeholder.setStyleSheet("font-size: 14pt; color: #666;")
-            right_layout.addWidget(placeholder)
+            self._plot_container_layout.addWidget(placeholder)
+
+        right_layout.addWidget(self._plot_container, 1)
 
         content_layout.addWidget(right_container, 6)
         main_layout.addLayout(content_layout, 1)
@@ -232,6 +245,8 @@ class ReportView(QWidget):
             "manual": "⏹ 手动结束",
         }
         self._reason_label.setText(reason_map.get(report.finish_reason, report.finish_reason))
+        self._replay_panel.hide()
+        self._plot_container.show()
 
         if isinstance(report, JumpTestReport):
             self._load_jump_report(report)
@@ -294,6 +309,9 @@ class ReportView(QWidget):
 
     def _load_gait_report(self, r: GaitTestReport):
         self._title.setText("📊 测试报告 — 步态分析")
+        self._plot_container.hide()
+        self._replay_panel.show()
+        self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
 
         stats = [
             ("总步数", f"{r.touch_count}"),
@@ -336,6 +354,9 @@ class ReportView(QWidget):
     def _load_treadmill_report(self, r: TreadmillGaitReport | TreadmillRunningReport):
         test_type_label = "跑步机步态" if isinstance(r, TreadmillGaitReport) else "跑步机跑步"
         self._title.setText(f"测试报告 — {test_type_label}")
+        self._plot_container.hide()
+        self._replay_panel.show()
+        self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
 
         # 配置快照
         snap = r.report_config_snapshot

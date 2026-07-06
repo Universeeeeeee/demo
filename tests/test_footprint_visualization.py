@@ -1,4 +1,4 @@
-from engine.contact_tracker import ContactBasedGaitTracker
+from engine.contact_tracker import ContactBasedGaitTracker, ContactState
 from engine.footprint_visualization import (
     FootprintTimelineRecorder,
     FootprintVisualFrame,
@@ -51,6 +51,21 @@ def test_build_visual_frame_derives_feet_from_contact_tracker():
     assert foot.length_cm == 14.0
 
 
+def test_build_visual_frame_preserves_unknown_foot_measurements():
+    tracker = ContactBasedGaitTracker(arm_frames=1)
+    tracker.active_contacts[3] = ContactState(
+        contact_id=3,
+        status="candidate",
+    )
+
+    frame = build_visual_frame(0.2, [0] * 96, tracker)
+
+    assert len(frame.feet) == 1
+    foot = frame.feet[0]
+    assert foot.centroid_cm is None
+    assert foot.length_cm is None
+
+
 def test_timeline_recorder_uses_fixed_cadence_without_event_boundary_inserts():
     tracker = ContactBasedGaitTracker(arm_frames=1)
     recorder = FootprintTimelineRecorder(interval_s=0.10)
@@ -61,3 +76,9 @@ def test_timeline_recorder_uses_fixed_cadence_without_event_boundary_inserts():
     assert recorder.record_if_due(0.10, [1] * 96, tracker) is not None
 
     assert [frame.timestamp_s for frame in recorder.frames] == [0.0, 0.1]
+    assert isinstance(recorder.frames, tuple)
+
+    pending = recorder.pop_pending()
+    assert isinstance(pending, tuple)
+    assert [frame.timestamp_s for frame in pending] == [0.0, 0.1]
+    assert recorder.pop_pending() == ()

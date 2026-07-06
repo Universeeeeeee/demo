@@ -22,8 +22,8 @@ _VALID_STATUSES = {"candidate", "confirmed", "lifted"}
 class FootprintActiveState:
     contact_id: int
     side: FootSideVisual
-    centroid_cm: float
-    length_cm: float
+    centroid_cm: float | None
+    length_cm: float | None
     status: FootStatusVisual
 
 
@@ -72,6 +72,12 @@ def _normalized_bits(contact_bits: Iterable[object]) -> tuple[int, ...]:
     return bits + (0,) * (_LED_COUNT - len(bits))
 
 
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
 def build_visual_frame(
     timestamp_s: float, contact_bits: Iterable[object], tracker: object
 ) -> FootprintVisualFrame:
@@ -95,8 +101,8 @@ def build_visual_frame(
             FootprintActiveState(
                 contact_id=contact.contact_id,
                 side=side_from_foot_label(contact.foot_label),
-                centroid_cm=float(centroid_cm or 0.0),
-                length_cm=float(length_cm or 0.0),
+                centroid_cm=_optional_float(centroid_cm),
+                length_cm=_optional_float(length_cm),
                 status=status,
             )
         )
@@ -111,12 +117,16 @@ def build_visual_frame(
 class FootprintTimelineRecorder:
     def __init__(self, interval_s: float = 1 / 25):
         self.interval_s = float(interval_s)
-        self.frames: list[FootprintVisualFrame] = []
+        self._frames: list[FootprintVisualFrame] = []
         self._pending: list[FootprintVisualFrame] = []
         self._next_due_s: float | None = None
 
+    @property
+    def frames(self) -> tuple[FootprintVisualFrame, ...]:
+        return tuple(self._frames)
+
     def reset(self) -> None:
-        self.frames.clear()
+        self._frames.clear()
         self._pending.clear()
         self._next_due_s = None
 
@@ -127,7 +137,7 @@ class FootprintTimelineRecorder:
             return None
 
         frame = build_visual_frame(timestamp_s, contact_bits, tracker)
-        self.frames.append(frame)
+        self._frames.append(frame)
         self._pending.append(frame)
 
         if self._next_due_s is None:
@@ -138,8 +148,8 @@ class FootprintTimelineRecorder:
 
         return frame
 
-    def pop_pending(self) -> list[FootprintVisualFrame]:
-        frames = list(self._pending)
+    def pop_pending(self) -> tuple[FootprintVisualFrame, ...]:
+        frames = tuple(self._pending)
         self._pending.clear()
         return frames
 

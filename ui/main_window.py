@@ -183,6 +183,9 @@ class MainWindow(QMainWindow):
         self._controller.hop_event.connect(self._exec_view.on_hop_event)
         self._controller.gait_step_event.connect(self._exec_view.on_gait_step_event)
         self._controller.gait_snapshot.connect(self._exec_view.on_gait_snapshot)
+        self._controller.footprint_visual_frame.connect(
+            self._exec_view.on_footprint_visual_frame
+        )
         self._controller.device_message.connect(self._exec_view.on_device_message)
 
         # Controller 生命周期 → MainWindow

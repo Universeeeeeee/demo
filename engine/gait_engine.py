@@ -49,6 +49,11 @@ try:
 except ImportError:
     from contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 
+try:
+    from .footprint_visualization import FootprintTimelineRecorder
+except ImportError:
+    from footprint_visualization import FootprintTimelineRecorder
+
 # 模式处理器
 try:
     from .modes.jump_processor import JumpProcessor
@@ -85,6 +90,7 @@ class GaitEngine(QObject):
 
     # === 步态模式周期性状态快照 (节流: ~10Hz，供 UI 面板刷新) ===
     gait_status_snapshot = Signal(dict)   # 当前状态快照 dict
+    footprint_visual_frame = Signal(dict)  # canonical footprint visual frame
 
     # === 自动停止信号 ===
     test_finished = Signal(str)           # 结束原因: "jump_count_reached" | "time_up"
@@ -123,6 +129,7 @@ class GaitEngine(QObject):
         # ---- 步态模式内部状态 (仍直接持有，尚无步态 processor) ----
         self._cluster_tracker: Optional[ClusterTracker] = None
         self._contact_tracker: Optional[ContactBasedGaitTracker] = None
+        self._visual_recorder = FootprintTimelineRecorder()
 
         # 步态统计
         self.touch_count = 0
@@ -244,6 +251,7 @@ class GaitEngine(QObject):
 
         # 快照节流
         self._last_snapshot_ts = 0.0
+        self._visual_recorder.reset()
 
         # 停止计时器
         if self._stop_timer is not None:
@@ -307,6 +315,9 @@ class GaitEngine(QObject):
             else:
                 for ev in events:
                     self.gait_step_event.emit(ev)
+                if hasattr(self._processor, "pop_visual_frames"):
+                    for frame in self._processor.pop_visual_frames():
+                        self.footprint_visual_frame.emit(frame.to_dict())
         else:
             self._process_gait(contact_bits, rel_time, timestamp)
 
@@ -329,6 +340,14 @@ class GaitEngine(QObject):
         # 发射高级事件 (低频: 仅在 touch/lift 发生时)
         for ev in events:
             self.gait_step_event.emit(ev)  # → UI
+
+        frame = self._visual_recorder.record_if_due(
+            rel_time,
+            bits,
+            self._contact_tracker,
+        )
+        if frame is not None:
+            self.footprint_visual_frame.emit(frame.to_dict())
 
         # 周期性状态快照 (节流 ~10Hz)
         if abs_time - self._last_snapshot_ts >= self._snapshot_interval:
@@ -444,6 +463,7 @@ class GaitEngine(QObject):
             finish_reason=reason,
             export_frames=export_frames,
             export_timestamps=export_timestamps,
+            visual_timeline=self._visual_recorder.frames,
         )
 
     # ---------------------------------------------------------------

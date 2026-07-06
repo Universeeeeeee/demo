@@ -26,6 +26,7 @@ from dayu_widgets.push_button import MPushButton
 from dayu_widgets import dayu_theme
 
 from config.test_config import TestConfig
+from ui.footprint_channel import FootprintChannelWidget
 
 # pyqtgraph 可选导入
 try:
@@ -144,6 +145,7 @@ class ExecutionView(QWidget):
 
         # 暂停状态
         self._paused = False
+        self._latest_footprint_frame = None
 
         self._build_ui()
         self._apply_style()
@@ -259,7 +261,13 @@ class ExecutionView(QWidget):
             placeholder.setStyleSheet("font-size: 14pt; color: #666;")
             charts_layout.addWidget(placeholder)
 
-        main_layout.addLayout(charts_layout, 1)
+        self._chart_container = QWidget()
+        self._chart_container.setLayout(charts_layout)
+        main_layout.addWidget(self._chart_container, 1)
+
+        self._footprint_channel = FootprintChannelWidget()
+        self._footprint_channel.hide()
+        main_layout.addWidget(self._footprint_channel, 1)
 
         # ===== 进度条 =====
         self._progress_bar = QProgressBar()
@@ -335,6 +343,8 @@ class ExecutionView(QWidget):
             c.setVisible(is_jump)
         for c in self._gait_cards:
             c.setVisible(not is_jump)
+        self._chart_container.setVisible(is_jump)
+        self._footprint_channel.setVisible(not is_jump)
 
         # 切换图表标签
         if _PG_AVAILABLE:
@@ -380,6 +390,8 @@ class ExecutionView(QWidget):
             self._cadence_bar.setOpts(x=[], height=[])
             self._plot_h.setXRange(0, self._initial_range, padding=0)
             self._plot_cadence.setXRange(0, self._initial_range, padding=0)
+        if hasattr(self, "_footprint_channel"):
+            self._footprint_channel.clear()
 
         # 实时统计
         self._max_h = 0.0
@@ -388,6 +400,7 @@ class ExecutionView(QWidget):
         self._touch_count = 0
         self._last_strike_centroid = None
         self._paused = False
+        self._latest_footprint_frame = None
 
         # 进度
         self._stop_countdown()
@@ -433,9 +446,8 @@ class ExecutionView(QWidget):
             self._last_strike_centroid = ev.centroid_cm
 
     def on_gait_step_event(self, ev):
-        """接收步态事件，更新图表。"""
-        if ev.kind == "touch" and ev.contact.step_length is not None:
-            self._update_charts(ev.contact.step_length, ev.contact.velocity)
+        """接收步态事件。足迹通道替代了步态柱状图。"""
+        return
 
     def on_gait_snapshot(self, snapshot: dict):
         """接收步态快照 (~10Hz)，更新仪表盘。"""
@@ -452,6 +464,11 @@ class ExecutionView(QWidget):
         em = snapshot.get("latest_extra_metrics", {})
         if em and em.get("imbalance_index") is not None:
             self._card_imbalance.set_value(f"{em['imbalance_index']:.1f}")
+
+    def on_footprint_visual_frame(self, frame: dict):
+        self._latest_footprint_frame = frame
+        if self._mode != "纵跳":
+            self._footprint_channel.render_state(frame)
 
     def on_device_message(self, msg: str):
         """显示设备状态。"""

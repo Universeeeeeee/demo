@@ -541,3 +541,43 @@ def test_running_accumulator_filters_gap_between_feet_below_minimum():
     assert row.is_included_in_statistics is False
     assert row.correction_source == "threshold_filter"
     assert row.statistics_exclusion_reason == "Gap between feet below minimum threshold"
+
+
+def test_treadmill_processor_records_fixed_cadence_visual_timeline():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    processor.process_raw_frame([0] * 96, rel_time=0.00, abs_time=0.00)
+    processor.process_raw_frame([1] * 96, rel_time=0.01, abs_time=0.01)
+    processor.process_raw_frame([1] * 96, rel_time=0.05, abs_time=0.05)
+    report = processor.build_report(
+        reason="manual",
+        export_frames=(),
+        export_timestamps=(),
+    )
+
+    assert [frame.timestamp_s for frame in report.visual_timeline] == [0.0, 0.05]
+    assert report.visual_timeline[1].contact_bits == tuple([1] * 96)
+
+
+def test_treadmill_processor_pop_visual_frames_returns_pending_once():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    processor.process_raw_frame([0] * 96, rel_time=0.00, abs_time=0.00)
+
+    first = processor.pop_visual_frames()
+    second = processor.pop_visual_frames()
+
+    assert len(first) == 1
+    assert second == ()

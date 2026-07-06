@@ -45,6 +45,7 @@ class SessionController(QObject):
     hop_event = Signal(object)              # FootEvent (纵跳)
     gait_step_event = Signal(object)        # GaitStepEvent (步态)
     gait_snapshot = Signal(dict)            # 步态状态快照 (~10Hz)
+    footprint_visual_frame = Signal(dict)   # canonical footprint frame
     device_message = Signal(str)            # 设备消息 (节流)
 
     # ---- 生命周期信号 → MainWindow ----
@@ -113,6 +114,7 @@ class SessionController(QObject):
         self._engine.hop_event.connect(self._on_hop_event)
         self._engine.gait_step_event.connect(self._on_gait_step_event)
         self._engine.gait_status_snapshot.connect(self._on_gait_snapshot)
+        self._engine.footprint_visual_frame.connect(self._on_footprint_visual_frame)
         self._engine.test_finished.connect(self._on_engine_finished)
 
         # 6. 连接 L1 → Controller (设备消息, 节流)
@@ -192,6 +194,10 @@ class SessionController(QObject):
     @Slot(dict)
     def _on_gait_snapshot(self, snapshot):
         self.gait_snapshot.emit(snapshot)
+
+    @Slot(dict)
+    def _on_footprint_visual_frame(self, frame):
+        self.footprint_visual_frame.emit(frame)
 
     @Slot(str)
     def _on_device_message(self, msg):

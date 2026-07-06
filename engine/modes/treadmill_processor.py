@@ -30,6 +30,7 @@ from config.treadmill_report import (
     summarize,
 )
 from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
+from engine.footprint_visualization import FootprintTimelineRecorder
 from engine.modes.base import ModeProcessor
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
@@ -95,6 +96,7 @@ class TreadmillProcessor:
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker = ContactBasedGaitTracker()
         self._accumulator = self._make_accumulator()
+        self._visual_recorder = FootprintTimelineRecorder()
 
     # ---- ModeProcessor interface ----
 
@@ -104,6 +106,7 @@ class TreadmillProcessor:
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker.reset()
         self._accumulator = self._make_accumulator()
+        self._visual_recorder.reset()
 
     def process_raw_frame(
         self, contact_bits: List[int], rel_time: float, abs_time: float
@@ -129,12 +132,20 @@ class TreadmillProcessor:
         # 3. Feed active tracks into contact-based gait tracker
         active_tracks = self._cluster_tracker.get_active_tracks_view()
         events = self._contact_tracker.process_frame(rel_time, active_tracks)
+        self._visual_recorder.record_if_due(
+            rel_time,
+            contact_bits,
+            self._contact_tracker,
+        )
 
         # 4. Delegate touch/lift events to accumulator
         for ev in events:
             self._handle_step_event(ev, rel_time)
 
         return events
+
+    def pop_visual_frames(self):
+        return self._visual_recorder.pop_pending()
 
     def build_report(
         self, reason: str, export_frames: tuple, export_timestamps: tuple
@@ -229,6 +240,7 @@ class TreadmillProcessor:
             report_config_snapshot=config_snapshot,
             export_frames=export_frames,
             export_timestamps=export_timestamps,
+            visual_timeline=self._visual_recorder.frames,
         )
 
         if isinstance(self._config, TreadmillRunningConfig):
