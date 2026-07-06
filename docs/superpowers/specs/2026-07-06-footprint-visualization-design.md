@@ -71,7 +71,7 @@ Visual rules:
 - Inactive LEDs use a muted gray.
 - Active LEDs/beam segments use a clear highlight.
 - A touching foot is drawn solid.
-- A lifted/recent foot is shown only if the canonical frame includes it.
+- Candidate or lifted/recent contacts are styled by the renderer from `status`; presentation details such as opacity do not belong in the canonical frame.
 - Left and right footprints use separate assets.
 
 ### Execution View
@@ -109,7 +109,6 @@ class FootprintActiveState:
     centroid_cm: float | None
     length_cm: float | None
     status: Literal["candidate", "confirmed", "lifted"]
-    opacity: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -129,6 +128,8 @@ The canonical frame should be built from current `ContactBasedGaitTracker` state
 
 `FootprintEvent` may still be added later as optional derived diagnostic data, but it is not required for this feature and must not be used as the replay state source.
 
+`contact_bits` and `feet` are not two independent truth sources. `contact_bits` is the raw sensor evidence for the frame. `feet` is the engine-derived semantic projection of that same sensor stream through the cluster/contact tracker. `feet` must not introduce independent lifecycle state, and it must not be authored or repaired by the UI.
+
 ## Canonical Frame Shape
 
 The live frame and report frame use the same semantic shape. A dict can be used at signal boundaries to avoid forcing UI imports into the engine:
@@ -144,13 +145,12 @@ The live frame and report frame use the same semantic shape. A dict can be used 
             "status": "candidate" | "confirmed" | "lifted",
             "centroid_cm": float | None,
             "length_cm": float | None,
-            "opacity": float,
         },
     ],
 }
 ```
 
-Emit/store these frames at a UI-safe deterministic cadence, roughly 20-30 Hz, plus event-boundary frames when needed to avoid missing fast touch/lift transitions. The existing gait status snapshot can remain for metric cards, but it is not a footprint replay source.
+Emit/store these frames at a fixed, UI-safe deterministic cadence, roughly 20-30 Hz. Do not inject extra event-boundary frames into `visual_timeline`; touch/lift events may be stored as metadata later, but replay must use the fixed-rate canonical timeline. The existing gait status snapshot can remain for metric cards, but it is not a footprint replay source.
 
 ## State Ownership
 
@@ -159,7 +159,8 @@ The engine/processor/report layer is the only footprint state machine owner.
 It is responsible for:
 
 - Deciding which contacts are visible in a frame.
-- Assigning side, status, centroid, length, and opacity.
+- Assigning side, status, centroid, and length.
+- Ensuring semantic `feet` state is derived from the same contact-bit stream and tracker state, not from an independent visualization state machine.
 - Producing the same canonical frame shape for live display and report replay.
 - Storing the canonical replay timeline in the final report.
 
@@ -167,6 +168,7 @@ The UI is responsible only for:
 
 - Receiving one frame.
 - Mapping each frame's LED indexes and foot states to pixels.
+- Applying local presentation policy, such as opacity or color for `candidate`, `confirmed`, and `lifted` statuses.
 - Drawing the result.
 
 The UI must not:
@@ -198,6 +200,9 @@ Unit tests:
 - LED index-to-y mapping handles index 0, 95, and midpoints.
 - The widget accepts 96-bit frames and does not resize or throw on short frames.
 - Canonical frame building includes active contacts and does not require UI event interpretation.
+- Canonical frame schema does not include presentation fields such as opacity.
+- Canonical timeline generation uses fixed cadence and does not inject event-boundary frames.
+- Semantic `feet` entries are produced by engine/tracker code from the contact-bit stream, not by UI replay code.
 - Gait-related reports default `visual_timeline=()` for backward compatibility.
 
 Integration/smoke tests:
