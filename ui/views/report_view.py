@@ -247,6 +247,7 @@ class ReportView(QWidget):
         self._reason_label.setText(reason_map.get(report.finish_reason, report.finish_reason))
         self._replay_panel.hide()
         self._plot_container.show()
+        self._clear_dynamic_widgets()
 
         if isinstance(report, JumpTestReport):
             self._load_jump_report(report)
@@ -375,9 +376,6 @@ class ReportView(QWidget):
             ("足长", f"{foot_length} cm" if foot_length else "--"),
         ]
         self._fill_stat_cards(stats)
-
-        # 清除旧动态组件
-        self._clear_dynamic_widgets()
 
         # 逐步详情表
         if r.per_step_results:
