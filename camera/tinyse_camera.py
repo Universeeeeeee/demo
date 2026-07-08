@@ -19,6 +19,7 @@ import csv
 import ctypes
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -128,37 +129,37 @@ def mjpg_to_avi(
 
     _log.info("mjpg→avi: %d frames, %.2f fps", len(frames_index), fps)
 
-    # 3. 读取全部 MJPEG 数据
     with open(mjpg_path, "rb") as fh:
-        mjpg_data = fh.read()
-
-    # 4. 解码首帧获取分辨率
-    first_offset, first_length, _ = frames_index[0]
-    first_jpeg = mjpg_data[first_offset : first_offset + first_length]
-    first_frame = cv2.imdecode(
-        np.frombuffer(first_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
-    )
-    if first_frame is None:
-        raise RuntimeError("无法解码首帧 JPEG")
-    h, w = first_frame.shape[:2]
-
-    # 5. 写入 AVI (MJPG fourcc, 与源格式一致)
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
-    if not writer.isOpened():
-        raise RuntimeError(f"VideoWriter 打开失败: {output_path}")
-
-    written = 0
-    for offset, length, _ in frames_index:
-        jpeg_bytes = mjpg_data[offset : offset + length]
-        frame = cv2.imdecode(
-            np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
+        # 3. 解码首帧获取分辨率
+        first_offset, first_length, _ = frames_index[0]
+        fh.seek(first_offset)
+        first_jpeg = fh.read(first_length)
+        first_frame = cv2.imdecode(
+            np.frombuffer(first_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
         )
-        if frame is not None:
-            writer.write(frame)
-            written += 1
+        if first_frame is None:
+            raise RuntimeError("无法解码首帧 JPEG")
+        h, w = first_frame.shape[:2]
 
-    writer.release()
+        # 4. 写入 AVI (MJPG fourcc, 与源格式一致)
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+        if not writer.isOpened():
+            raise RuntimeError(f"VideoWriter 打开失败: {output_path}")
+
+        written = 0
+        try:
+            for offset, length, _ in frames_index:
+                fh.seek(offset)
+                jpeg_bytes = fh.read(length)
+                frame = cv2.imdecode(
+                    np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
+                )
+                if frame is not None:
+                    writer.write(frame)
+                    written += 1
+        finally:
+            writer.release()
     _log.info("mjpg→avi: wrote %d frames → %s", written, output_path)
 
     if cleanup:
@@ -309,12 +310,21 @@ class TinySeCameraCapture(QObject):
         self._record_path: Path | None = None
         self._csv_path: Path | None = None
         self._record_start = 0.0
+        self._record_lock = threading.Lock()
+        self._record_finalizing = False
+        self._record_finalize_thread: threading.Thread | None = None
         self._mirror = True  # 软件镜像
         self._preview_enabled = True
 
     @property
     def is_recording(self) -> bool:
-        return self._recording
+        with self._record_lock:
+            return self._recording
+
+    @property
+    def is_record_busy(self) -> bool:
+        with self._record_lock:
+            return self._recording or self._record_finalizing
 
     def open(self) -> bool:
         if self._capture is not None:
@@ -357,7 +367,10 @@ class TinySeCameraCapture(QObject):
             _log_timing(f"capture.worker.ready={time.perf_counter() - total_start:.3f}s")
             while self._running:
                 stats = capture.stats()
-                record_sec = time.perf_counter() - self._record_start if self._recording else 0.0
+                with self._record_lock:
+                    recording = self._recording
+                    record_start = self._record_start
+                record_sec = time.perf_counter() - record_start if recording else 0.0
                 self.stats_updated.emit(stats.wall_fps, record_sec)
                 time.sleep(0.2)
         except Exception as exc:
@@ -373,40 +386,86 @@ class TinySeCameraCapture(QObject):
             _log_timing(f"dshow.stop={time.perf_counter() - start:.3f}s")
 
     def start_record(self) -> str | None:
-        if self._capture is None or self._recording:
-            return None
+        with self._record_lock:
+            if self._capture is None or self._recording or self._record_finalizing:
+                return None
+            capture = self._capture
         try:
-            mjpg_path, csv_path = self._capture.start_record()
+            mjpg_path, csv_path = capture.start_record()
         except Exception as exc:
             self.error.emit(str(exc))
             return None
-        self._recording = True
-        self._record_path = mjpg_path
-        self._csv_path = csv_path
-        self._record_start = time.perf_counter()
+        with self._record_lock:
+            self._recording = True
+            self._record_path = mjpg_path
+            self._csv_path = csv_path
+            self._record_start = time.perf_counter()
         return str(mjpg_path)
 
-    def stop_record(self):
-        if self._capture is None or not self._recording:
-            return
-        mjpg_path = self._record_path
-        csv_path = self._csv_path
+    def stop_record(self, wait: bool = False) -> bool:
+        thread_to_join: threading.Thread | None = None
+        with self._record_lock:
+            if self._record_finalizing and not self._recording:
+                thread_to_join = self._record_finalize_thread
+                if not wait:
+                    return False
+                if thread_to_join is None:
+                    return True
+            elif self._capture is None or not self._recording:
+                return False
+            else:
+                capture = self._capture
+                mjpg_path = self._record_path
+                csv_path = self._csv_path
+                self._recording = False
+                self._record_path = None
+                self._csv_path = None
+                self._record_finalizing = True
+                if wait:
+                    thread_to_join = None
+                else:
+                    thread = threading.Thread(
+                        target=self._finalize_recording,
+                        args=(capture, mjpg_path, csv_path),
+                        name="TinySeRecordFinalize",
+                        daemon=True,
+                    )
+                    self._record_finalize_thread = thread
+                    thread.start()
+                    return True
+
+        if thread_to_join is not None:
+            if thread_to_join is not threading.current_thread():
+                thread_to_join.join()
+            return True
+
+        self._finalize_recording(capture, mjpg_path, csv_path)
+        return True
+
+    def _finalize_recording(
+        self,
+        capture: TinySeDShowCapture,
+        mjpg_path: Path | None,
+        csv_path: Path | None,
+    ) -> None:
         try:
-            self._capture.stop_record()
-        except Exception as exc:
-            self.error.emit(str(exc))
-        finally:
-            self._recording = False
-            self._record_path = None
-            self._csv_path = None
-        if mjpg_path is not None and csv_path is not None:
             try:
-                avi_path = mjpg_to_avi(mjpg_path, csv_path)
-                self.recording_finished.emit(str(avi_path))
+                capture.stop_record()
             except Exception as exc:
-                self.error.emit(f"MJPEG→AVI 转换失败: {exc}")
-                # 转换失败时仍发送原始路径
-                self.recording_finished.emit(str(mjpg_path))
+                self.error.emit(str(exc))
+
+            if mjpg_path is not None and csv_path is not None:
+                try:
+                    avi_path = mjpg_to_avi(mjpg_path, csv_path)
+                    self.recording_finished.emit(str(avi_path))
+                except Exception as exc:
+                    self.error.emit(f"MJPEG→AVI 转换失败: {exc}")
+                    self.recording_finished.emit(str(mjpg_path))
+        finally:
+            with self._record_lock:
+                self._record_finalizing = False
+                if self._record_finalize_thread is threading.current_thread():
+                    self._record_finalize_thread = None
 
     def set_mirror(self, on: bool):
         self._mirror = on
@@ -435,8 +494,8 @@ class TinySeCameraCapture(QObject):
 
     def _cleanup(self):
         self._running = False
-        if self._recording:
-            self.stop_record()
+        if self.is_record_busy:
+            self.stop_record(wait=True)
         if self._capture is not None:
             start = time.perf_counter()
             self._capture.close()
@@ -641,7 +700,9 @@ class TinySeCameraWidget(QWidget):
         capture = self._capture
         if capture is not None:
             if capture.is_recording:
-                capture.stop_record()
+                if capture.stop_record():
+                    self._btn_record.setText("Saving...")
+                    self._btn_record.setEnabled(False)
             capture.set_preview_enabled(False)
         self._preview_active = False
         self._preview_start_time = None
@@ -652,8 +713,8 @@ class TinySeCameraWidget(QWidget):
         capture = self._capture
         thread = self._thread
         if capture is not None:
-            if capture.is_recording:
-                capture.stop_record()
+            if capture.is_record_busy:
+                capture.stop_record(wait=True)
             start = time.perf_counter()
             capture.stop()
             _log_timing(f"ui.capture.stop.call={time.perf_counter() - start:.3f}s")
@@ -672,13 +733,17 @@ class TinySeCameraWidget(QWidget):
         capture = self._capture
         if capture is None:
             return
+        if capture.is_record_busy and not capture.is_recording:
+            return
         if not capture.is_recording:
             path = capture.start_record()
             if path:
                 self._record_path = path
                 self._btn_record.setText("Stop Recording")
         else:
-            capture.stop_record()
+            if capture.stop_record():
+                self._btn_record.setText("Saving...")
+                self._btn_record.setEnabled(False)
 
     def _on_frame(self, frame: np.ndarray):
         if not self._preview_active:
@@ -701,6 +766,7 @@ class TinySeCameraWidget(QWidget):
     def _on_recording_finished(self, path: str):
         self._record_path = None
         self._btn_record.setText("Record")
+        self._btn_record.setEnabled(self._preview_active)
         QMessageBox.information(self, "Recording Finished", path)
 
     def _on_error(self, message: str):
@@ -772,7 +838,11 @@ class TinySeCameraWidget(QWidget):
         # 控制面板在采集期间保持可用；DShow 运行时部分命令可能被驱动拒绝，
         # 但用户可随时尝试。需重启预览才能保证全部生效。
         if not running:
-            self._btn_record.setText("Record")
+            if self._capture is not None and self._capture.is_record_busy:
+                self._btn_record.setText("Saving...")
+                self._btn_record.setEnabled(False)
+            else:
+                self._btn_record.setText("Record")
             self._stats.setText("Idle")
 
     def closeEvent(self, event):
