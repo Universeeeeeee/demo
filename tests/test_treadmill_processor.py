@@ -5,12 +5,19 @@ test_treadmill_processor.py — Tests for treadmill processor and accumulator
 import pytest
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 from config.treadmill_report import TreadmillRunningReport, TreadmillStepResult
+from engine.contact_tracker import ContactState, GaitStepEvent
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_processor import TreadmillProcessor
 from engine.modes.treadmill_running_accumulator import (
     RUNNING_OVERLAP_TOLERANCE_S,
     TreadmillRunningAccumulator,
+)
+from engine.modes.treadmill_v2 import (
+    TreadmillContactSnapshot,
+    TreadmillCoordinateSystem,
+    TreadmillFootResolver,
+    TreadmillLengthCalculator,
 )
 
 
@@ -185,6 +192,108 @@ def test_treadmill_distance_metrics_are_derived_from_belt_speed_and_time():
     assert row.stride_length_cm == 200.0
 
 
+def test_treadmill_length_calculator_uses_belt_plus_device_delta():
+    result = TreadmillLengthCalculator.step_length(
+        prev_ref_x_cm=0.0,
+        curr_ref_x_cm=20.0,
+        step_time_s=0.5,
+        belt_speed_cm_s=100.0,
+        direction="Opposite side",
+    )
+
+    assert result.method == "belt_plus_device_delta"
+    assert result.quality == "ok"
+    assert result.belt_distance_cm == pytest.approx(50.0)
+    assert result.device_delta_cm == pytest.approx(20.0)
+    assert result.length_cm == pytest.approx(70.0)
+
+
+def test_treadmill_length_calculator_reverses_device_delta_by_direction():
+    result = TreadmillLengthCalculator.step_length(
+        prev_ref_x_cm=0.0,
+        curr_ref_x_cm=20.0,
+        step_time_s=0.5,
+        belt_speed_cm_s=100.0,
+        direction="Interface side",
+    )
+
+    assert result.direction_sign == -1
+    assert result.length_cm == pytest.approx(30.0)
+
+
+def test_treadmill_snapshot_semantics_gate_device_delta():
+    safe = TreadmillContactSnapshot(
+        contact_id=1,
+        foot_side="left",
+        time_s=1.0,
+        reference_x_cm=10.0,
+        heel_cm=0.0,
+        toe_cm=10.0,
+        source="stable_touch_window",
+        reference_projected_to_event=True,
+    )
+    unsafe = TreadmillContactSnapshot(
+        contact_id=2,
+        foot_side="right",
+        time_s=1.5,
+        reference_x_cm=30.0,
+        heel_cm=20.0,
+        toe_cm=30.0,
+        source="stable_touch_window",
+        reference_projected_to_event=False,
+    )
+    confirmed = TreadmillContactSnapshot(
+        contact_id=3,
+        foot_side="right",
+        time_s=2.0,
+        reference_x_cm=99.0,
+        heel_cm=80.0,
+        toe_cm=99.0,
+        source="confirmed_frame",
+    )
+
+    assert safe.is_semantically_safe_for_device_delta() is True
+    assert unsafe.is_semantically_safe_for_device_delta() is False
+    assert confirmed.is_semantically_safe_for_device_delta() is False
+
+
+def test_heel_toe_from_cluster_prefers_observed_cluster_boundaries():
+    ref = TreadmillCoordinateSystem.heel_toe_from_cluster(
+        direction="Opposite side",
+        cluster_start_cm=10.0,
+        cluster_end_cm=30.0,
+        centroid_cm=20.0,
+        foot_length_cm=100.0,
+    )
+
+    assert ref.heel_cm == 30.0
+    assert ref.toe_cm == 10.0
+    assert ref.source == "touch_boundary"
+
+
+def test_foot_resolver_uses_active_contact_side_mapping_for_double_support():
+    resolver = TreadmillFootResolver()
+    diagnostics: dict[str, object] = {}
+
+    first = resolver.resolve_touch(
+        contact_id=1,
+        active_sides_by_contact_id={},
+        previous_touch_side=None,
+        manual_starting_foot=None,
+        diagnostics=diagnostics,
+    )
+    second = resolver.resolve_touch(
+        contact_id=2,
+        active_sides_by_contact_id={1: first},
+        previous_touch_side=first,
+        manual_starting_foot=None,
+        diagnostics=diagnostics,
+    )
+
+    assert first == "left"
+    assert second == "right"
+
+
 def test_gait_accumulator_allows_double_support_without_no_step():
     config = TreadmillGaitConfig(
         stop_type="Software command",
@@ -210,6 +319,172 @@ def test_gait_accumulator_allows_double_support_without_no_step():
     assert rows[1].step_length_cm == pytest.approx(50.0)
     assert rows[0].flight_time_s is None
     assert rows[1].flight_time_s is None
+
+
+def test_gait_accumulator_uses_safe_touch_references_for_step_length():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Opposite side",
+    )
+    acc = TreadmillGaitAccumulator(config)
+
+    left = TreadmillContactSnapshot(
+        contact_id=1,
+        foot_side="left",
+        time_s=0.0,
+        reference_x_cm=0.0,
+        heel_cm=0.0,
+        toe_cm=0.0,
+        source="touch_boundary",
+    )
+    right = TreadmillContactSnapshot(
+        contact_id=2,
+        foot_side="right",
+        time_s=0.5,
+        reference_x_cm=20.0,
+        heel_cm=20.0,
+        toe_cm=20.0,
+        source="touch_boundary",
+    )
+
+    acc.record_touch(0.0, "left", 0.0, 0.0, snapshot=left)
+    acc.record_lift(0.2, "left")
+    acc.record_touch(0.5, "right", 20.0, 20.0, snapshot=right)
+    acc.record_lift(0.8, "right")
+
+    row = acc.rows[1]
+    assert row.step_length_cm == pytest.approx(70.0)
+    assert row.belt_distance_cm == pytest.approx(50.0)
+    assert row.device_delta_cm == pytest.approx(20.0)
+    assert row.step_length_method == "belt_plus_device_delta"
+    assert row.length_quality == "ok"
+
+
+def test_confirmed_frame_reference_forces_speed_only_fallback():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Opposite side",
+    )
+    acc = TreadmillGaitAccumulator(config)
+
+    left = TreadmillContactSnapshot(
+        contact_id=1,
+        foot_side="left",
+        time_s=0.0,
+        reference_x_cm=0.0,
+        heel_cm=0.0,
+        toe_cm=0.0,
+        source="touch_boundary",
+    )
+    right = TreadmillContactSnapshot(
+        contact_id=2,
+        foot_side="right",
+        time_s=0.5,
+        reference_x_cm=99.0,
+        heel_cm=99.0,
+        toe_cm=99.0,
+        source="confirmed_frame",
+    )
+
+    acc.record_touch(0.0, "left", 0.0, 0.0, snapshot=left)
+    acc.record_lift(0.2, "left")
+    acc.record_touch(0.5, "right", 99.0, 99.0, snapshot=right)
+    acc.record_lift(0.8, "right")
+
+    row = acc.rows[1]
+    assert row.step_length_cm == pytest.approx(50.0)
+    assert row.step_length_method == "speed_only"
+    assert row.foot_ref_source == "confirmed_frame"
+    assert row.length_quality == "fallback_speed_only"
+
+
+def test_stride_length_uses_same_side_touch_references_not_step_times_two():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Opposite side",
+    )
+    acc = TreadmillGaitAccumulator(config)
+
+    l1 = TreadmillContactSnapshot(
+        contact_id=1,
+        foot_side="left",
+        time_s=0.0,
+        reference_x_cm=0.0,
+        heel_cm=0.0,
+        toe_cm=0.0,
+        source="touch_boundary",
+    )
+    r1 = TreadmillContactSnapshot(
+        contact_id=2,
+        foot_side="right",
+        time_s=0.5,
+        reference_x_cm=0.0,
+        heel_cm=0.0,
+        toe_cm=0.0,
+        source="touch_boundary",
+    )
+    l2 = TreadmillContactSnapshot(
+        contact_id=3,
+        foot_side="left",
+        time_s=1.1,
+        reference_x_cm=20.0,
+        heel_cm=20.0,
+        toe_cm=20.0,
+        source="touch_boundary",
+    )
+
+    acc.record_touch(0.0, "left", 0.0, 0.0, snapshot=l1)
+    acc.record_lift(0.2, "left")
+    acc.record_touch(0.5, "right", 0.0, 0.0, snapshot=r1)
+    acc.record_lift(0.7, "right")
+    acc.record_touch(1.1, "left", 20.0, 20.0, snapshot=l2)
+    acc.record_lift(1.3, "left")
+
+    row = acc.rows[2]
+    assert row.step_length_cm == pytest.approx(80.0)
+    assert row.stride_length_cm == pytest.approx(130.0)
+    assert row.stride_length_cm != pytest.approx(row.step_length_cm * 2.0)
+
+
+def test_processor_uses_contact_boundary_times_not_confirmed_frame_time():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Opposite side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    contact = ContactState(
+        contact_id=1,
+        touch_time=1.0,
+        lift_time=1.4,
+        centroid_at_touch=10.0,
+        latest_centroid=20.0,
+        cluster_start_cm_at_touch=5.0,
+        cluster_end_cm_at_touch=15.0,
+        latest_cluster_start_cm=15.0,
+        latest_cluster_end_cm=25.0,
+    )
+
+    processor._handle_step_event(
+        GaitStepEvent(kind="touch", contact=contact),
+        rel_time=1.03,
+    )
+    processor._handle_step_event(
+        GaitStepEvent(kind="lift", contact=contact),
+        rel_time=1.43,
+    )
+
+    row = processor._accumulator.rows[0]
+    assert row.contact_time_s == pytest.approx(0.4)
+    assert row.foot_ref_source == "touch_boundary"
+    assert row.foot_ref_x_curr_cm == pytest.approx(5.0)
 
 
 def test_gait_accumulator_filters_step_length_below_minimum():

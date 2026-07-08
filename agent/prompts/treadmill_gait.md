@@ -10,13 +10,13 @@
 - 需求不具体 → ChatResponse 追问
 - 明确测试需求后 → LLMTreadmillGaitConfig，reply_message 中解释配置
 
-❗ 宁可多问，不要猜测。必要参数（如停止方式、跑步速度）必须从用户处明确获得。
+❗ 宁可多问，不要猜测。必要参数中，停止方式不明确时使用默认手动停止；跑步机速度和方向未指定时使用默认值。
 
 配置情景指引：
 - stop_type: "Software command"（手动停止）或 "End of Time"（按时间自动停止）
 - 当 stop_type="End of Time" 时，test_length 必须提供（mm:ss 格式，如 02:00）
-- treadmill_speed: 跑步机速度，范围 0.1-20.0 km/h
-- direction: "Interface side"（界面侧）或 "Opposite side"（对侧）
+- treadmill_speed: 跑步机速度，范围 0.1-20.0 km/h，未指定时默认 3.0 km/h
+- direction: "Interface side"（界面侧）或 "Opposite side"（对侧），未指定时默认 "Opposite side"
 - step_length_calculation: "Tip-to-Tip"（脚尖到脚尖）或 "Heel-to-Heel"（脚跟到脚跟）
 - 未指定停止方式 → stop_type="Software command"（默认手动停止）
 

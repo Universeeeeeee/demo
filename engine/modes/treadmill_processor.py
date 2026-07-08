@@ -8,8 +8,8 @@ Pipeline per process_raw_frame call:
   4. Delegate touch/lift events to TreadmillAccumulator
   5. Return event list for Qt signal emission
 
-All distance metrics come from treadmill_speed x time in the accumulator.
-LED clusters are used ONLY for timing (contact/lift detection).
+Distance metrics use treadmill belt travel plus safe touch-boundary foot
+reference deltas when available, with speed-only fallback diagnostics.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Any, Final, List
 
 from config.treadmill_config import (
     Direction,
+    FootSide,
     TreadmillBaseConfig,
     TreadmillGaitConfig,
     TreadmillRunningConfig,
@@ -31,9 +32,14 @@ from config.treadmill_report import (
 )
 from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 from engine.modes.base import ModeProcessor
-from engine.modes.treadmill_accumulator import TreadmillAccumulator
+from engine.modes.treadmill_accumulator import TreadmillAccumulator, step_reference_cm
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_running_accumulator import TreadmillRunningAccumulator
+from engine.modes.treadmill_v2 import (
+    TreadmillContactSnapshot,
+    TreadmillCoordinateSystem,
+    TreadmillFootResolver,
+)
 from engine.spatial_clusterer import ClusterTracker, extract_clusters
 
 log = logging.getLogger(__name__)
@@ -75,6 +81,9 @@ class TreadmillProcessor:
     _accumulator: TreadmillAccumulator
     _heel_offset_cm: float
     _toe_offset_cm: float
+    _foot_resolver: TreadmillFootResolver
+    _active_sides_by_contact_id: dict[int, FootSide]
+    _previous_touch_side: FootSide | None
 
     def __init__(self, config: TreadmillBaseConfig, mode_name: str) -> None:
         self.name = mode_name
@@ -95,6 +104,9 @@ class TreadmillProcessor:
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker = ContactBasedGaitTracker()
         self._accumulator = self._make_accumulator()
+        self._foot_resolver = TreadmillFootResolver()
+        self._active_sides_by_contact_id = {}
+        self._previous_touch_side = None
 
     # ---- ModeProcessor interface ----
 
@@ -104,6 +116,9 @@ class TreadmillProcessor:
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker.reset()
         self._accumulator = self._make_accumulator()
+        self._foot_resolver = TreadmillFootResolver()
+        self._active_sides_by_contact_id = {}
+        self._previous_touch_side = None
 
     def process_raw_frame(
         self, contact_bits: List[int], rel_time: float, abs_time: float
@@ -254,34 +269,94 @@ class TreadmillProcessor:
         if not isinstance(ev, GaitStepEvent):
             return
 
-        # Determine side from foot_label: "A" -> "left", "B" -> "right"
-        # (or vice-versa depending on direction; for simplicity map A=left)
-        side = "left"
-        if ev.contact.foot_label == "B":
-            side = "right"
-        elif ev.contact.foot_label is None:
-            side = "unknown"
-
-        centroid_cm = ev.contact.centroid_at_touch or ev.contact.latest_centroid or 0.0
-
-        # Heel/toe derived from centroid + foot-length offset.
-        # For "Interface side", heel is left of centroid, toe is right.
-        # (LED index increases left-to-right at the interface.)
-        if self._direction == "Interface side":
-            heel_cm = centroid_cm - self._heel_offset_cm
-            toe_cm = centroid_cm + self._toe_offset_cm
-        else:
-            # Opposite side: reversed perspective
-            heel_cm = centroid_cm + self._heel_offset_cm
-            toe_cm = centroid_cm - self._toe_offset_cm
-
         if ev.kind == "touch":
+            diagnostics: dict[str, object] = {}
+            manual_starting_foot = (
+                self._config.starting_foot_override
+                if self._previous_touch_side is None
+                else None
+            )
+            side = self._foot_resolver.resolve_touch(
+                contact_id=ev.contact.contact_id,
+                active_sides_by_contact_id=self._active_sides_by_contact_id,
+                previous_touch_side=self._previous_touch_side,
+                manual_starting_foot=manual_starting_foot,
+                diagnostics=diagnostics,
+            )
+            if side in ("left", "right"):
+                self._previous_touch_side = side
+            self._active_sides_by_contact_id[ev.contact.contact_id] = side
+
+            snapshot = self._contact_snapshot(ev, side)
             self._accumulator.record_touch(
-                time_s=rel_time, side=side, heel_cm=heel_cm, toe_cm=toe_cm
+                time_s=snapshot.time_s,
+                side=side,
+                heel_cm=snapshot.heel_cm,
+                toe_cm=snapshot.toe_cm,
+                snapshot=snapshot,
             )
         elif ev.kind == "lift":
+            side = self._active_sides_by_contact_id.get(
+                ev.contact.contact_id, "unknown"
+            )
+            lift_time = (
+                ev.contact.lift_time
+                if ev.contact.lift_time is not None
+                else rel_time
+            )
             self.lift_count += 1
-            self._accumulator.record_lift(time_s=rel_time, side=side)
+            self._accumulator.record_lift(time_s=lift_time, side=side)
+            self._active_sides_by_contact_id.pop(ev.contact.contact_id, None)
+
+    def _contact_snapshot(
+        self, ev: GaitStepEvent, side: FootSide
+    ) -> TreadmillContactSnapshot:
+        contact = ev.contact
+        touch_time = contact.touch_time
+        if touch_time is None:
+            touch_time = contact.first_seen_time
+
+        centroid_cm = (
+            contact.centroid_at_touch
+            if contact.centroid_at_touch is not None
+            else contact.latest_centroid
+            if contact.latest_centroid is not None
+            else 0.0
+        )
+        foot_length_cm = (
+            self._config.foot_length_cm_snapshot
+            if self._config.foot_length_cm_snapshot is not None
+            else self._heel_offset_cm + self._toe_offset_cm
+        )
+        foot_ref = TreadmillCoordinateSystem.heel_toe_from_cluster(
+            direction=self._direction,
+            cluster_start_cm=contact.cluster_start_cm_at_touch,
+            cluster_end_cm=contact.cluster_end_cm_at_touch,
+            centroid_cm=centroid_cm,
+            foot_length_cm=foot_length_cm,
+        )
+        source = foot_ref.source
+        if (
+            source == "fallback_centroid"
+            and contact.centroid_at_touch is None
+            and contact.latest_centroid is not None
+        ):
+            source = "confirmed_frame"
+
+        reference_cm = step_reference_cm(
+            self._config,
+            foot_ref.heel_cm,
+            foot_ref.toe_cm,
+        )
+        return TreadmillContactSnapshot(
+            contact_id=contact.contact_id,
+            foot_side=side,
+            time_s=touch_time,
+            reference_x_cm=reference_cm,
+            heel_cm=foot_ref.heel_cm,
+            toe_cm=foot_ref.toe_cm,
+            source=source,
+        )
 
 
 __all__ = ["TreadmillProcessor"]

@@ -105,6 +105,7 @@ def test_treadmill_metric_rows_include_validity_columns():
     assert rows == [[
         1, "left", "valid", True, True, 0.25, None,
         None, 70.0, None, None, "none", None, None,
+        None, None, None, None, None, None, None, None, None, None,
     ]]
 
 
@@ -133,6 +134,15 @@ def test_treadmill_metric_rows_match_export_header_order():
                 distance_cm=123.0,
                 speed_m_s=1.5,
                 step_reference_cm=42.0,
+                belt_speed_cm_s=150.0,
+                belt_distance_cm=105.0,
+                foot_ref_x_prev_cm=10.0,
+                foot_ref_x_curr_cm=42.0,
+                device_delta_cm=32.0,
+                direction_sign=1,
+                step_length_method="belt_plus_device_delta",
+                foot_ref_source="touch_boundary",
+                length_quality="ok",
             ),
         ),
         metric_summaries={},
@@ -147,3 +157,7 @@ def test_treadmill_metric_rows_match_export_header_order():
     assert values["step_time_s"] == 0.70
     assert values["step_length_cm"] == 70.0
     assert values["step_reference_cm"] == 42.0
+    assert values["belt_speed_cm_s"] == 150.0
+    assert values["device_delta_cm"] == 32.0
+    assert values["step_length_method"] == "belt_plus_device_delta"
+    assert values["length_quality"] == "ok"

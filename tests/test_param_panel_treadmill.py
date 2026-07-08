@@ -134,7 +134,21 @@ class TestParamPanelTreadmill:
 
         config = self._panel.get_config()
         assert config.treadmill_speed == 8.5
-        assert config.direction == "Interface side"
+        assert config.direction == "Opposite side"
+
+    def test_treadmill_initial_defaults_are_three_kmh_and_opposite_side(self) -> None:
+        self._select_test_type("Treadmill Gait Test")
+
+        speed_widget = self._panel._widgets["treadmill_speed"]
+        direction_widget = self._panel._widgets["direction"]
+        assert isinstance(speed_widget, QDoubleSpinBox)
+        assert isinstance(direction_widget, QComboBox)
+        assert speed_widget.value() == 3.0
+        assert direction_widget.currentText() == "Opposite side"
+
+        config = self._panel.get_config()
+        assert config.treadmill_speed == 3.0
+        assert config.direction == "Opposite side"
 
     def test_get_config_returns_compatible_after_jump_switch(self) -> None:
         """Switching back to Jump Test should return TestConfig."""

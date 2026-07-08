@@ -102,6 +102,15 @@ class TreadmillStepResult:
     step_length_cm: float | None = None
     step_reference_cm: float | None = None
     stride_length_cm: float | None = None
+    belt_speed_cm_s: float | None = None
+    belt_distance_cm: float | None = None
+    foot_ref_x_prev_cm: float | None = None
+    foot_ref_x_curr_cm: float | None = None
+    device_delta_cm: float | None = None
+    direction_sign: int | None = None
+    step_length_method: str | None = None
+    foot_ref_source: str | None = None
+    length_quality: str | None = None
     speed_m_s: float | None = None
     cadence_steps_per_s: float | None = None
     double_support_s: float | None = None

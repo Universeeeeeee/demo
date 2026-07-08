@@ -377,6 +377,7 @@ class ReportView(QWidget):
         columns = [
             "#", "脚", "状态", "有效", "纳入统计",
             "触地时间(s)", "离地时间(s)", "步长(cm)", "参考点(cm)", "步速(m/s)",
+            "算法", "质量", "设备差(cm)",
         ]
         table = QTableWidget(len(steps), len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -403,6 +404,9 @@ class ReportView(QWidget):
                 _fmt(step.step_length_cm),
                 _fmt(step.step_reference_cm),
                 _fmt(step.speed_m_s),
+                step.step_length_method or "",
+                step.length_quality or "",
+                _fmt(step.device_delta_cm),
             ]
             for col_idx, text in enumerate(items):
                 item = QTableWidgetItem(text)
@@ -652,6 +656,16 @@ TREADMILL_EXPORT_COLUMNS = [
     "correction_source",
     "statistics_exclusion_reason",
     "step_reference_cm",
+    "stride_length_cm",
+    "belt_speed_cm_s",
+    "belt_distance_cm",
+    "foot_ref_x_prev_cm",
+    "foot_ref_x_curr_cm",
+    "device_delta_cm",
+    "direction_sign",
+    "step_length_method",
+    "foot_ref_source",
+    "length_quality",
 ]
 
 
@@ -710,6 +724,16 @@ def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport)
                 step.correction_source,
                 step.statistics_exclusion_reason,
                 step.step_reference_cm,
+                step.stride_length_cm,
+                step.belt_speed_cm_s,
+                step.belt_distance_cm,
+                step.foot_ref_x_prev_cm,
+                step.foot_ref_x_curr_cm,
+                step.device_delta_cm,
+                step.direction_sign,
+                step.step_length_method,
+                step.foot_ref_source,
+                step.length_quality,
             ]
         )
     return rows

@@ -178,12 +178,12 @@ class LLMTreadmillGaitConfig(BaseModel):
         description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
     )
     treadmill_speed: float = Field(
-        default=5.0, ge=0.1, le=20.0,
-        description="跑步机速度(km/h), 范围 0.1-20.0",
+        default=3.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 3.0, 范围 0.1-20.0",
     )
     direction: Literal["Interface side", "Opposite side"] = Field(
-        default="Interface side",
-        description="跑步方向: Interface side=界面侧, Opposite side=对侧",
+        default="Opposite side",
+        description="跑步方向: Interface side=界面侧, Opposite side=对侧(默认)",
     )
 
     # ---- Layer 3: 滤波和步态参数 ----
@@ -309,12 +309,12 @@ class LLMTreadmillRunningConfig(BaseModel):
         description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
     )
     treadmill_speed: float = Field(
-        default=5.0, ge=0.1, le=20.0,
-        description="跑步机速度(km/h), 范围 0.1-20.0",
+        default=3.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 3.0, 范围 0.1-20.0",
     )
     direction: Literal["Interface side", "Opposite side"] = Field(
-        default="Interface side",
-        description="跑步方向: Interface side=界面侧, Opposite side=对侧",
+        default="Opposite side",
+        description="跑步方向: Interface side=界面侧, Opposite side=对侧(默认)",
     )
 
     # ---- Layer 3: 滤波和跑步参数 ----
@@ -415,4 +415,3 @@ class AthleteProfile:
     focus_side: str = ""            # "" / "left" / "right" / "both"
     device_channels: int = 8
     history: list[dict] = field(default_factory=list)
-
