@@ -3,11 +3,172 @@
 from __future__ import annotations
 
 import sys
+import ctypes
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _install_camera_dependency_stubs() -> None:
+    """Provide tiny import-time stubs when Qt/OpenCV are unavailable."""
+
+    if not hasattr(ctypes, "WINFUNCTYPE"):
+        ctypes.WINFUNCTYPE = ctypes.CFUNCTYPE
+
+    try:
+        import cv2  # noqa: F401
+    except ModuleNotFoundError:
+        cv2 = types.ModuleType("cv2")
+        cv2.COLOR_BGR2RGB = 0
+        cv2.IMREAD_COLOR = 1
+        cv2.INTER_AREA = 0
+        cv2.VideoWriter_fourcc = lambda *args: 0
+        cv2.cvtColor = lambda frame, _code: frame
+        cv2.resize = lambda frame, _size, interpolation=None: frame
+        cv2.imdecode = lambda _data, _flags: None
+        sys.modules["cv2"] = cv2
+
+    try:
+        import numpy  # noqa: F401
+    except ModuleNotFoundError:
+        numpy = types.ModuleType("numpy")
+        numpy.ndarray = object
+        numpy.uint8 = object
+        numpy.frombuffer = lambda data, dtype=None: data
+        sys.modules["numpy"] = numpy
+
+    try:
+        from qtpy.QtCore import QObject, QThread, Qt, Signal  # noqa: F401
+        from qtpy.QtGui import QImage, QPixmap  # noqa: F401
+        from qtpy.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QVBoxLayout, QWidget  # noqa: F401
+    except ModuleNotFoundError:
+        qtpy = types.ModuleType("qtpy")
+        qtcore = types.ModuleType("qtpy.QtCore")
+        qtgui = types.ModuleType("qtpy.QtGui")
+        qtwidgets = types.ModuleType("qtpy.QtWidgets")
+
+        class _Signal:
+            def connect(self, _slot):
+                pass
+
+            def emit(self, *args):
+                pass
+
+        class _QObject:
+            def __init__(self, parent=None):
+                self.parent = parent
+
+            def moveToThread(self, _thread):
+                pass
+
+        class _QThread:
+            def __init__(self, parent=None):
+                self.parent = parent
+                self.started = _Signal()
+                self.finished = _Signal()
+
+            def start(self):
+                pass
+
+            def quit(self):
+                pass
+
+            def wait(self, _timeout):
+                return True
+
+            def deleteLater(self):
+                pass
+
+        class _Qt:
+            AlignCenter = 0
+
+        class _QImage:
+            Format_RGB888 = 0
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def copy(self):
+                return self
+
+        class _QPixmap:
+            @staticmethod
+            def fromImage(image):
+                return image
+
+        class _Widget:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __getattr__(self, _name):
+                return lambda *args, **kwargs: None
+
+        class _MessageBox(_Widget):
+            @staticmethod
+            def information(*args, **kwargs):
+                pass
+
+            @staticmethod
+            def warning(*args, **kwargs):
+                pass
+
+            @staticmethod
+            def critical(*args, **kwargs):
+                pass
+
+        qtcore.QObject = _QObject
+        qtcore.QThread = _QThread
+        qtcore.Signal = lambda *args, **kwargs: _Signal()
+        qtcore.Qt = _Qt
+        qtgui.QImage = _QImage
+        qtgui.QPixmap = _QPixmap
+        qtwidgets.QHBoxLayout = _Widget
+        qtwidgets.QLabel = _Widget
+        qtwidgets.QMessageBox = _MessageBox
+        qtwidgets.QVBoxLayout = _Widget
+        qtwidgets.QWidget = _Widget
+        sys.modules["qtpy"] = qtpy
+        sys.modules["qtpy.QtCore"] = qtcore
+        sys.modules["qtpy.QtGui"] = qtgui
+        sys.modules["qtpy.QtWidgets"] = qtwidgets
+
+    try:
+        import dayu_widgets  # noqa: F401
+    except ModuleNotFoundError:
+        dayu_widgets = types.ModuleType("dayu_widgets")
+        dayu_widgets.dayu_theme = SimpleNamespace(apply=lambda _widget: None)
+        sys.modules["dayu_widgets"] = dayu_widgets
+
+        class _DayuWidget:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __getattr__(self, _name):
+                return lambda *args, **kwargs: None
+
+            def primary(self):
+                return self
+
+        for module_name, attr_name in (
+            ("dayu_widgets.check_box", "MCheckBox"),
+            ("dayu_widgets.collapse", "MSectionItem"),
+            ("dayu_widgets.combo_box", "MComboBox"),
+            ("dayu_widgets.divider", "MDivider"),
+            ("dayu_widgets.label", "MLabel"),
+            ("dayu_widgets.push_button", "MPushButton"),
+        ):
+            module = types.ModuleType(module_name)
+            setattr(module, attr_name, _DayuWidget)
+            sys.modules[module_name] = module
+        qt_module = types.ModuleType("dayu_widgets.qt")
+        qt_module.application = lambda: None
+        sys.modules["dayu_widgets.qt"] = qt_module
+
+
+_install_camera_dependency_stubs()
 
 from camera.tinyse_camera import TinySeCameraControl, TinySeCameraWidget
 
@@ -19,6 +180,12 @@ class _FakeCapture:
         self.preview_states: list[bool] = []
         self.stop_called = False
         self.stop_record_called = False
+        self.stop_record_waits: list[bool] = []
+        self._record_busy = False
+
+    @property
+    def is_record_busy(self) -> bool:
+        return self.is_recording or self._record_busy
 
     def set_preview_enabled(self, enabled: bool) -> None:
         self.preview_states.append(enabled)
@@ -26,8 +193,12 @@ class _FakeCapture:
     def stop(self) -> None:
         self.stop_called = True
 
-    def stop_record(self) -> None:
+    def stop_record(self, wait: bool = False) -> bool:
         self.stop_record_called = True
+        self.stop_record_waits.append(wait)
+        self.is_recording = False
+        self._record_busy = True
+        return True
 
 
 class _FakeThread:
@@ -72,6 +243,18 @@ class _FakeControlDll:
 
     def obsbot_close(self) -> None:
         self.close_calls += 1
+
+
+class _FakeButton:
+    def __init__(self) -> None:
+        self.text = ""
+        self.enabled = True
+
+    def setText(self, text: str) -> None:
+        self.text = text
+
+    def setEnabled(self, enabled: bool) -> None:
+        self.enabled = enabled
 
 
 class TinySeCameraWidgetLifecycleTest(unittest.TestCase):
@@ -172,6 +355,60 @@ class TinySeCameraWidgetLifecycleTest(unittest.TestCase):
 
         self.assertEqual(dll.close_calls, 0)
         self.assertIsNone(control._dll)
+
+    def test_record_button_shows_saving_after_stop_record_starts(self):
+        capture = _FakeCapture()
+        capture.is_recording = True
+        button = _FakeButton()
+        widget = SimpleNamespace(
+            _capture=capture,
+            _btn_record=button,
+            _record_path="camera/recordings/tinyse_test.mjpg",
+        )
+
+        TinySeCameraWidget._on_record(widget)
+
+        self.assertEqual(capture.stop_record_waits, [False])
+        self.assertEqual(button.text, "Saving...")
+        self.assertFalse(button.enabled)
+
+    def test_recording_finished_reenables_record_button_when_preview_active(self):
+        button = _FakeButton()
+        widget = SimpleNamespace(
+            _record_path="camera/recordings/tinyse_test.mjpg",
+            _btn_record=button,
+            _preview_active=True,
+        )
+
+        TinySeCameraWidget._on_recording_finished(widget, "camera/recordings/tinyse_test.avi")
+
+        self.assertIsNone(widget._record_path)
+        self.assertEqual(button.text, "Record")
+        self.assertTrue(button.enabled)
+
+    def test_shutdown_capture_waits_for_record_finalize_before_close(self):
+        capture = _FakeCapture()
+        capture.is_recording = True
+        thread = _FakeThread()
+        running_states: list[bool] = []
+        widget = SimpleNamespace(
+            _capture=capture,
+            _thread=thread,
+            _preview_active=True,
+            _preview_start_time=1.0,
+            _set_running=lambda running: running_states.append(running),
+        )
+
+        TinySeCameraWidget._shutdown_capture(widget)
+
+        self.assertEqual(capture.stop_record_waits, [True])
+        self.assertTrue(capture.stop_called)
+        self.assertTrue(thread.quit_called)
+        self.assertTrue(thread.wait_called)
+        self.assertIsNone(widget._capture)
+        self.assertIsNone(widget._thread)
+        self.assertFalse(widget._preview_active)
+        self.assertEqual(running_states, [False])
 
 
 if __name__ == "__main__":

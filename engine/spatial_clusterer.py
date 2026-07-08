@@ -77,6 +77,8 @@ class TrackedCluster:
     centroid_end: float        # 最后出现时的质心位置（cm）
     foot_label: Optional[str] = None  # "A" 或 "B"，用于左右脚区分
     length_cm: float = 0.0     # 最新簇宽度 (cm)
+    cluster_start_cm: float | None = None
+    cluster_end_cm: float | None = None
     seen_count: int = 0        # 累计被观测帧数
     miss_count: int = 0        # 连续丢失帧数
     is_active: bool = True     # 是否仍活跃
@@ -217,6 +219,8 @@ class ClusterTracker:
             track.disappear_time = timestamp
             track.centroid_end = cluster.centroid_cm
             track.length_cm = cluster.length * self.spacing_cm
+            track.cluster_start_cm = cluster.start * self.spacing_cm
+            track.cluster_end_cm = cluster.end * self.spacing_cm
             track.centroid_history.append((timestamp, cluster.centroid_cm))
             track.seen_count += 1
             track.miss_count = 0
@@ -245,6 +249,8 @@ class ClusterTracker:
                     centroid_start=cluster.centroid_cm,
                     centroid_end=cluster.centroid_cm,
                     length_cm=cluster.length * self.spacing_cm,
+                    cluster_start_cm=cluster.start * self.spacing_cm,
+                    cluster_end_cm=cluster.end * self.spacing_cm,
                     seen_count=1,
                     miss_count=0,
                     is_active=True,
@@ -260,6 +266,8 @@ class ClusterTracker:
                 "track_id": track.track_id,
                 "centroid_cm": track.centroid_end,
                 "length_cm": track.length_cm,
+                "cluster_start_cm": track.cluster_start_cm,
+                "cluster_end_cm": track.cluster_end_cm,
                 "seen_count": track.seen_count,
                 "miss_count": track.miss_count,
             }

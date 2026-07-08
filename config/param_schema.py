@@ -76,6 +76,15 @@ class ParamSchema:
         """获取指定测试类型的所有可用参数 (不考虑 visibility_condition)。"""
         return [p for p in self._all_params if self._param_applies(p, test_type)]
 
+    def visible_params_for_test(self, test_type: str) -> list[ParamDef]:
+        """
+        获取指定测试类型的所有可见参数 (不考虑 visibility_condition 动态联动)。
+
+        相当于 get_params_for_test 的别名，供需要过滤 applicable_tests 但
+        不需要 visibility_condition 联动判定的场景使用。
+        """
+        return self.get_params_for_test(test_type)
+
     def get_visible_params(
         self, test_type: str, current_values: dict[str, Any]
     ) -> list[ParamDef]:

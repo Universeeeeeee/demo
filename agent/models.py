@@ -145,6 +145,264 @@ class LLMTestConfig(BaseModel):
         return TestConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
 
 
+# ---- LLM 结构化输出模型：跑步机步态 ----
+
+class LLMTreadmillGaitConfig(BaseModel):
+    """Pydantic AI 结构化输出专用 — 跑步机步态测试。
+
+    每个 Field 的 description / Literal / ge / le 会自动编码进 JSON Schema，
+    发送给 LLM 作为输出约束。LLM 只看 schema，不看 Python 代码。
+
+    步态测试（Treadmill Gait）关注步行时的步长、触地/腾空时间等参数。
+    """
+
+    # ---- 对话内容 ----
+    reply_message: str = Field(
+        default="配置完成",
+        description="回复用户的自然语言消息（例如：总结配置参数，或者回答用户的特定问题）"
+    )
+
+    # ---- Layer 1: 测试类型 ----
+    test_type: Literal["Treadmill Gait Test"] = Field(
+        default="Treadmill Gait Test",
+        description="测试类型，跑步机步态测试",
+    )
+
+    # ---- Layer 2: 主配置参数 ----
+    stop_type: Literal["Software command", "End of Time"] = Field(
+        default="Software command",
+        description="停止方式: Software command=手动停止(默认), End of Time=按时间自动停止",
+    )
+    test_length: Optional[str] = Field(
+        default=None,
+        description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
+    )
+    treadmill_speed: float = Field(
+        default=3.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 3.0, 范围 0.1-20.0",
+    )
+    direction: Literal["Interface side", "Opposite side"] = Field(
+        default="Opposite side",
+        description="跑步方向: Interface side=界面侧, Opposite side=对侧(默认)",
+    )
+
+    # ---- Layer 3: 滤波和步态参数 ----
+    min_contact_time: int = Field(
+        default=60, ge=0, le=500,
+        description="最小接触时间(ms), 低于此值的触地视为无效",
+    )
+    min_flight_time: int = Field(
+        default=0, ge=0, le=500,
+        description="最小腾空时间(ms), 低于此值的腾空合并到接触时间, 0=禁用",
+    )
+    max_flight_time: int = Field(
+        default=0, ge=0, le=5000,
+        description="最大腾空时间(ms), 超过此值的腾空直接丢弃, 0=禁用",
+    )
+    step_length_calculation: Literal["Tip-to-Tip", "Heel-to-Heel"] = Field(
+        default="Tip-to-Tip",
+        description="步长计算方式: Tip-to-Tip=脚尖到脚尖, Heel-to-Heel=脚跟到脚跟",
+    )
+    min_foot_length: float = Field(
+        default=10.0, gt=0,
+        description="最小足长(cm), 低于此值的足部识别视为无效",
+    )
+    min_step_length: float = Field(
+        default=10.0, gt=0,
+        description="最小步长(cm), 低于此值的步长视为无效",
+    )
+    automatic_data_filter: int = Field(
+        default=0,
+        ge=0, le=90,
+        description="自动数据过滤等级, 0=关闭, 10-90=过滤等级",
+    )
+    filter_gaitr_in: int = Field(
+        default=0, ge=0, le=100,
+        description="步态进入滤波器参数",
+    )
+    filter_gaitr_out: int = Field(
+        default=0, ge=0, le=100,
+        description="步态退出滤波器参数",
+    )
+    foot_length_cm_snapshot: Optional[float] = Field(
+        default=None, gt=0,
+        description="足长快照(cm), 通过足底压力采集获取的足长值",
+    )
+    foot_length_source: Literal["captured", "manual", "unknown"] = Field(
+        default="unknown",
+        description="足长来源: captured=采集, manual=手动输入, unknown=未知",
+    )
+    starting_foot_override: Optional[Literal["left", "right"]] = Field(
+        default=None,
+        description="起始脚覆盖: left=左脚, right=右脚, None=不覆盖",
+    )
+
+    # ---- 格式校验 ----
+
+    @field_validator("test_length")
+    @classmethod
+    def normalize_test_length(cls, v: Optional[str]) -> Optional[str]:
+        """同 LLMTestConfig 的时间格式统一逻辑。"""
+        if v is None:
+            return v
+        v = v.strip()
+        if re.match(r"^\d{2}:\d{2}$", v):
+            return v
+        m = re.match(r"^(\d{1}):(\d{2})$", v)
+        if m:
+            return f"{int(m.group(1)):02d}:{m.group(2)}"
+        m = re.match(r"^(\d+)\s*(?:m|min|minutes?)$", v, re.IGNORECASE)
+        if m:
+            mins = int(m.group(1))
+            return f"{mins:02d}:00"
+        m = re.match(r"^(\d+)\s*(?:s|sec|seconds?)$", v, re.IGNORECASE)
+        if m:
+            total_sec = int(m.group(1))
+            return f"{total_sec // 60:02d}:{total_sec % 60:02d}"
+        return v
+
+    # ---- 转换 ----
+
+    def to_dict(self) -> dict:
+        """转换为字典，排除 reply_message 和 None 字段。"""
+        return self.model_dump(exclude_none=True, exclude={"reply_message"})
+
+
+    def to_test_config(self):
+        """转换为系统通用的 TreadmillGaitConfig dataclass。
+
+        exclude_none=True 确保 None 字段不传入，
+        exclude={"reply_message"} 排除 LLM 专用字段。
+        """
+        from config.treadmill_config import TreadmillGaitConfig
+        return TreadmillGaitConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
+
+# ---- LLM 结构化输出模型：跑步机跑步 ----
+
+class LLMTreadmillRunningConfig(BaseModel):
+    """Pydantic AI 结构化输出专用 — 跑步机跑步测试。
+
+    与 LLMTreadmillGaitConfig 区别：
+    - 使用 min_gap_between_feet 替代 min_step_length
+    - 无 automatic_data_filter 字段
+    """
+
+    # ---- 对话内容 ----
+    reply_message: str = Field(
+        default="配置完成",
+        description="回复用户的自然语言消息（例如：总结配置参数，或者回答用户的特定问题）"
+    )
+
+    # ---- Layer 1: 测试类型 ----
+    test_type: Literal["Treadmill Running Test"] = Field(
+        default="Treadmill Running Test",
+        description="测试类型，跑步机跑步测试",
+    )
+
+    # ---- Layer 2: 主配置参数 ----
+    stop_type: Literal["Software command", "End of Time"] = Field(
+        default="Software command",
+        description="停止方式: Software command=手动停止(默认), End of Time=按时间自动停止",
+    )
+    test_length: Optional[str] = Field(
+        default=None,
+        description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
+    )
+    treadmill_speed: float = Field(
+        default=3.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 3.0, 范围 0.1-20.0",
+    )
+    direction: Literal["Interface side", "Opposite side"] = Field(
+        default="Opposite side",
+        description="跑步方向: Interface side=界面侧, Opposite side=对侧(默认)",
+    )
+
+    # ---- Layer 3: 滤波和跑步参数 ----
+    min_contact_time: int = Field(
+        default=60, ge=0, le=500,
+        description="最小接触时间(ms), 低于此值的触地视为无效",
+    )
+    min_flight_time: int = Field(
+        default=0, ge=0, le=500,
+        description="最小腾空时间(ms), 低于此值的腾空合并到接触时间, 0=禁用",
+    )
+    max_flight_time: int = Field(
+        default=0, ge=0, le=5000,
+        description="最大腾空时间(ms), 超过此值的腾空直接丢弃, 0=禁用",
+    )
+    step_length_calculation: Literal["Tip-to-Tip", "Heel-to-Heel"] = Field(
+        default="Tip-to-Tip",
+        description="步长计算方式: Tip-to-Tip=脚尖到脚尖, Heel-to-Heel=脚跟到脚跟",
+    )
+    min_foot_length: float = Field(
+        default=10.0, gt=0,
+        description="最小足长(cm), 低于此值的足部识别视为无效",
+    )
+    min_gap_between_feet: float = Field(
+        default=10.0, gt=0,
+        description="最小脚间距(cm), 低于此值的双脚间距视为无效",
+    )
+    filter_gaitr_in: int = Field(
+        default=0, ge=0, le=100,
+        description="步态进入滤波器参数",
+    )
+    filter_gaitr_out: int = Field(
+        default=0, ge=0, le=100,
+        description="步态退出滤波器参数",
+    )
+    foot_length_cm_snapshot: Optional[float] = Field(
+        default=None, gt=0,
+        description="足长快照(cm), 通过足底压力采集获取的足长值",
+    )
+    foot_length_source: Literal["captured", "manual", "unknown"] = Field(
+        default="unknown",
+        description="足长来源: captured=采集, manual=手动输入, unknown=未知",
+    )
+    starting_foot_override: Optional[Literal["left", "right"]] = Field(
+        default=None,
+        description="起始脚覆盖: left=左脚, right=右脚, None=不覆盖",
+    )
+
+    # ---- 格式校验 ----
+
+    @field_validator("test_length")
+    @classmethod
+    def normalize_test_length(cls, v: Optional[str]) -> Optional[str]:
+        """同 LLMTestConfig 的时间格式统一逻辑。"""
+        if v is None:
+            return v
+        v = v.strip()
+        if re.match(r"^\d{2}:\d{2}$", v):
+            return v
+        m = re.match(r"^(\d{1}):(\d{2})$", v)
+        if m:
+            return f"{int(m.group(1)):02d}:{m.group(2)}"
+        m = re.match(r"^(\d+)\s*(?:m|min|minutes?)$", v, re.IGNORECASE)
+        if m:
+            mins = int(m.group(1))
+            return f"{mins:02d}:00"
+        m = re.match(r"^(\d+)\s*(?:s|sec|seconds?)$", v, re.IGNORECASE)
+        if m:
+            total_sec = int(m.group(1))
+            return f"{total_sec // 60:02d}:{total_sec % 60:02d}"
+        return v
+
+    # ---- 转换 ----
+
+    def to_dict(self) -> dict:
+        """转换为字典，排除 reply_message 和 None 字段。"""
+        return self.model_dump(exclude_none=True, exclude={"reply_message"})
+
+
+    def to_test_config(self):
+        """转换为系统通用的 TreadmillRunningConfig dataclass。
+
+        exclude_none=True 确保 None 字段不传入，
+        exclude={"reply_message"} 排除 LLM 专用字段。
+        """
+        from config.treadmill_config import TreadmillRunningConfig
+        return TreadmillRunningConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
+
 # ---- Agent 输入模型 ----
 
 @dataclass
@@ -157,4 +415,3 @@ class AthleteProfile:
     focus_side: str = ""            # "" / "left" / "right" / "both"
     device_channels: int = 8
     history: list[dict] = field(default_factory=list)
-

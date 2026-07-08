@@ -21,7 +21,7 @@ from qtpy.QtWidgets import (
 from dayu_widgets.label import MLabel
 from dayu_widgets.push_button import MPushButton
 
-from config.test_config import TestConfig
+from config.test_config import AnyTestConfig
 from data.subject_store import SubjectProfile, SubjectSearchResult, SubjectStore
 from ui.views.agent_config_panel import AgentConfigPanel
 from ui.param_panel import ParamPanel
@@ -106,7 +106,7 @@ QMenu::item:selected {
 
 @dataclass(frozen=True)
 class SessionSetup:
-    config: TestConfig
+    config: AnyTestConfig
     subject_id: int | None = None
     subject: SubjectProfile | None = None
 
@@ -126,7 +126,7 @@ class SetupView(QWidget):
         self._subject_combo = None
         self._action_load_last_config = None
         self._action_history = None
-        self._current_config: TestConfig | None = None
+        self._current_config: AnyTestConfig | None = None
         self._config_source: str | None = None
         self._config_mode_index = 0
         self._syncing_config_to_panel = False
@@ -439,7 +439,7 @@ class SetupView(QWidget):
 
         self._set_current_config(session.config, "last_session")
 
-    def load_config_from_history(self, config: TestConfig) -> None:
+    def load_config_from_history(self, config: AnyTestConfig) -> None:
         self._set_current_config(config, "history")
 
     def _set_config_mode(self, index: int) -> None:
@@ -460,13 +460,14 @@ class SetupView(QWidget):
                 finally:
                     self._syncing_config_to_panel = False
             elif self._current_config is None:
+                self.param_panel.set_test_type(self._agent_panel.current_test_type())
                 self._set_current_config(self.param_panel.get_config(), "manual")
 
     def _update_mode_status(self) -> None:
         mode = "智能配置" if self._config_mode_index == 0 else "手动配置"
         self._mode_status_chip.setText(f"●  {mode} · 测试准备")
 
-    def _on_agent_config_confirmed(self, config: TestConfig) -> None:
+    def _on_agent_config_confirmed(self, config: AnyTestConfig) -> None:
         self._set_current_config(config, "agent")
 
     def _on_param_panel_changed(self) -> None:
@@ -475,7 +476,7 @@ class SetupView(QWidget):
         if self._config_mode_index == 1:
             self._set_current_config(self.param_panel.get_config(), "manual")
 
-    def _set_current_config(self, config: TestConfig, source: str) -> None:
+    def _set_current_config(self, config: AnyTestConfig, source: str) -> None:
         self._current_config = config
         self._config_source = source
         if source in {"last_session", "history"}:
@@ -503,16 +504,21 @@ class SetupView(QWidget):
         }
         parts = [
             f"{source_labels.get(self._config_source or '', '当前配置')}",
-            f"{config.mode_label}",
-            f"启动 {config.start_type}",
+            f"{getattr(config, 'mode_label', config.test_type)}",
             f"停止 {config.stop_type}",
         ]
-        if config.number_of_jumps:
+        if hasattr(config, "start_type"):
+            parts.append(f"启动 {config.start_type}")
+        if getattr(config, "number_of_jumps", None):
             parts.append(f"目标 {config.number_of_jumps} 次")
-        if config.test_length:
+        if getattr(config, "test_length", None):
             parts.append(f"时长 {config.test_length}")
+        if hasattr(config, "treadmill_speed"):
+            parts.append(f"速度 {config.treadmill_speed:g} km/h")
+        if hasattr(config, "direction"):
+            parts.append(f"方向 {config.direction}")
         parts.append(f"阈值 >{config.min_contact_time}ms / >{config.min_flight_time}ms")
-        if config.metronome_enabled:
+        if getattr(config, "metronome_enabled", False):
             parts.append(f"节拍器 {config.metronome_bpm} BPM")
 
         self._summary_label.setText("  ·  ".join(parts))

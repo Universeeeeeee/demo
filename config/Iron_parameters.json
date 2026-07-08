@@ -350,6 +350,7 @@
             "unit": "km/h",
             "range": "0.1-20.0",
             "step": 0.1,
+            "default": 3.0,
             "applicable_tests": [
               "Treadmill Running Test",
               "Treadmill Gait Test"
@@ -366,6 +367,7 @@
               "Interface side",
               "Opposite side"
             ],
+            "default": "Opposite side",
             "applicable_tests": [
               "Treadmill Running Test",
               "Treadmill Gait Test"
@@ -470,13 +472,26 @@
             "description": "前脚脚尖与后脚脚跟之间的最小间隔距离",
             "type": "float",
             "unit": "cm",
+            "default": 10.0,
             "applicable_tests": [
               "Sprint and Gait Test",
               "Treadmill Running Test",
-              "Treadmill Gait Test",
               "Tapping Test"
             ],
             "source": "4.2.2.4/4.4.1.5",
+            "priority": "core"
+          },
+          {
+            "name": "min_step_length",
+            "display_name": "最小步长 Minimum Step Length",
+            "description": "跑步机步态测试使用的最小步长过滤参数",
+            "type": "float",
+            "unit": "cm",
+            "default": 10.0,
+            "applicable_tests": [
+              "Treadmill Gait Test"
+            ],
+            "source": "4.2.2.6",
             "priority": "core"
           },
           {

@@ -88,6 +88,26 @@ class LLMWorkerClientTest(unittest.TestCase):
             self.assertEqual(self.client.worker_status(), "ready")
             self.assertTrue(self.client.health_check())
 
+    def test_chat_includes_agent_mode_in_payload(self):
+        self.port_file.write_text(json.dumps({"pid": 111, "port": 9876}))
+        posted = {}
+
+        def fake_post(_url, json, timeout):
+            posted.update(json)
+            return _FakeResponse({"reply": "ok"})
+
+        with patch("ui.llm_client.requests.get", return_value=_FakeResponse({"status": "ready"})):
+            with patch("ui.llm_client.requests.post", side_effect=fake_post):
+                result = self.client.chat(
+                    "配置跑步机步态",
+                    {"age": 30},
+                    agent_mode="treadmill_gait",
+                )
+
+        self.assertEqual(result["reply"], "ok")
+        self.assertEqual(posted["agent_mode"], "treadmill_gait")
+        self.assertEqual(posted["message"], "配置跑步机步态")
+
 
 if __name__ == "__main__":
     unittest.main()

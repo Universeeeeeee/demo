@@ -33,6 +33,7 @@ docs/步态参数相关/session5_manual_timing.csv
 # Local assistant/tooling state
 .claude/skills/
 .sessions/
+.worktrees/
 .claude/settings.local.json
 
 # Local driver downloads/cache
