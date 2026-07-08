@@ -1,0 +1,5 @@
+session,variant,algorithm_jump_index,air_time_s,contact_time_s,reason
+20260624_2_10次纵跳,current,1,0.012704900,0.294491900,leading_air_lt_0.1s_or_missing
+20260624_2_10次纵跳,compensated,1,0.010975700,0.296169900,leading_air_lt_0.1s_or_missing
+20260624_2_10次纵跳,lift_associated,1,0.010043500,0.297153300,leading_air_lt_0.1s_or_missing
+20260624_2_10次纵跳,onset,1,0.001930400,0.305215200,leading_air_lt_0.1s_or_missing
