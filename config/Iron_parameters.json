@@ -350,6 +350,10 @@
             "unit": "km/h",
             "range": "0.1-20.0",
             "step": 0.1,
+            "default": {
+              "Treadmill Gait Test": 3.0,
+              "Treadmill Running Test": 6.0
+            },
             "applicable_tests": [
               "Treadmill Running Test",
               "Treadmill Gait Test"
@@ -366,6 +370,7 @@
               "Interface side",
               "Opposite side"
             ],
+            "default": "Opposite side",
             "applicable_tests": [
               "Treadmill Running Test",
               "Treadmill Gait Test"

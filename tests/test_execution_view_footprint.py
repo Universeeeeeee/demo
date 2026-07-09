@@ -2,10 +2,32 @@ import pytest
 
 pytest.importorskip("dayu_widgets")
 
+from qtpy.QtWidgets import QApplication
+
 from config.test_config import TestConfig
 from config.treadmill_config import TreadmillGaitConfig
 from ui.footprint_channel import FootprintChannelWidget
 from ui.views.execution_view import ExecutionView
+
+
+def _app():
+    return QApplication.instance() or QApplication([])
+
+
+def test_execution_view_passes_treadmill_direction_to_footprint_channel():
+    _app()
+    view = ExecutionView()
+
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Opposite side",
+        )
+    )
+
+    assert view._footprint_channel._direction == "Opposite side"
 
 
 def test_execution_view_shows_footprint_channel_for_treadmill(qtbot):

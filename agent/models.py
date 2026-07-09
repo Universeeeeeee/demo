@@ -178,11 +178,11 @@ class LLMTreadmillGaitConfig(BaseModel):
         description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
     )
     treadmill_speed: float = Field(
-        default=5.0, ge=0.1, le=20.0,
-        description="跑步机速度(km/h), 范围 0.1-20.0",
+        default=3.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 3.0, 范围 0.1-20.0",
     )
     direction: Literal["Interface side", "Opposite side"] = Field(
-        default="Interface side",
+        default="Opposite side",
         description="跑步方向: Interface side=界面侧, Opposite side=对侧",
     )
 
@@ -309,11 +309,11 @@ class LLMTreadmillRunningConfig(BaseModel):
         description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
     )
     treadmill_speed: float = Field(
-        default=5.0, ge=0.1, le=20.0,
-        description="跑步机速度(km/h), 范围 0.1-20.0",
+        default=6.0, ge=0.1, le=20.0,
+        description="跑步机速度(km/h), 默认 6.0, 范围 0.1-20.0",
     )
     direction: Literal["Interface side", "Opposite side"] = Field(
-        default="Interface side",
+        default="Opposite side",
         description="跑步方向: Interface side=界面侧, Opposite side=对侧",
     )
 

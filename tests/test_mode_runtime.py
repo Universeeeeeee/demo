@@ -77,6 +77,25 @@ def test_gait_engine_emits_treadmill_visual_frame(qtbot):
     assert payload["contact_bits"] == [0] * 96
 
 
+def test_gait_engine_emits_treadmill_status_snapshot():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    engine = GaitEngine(config=config)
+    snapshots = []
+    engine.gait_status_snapshot.connect(lambda payload: snapshots.append(payload))
+
+    engine.process_raw_frame([0] * 96, 0.001)
+    engine.process_raw_frame([0] * 96, 0.200)
+
+    assert snapshots
+    assert snapshots[-1]["velocity_count"] == 1
+    assert snapshots[-1]["velocity_sum"] == pytest.approx(100.0)
+
+
 def test_session_controller_exposes_footprint_visual_signal(qtbot):
     from ui.session_controller import SessionController
 

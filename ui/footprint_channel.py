@@ -15,6 +15,8 @@ from path_utils import get_base_dir
 
 _LED_COUNT = 96
 _LED_SPACING_CM = 1.04
+_DEFAULT_FOOT_LENGTH_CM = 28.0
+_MAX_REASONABLE_FOOT_LENGTH_CM = 40.0
 
 _SOURCE_IN = getattr(QPainter, "CompositionMode_SourceIn", None)
 if _SOURCE_IN is None:
@@ -28,6 +30,7 @@ class FootprintChannelWidget(QFrame):
         super().__init__(parent)
         self._contact_bits = [0] * _LED_COUNT
         self._feet: list[dict] = []
+        self._direction = "Interface side"
         self._left_foot = self._load_pixmap("left_foot.png")
         self._right_foot = self._load_pixmap("right_foot.png")
         self.setMinimumSize(260, 420)
@@ -48,6 +51,10 @@ class FootprintChannelWidget(QFrame):
         self._feet = []
         self.update()
 
+    def set_direction(self, direction: str | None):
+        self._direction = "Opposite side" if direction == "Opposite side" else "Interface side"
+        self.update()
+
     def render_state(self, frame):
         if hasattr(frame, "to_dict"):
             frame = frame.to_dict()
@@ -57,15 +64,46 @@ class FootprintChannelWidget(QFrame):
             bits.extend([0] * (_LED_COUNT - len(bits)))
 
         self._contact_bits = bits
-        self._feet = [
-            {key: value for key, value in dict(foot).items() if key != "opacity"}
-            for foot in frame.get("feet", [])
-        ]
+        self._feet = []
+        for foot in frame.get("feet", []):
+            foot_state = dict(foot)
+            if foot_state.get("status") != "confirmed":
+                continue
+            self._feet.append(
+                {
+                    key: value
+                    for key, value in foot_state.items()
+                    if key != "opacity"
+                }
+            )
         self.update()
 
     def _y_for_index(self, index: float, top: int, height: int) -> float:
         clamped = min(max(float(index), 0.0), float(_LED_COUNT - 1))
-        return top + (clamped / float(_LED_COUNT - 1)) * height
+        ratio = clamped / float(_LED_COUNT - 1)
+        if self._direction == "Opposite side":
+            ratio = 1.0 - ratio
+        return top + ratio * height
+
+    def _foot_size_for_lane(
+        self, lane_width: int, lane_height: int, length_cm: float | None
+    ) -> tuple[int, int]:
+        length = self._resolved_foot_length_cm(length_cm)
+        channel_cm = float(_LED_COUNT - 1) * _LED_SPACING_CM
+        foot_h = max(48, int((length / channel_cm) * float(lane_height)))
+        foot_w = max(30, int(foot_h / 1.62))
+        if lane_width > 0:
+            foot_w = min(foot_w, max(30, int(lane_width * 0.32)))
+        return foot_w, foot_h
+
+    def _resolved_foot_length_cm(self, length_cm: float | None) -> float:
+        try:
+            length = float(length_cm)
+        except (TypeError, ValueError):
+            return _DEFAULT_FOOT_LENGTH_CM
+        if length <= 0 or length > _MAX_REASONABLE_FOOT_LENGTH_CM:
+            return _DEFAULT_FOOT_LENGTH_CM
+        return length
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -122,8 +160,11 @@ class FootprintChannelWidget(QFrame):
             else QColor(82, 220, 130, alpha)
         )
         pixmap = self._right_foot if side == "right" else self._left_foot
-        foot_w = max(42, int((lane_right - lane_left) * 0.34))
-        foot_h = int(foot_w * 1.62)
+        foot_w, foot_h = self._foot_size_for_lane(
+            lane_width=lane_right - lane_left,
+            lane_height=height,
+            length_cm=foot.get("length_cm"),
+        )
         x_center = lane_left + (lane_right - lane_left) * (
             0.64 if side == "right" else 0.36
         )
@@ -175,6 +216,9 @@ class FootprintReplayPanel(QWidget):
         self._time_label = QLabel("0.000 s")
         controls.addWidget(self._time_label)
         layout.addLayout(controls)
+
+    def set_direction(self, direction: str | None):
+        self._channel.set_direction(direction)
 
     def set_timeline(self, timeline):
         self._timer.stop()

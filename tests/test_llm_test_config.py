@@ -114,6 +114,20 @@ def test_treadmill_gait_llm_config_requires_speed_and_duration_or_manual_stop():
     assert cfg.treadmill_speed == 5.0
 
 
+def test_treadmill_gait_llm_config_defaults_to_walking_speed_and_opposite_direction():
+    cfg = LLMTreadmillGaitConfig()
+
+    assert cfg.treadmill_speed == 3.0
+    assert cfg.direction == "Opposite side"
+
+
+def test_treadmill_running_llm_config_defaults_to_running_speed_and_opposite_direction():
+    cfg = LLMTreadmillRunningConfig()
+
+    assert cfg.treadmill_speed == 6.0
+    assert cfg.direction == "Opposite side"
+
+
 if __name__ == "__main__":
     tests = [
         test_to_test_config_excludes_reply_message,

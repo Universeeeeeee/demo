@@ -345,6 +345,7 @@ class ExecutionView(QWidget):
             c.setVisible(not is_jump)
         self._chart_container.setVisible(is_jump)
         self._footprint_channel.setVisible(not is_jump)
+        self._footprint_channel.set_direction(getattr(config, "direction", None))
 
         # 切换图表标签
         if _PG_AVAILABLE:

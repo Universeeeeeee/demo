@@ -581,3 +581,174 @@ def test_treadmill_processor_pop_visual_frames_returns_pending_once():
 
     assert len(first) == 1
     assert second == ()
+
+
+def _contact_bits(start: int, end: int) -> list[int]:
+    bits = [0] * 96
+    for idx in range(start, end + 1):
+        bits[idx] = 1
+    return bits
+
+
+def _feed_frames(
+    processor: TreadmillProcessor,
+    bits: list[int],
+    start_s: float,
+    count: int,
+    dt_s: float = 0.01,
+) -> None:
+    for offset in range(count):
+        t = start_s + offset * dt_s
+        processor.process_raw_frame(bits, rel_time=t, abs_time=t)
+
+
+def test_treadmill_processor_makes_live_status_snapshot_from_rows():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    _feed_frames(processor, [0] * 96, start_s=0.00, count=10)
+    _feed_frames(processor, _contact_bits(10, 25), start_s=0.60, count=8)
+    _feed_frames(processor, [0] * 96, start_s=0.70, count=20)
+    _feed_frames(processor, _contact_bits(36, 51), start_s=1.30, count=8)
+    _feed_frames(processor, [0] * 96, start_s=1.40, count=20)
+
+    snapshot = processor.make_status_snapshot(rel_time=1.60)
+
+    assert snapshot["touch_count"] == 2
+    assert snapshot["lift_count"] == 2
+    assert snapshot["stride_count"] == 1
+    assert snapshot["latest_stride"] == pytest.approx(70.0, abs=0.01)
+    assert snapshot["velocity_count"] == 2
+    assert snapshot["velocity_sum"] / snapshot["velocity_count"] == pytest.approx(100.0)
+    assert snapshot["latest_extra_metrics"]["imbalance_index"] == pytest.approx(0.0)
+
+
+# ============================================================
+# Spatial correction tests — per-step speed from foot placement
+# ============================================================
+
+
+def test_spatial_correction_produces_varying_speed():
+    """After stagger baseline is established, drift in foot placement
+    produces per-step speed values that differ from belt speed."""
+    cfg = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,  # 1.0 m/s belt
+        direction="Interface side",
+    )
+    acc = TreadmillGaitAccumulator(cfg)
+
+    # Establish stagger baseline: two normal steps
+    acc.record_touch(0.0, "left", heel_cm=25.0, toe_cm=40.0)
+    acc.record_lift(0.30, "left")
+    acc.record_touch(0.50, "right", heel_cm=45.0, toe_cm=60.0)
+    acc.record_lift(0.80, "right")
+
+    # Step 3: left foot with forward drift (+3 cm)
+    acc.record_touch(1.10, "left", heel_cm=28.0, toe_cm=43.0)
+    acc.record_lift(1.30, "left")
+
+    # Step 4: right foot with backward drift (-2 cm)
+    acc.record_touch(1.60, "right", heel_cm=43.0, toe_cm=58.0)
+    acc.record_lift(1.80, "right")
+
+    speeds = [r.speed_m_s for r in acc.rows if r.speed_m_s is not None]
+    # Should have at least 3 valid speeds (steps 0,1,2,3 → 4 speeds)
+    assert len(speeds) >= 3
+    # Speeds should not all be identical
+    unique = len(set(round(s, 4) for s in speeds))
+    assert unique > 1, f"Expected varying speeds, got all {speeds[0]:.4f}"
+
+
+def test_spatial_correction_first_step_uses_belt_speed():
+    """The first step has no prior reference, so speed = belt speed."""
+    cfg = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,  # 2.0 m/s
+        direction="Interface side",
+    )
+    acc = TreadmillGaitAccumulator(cfg)
+
+    acc.record_touch(0.0, "left", heel_cm=25.0, toe_cm=40.0)
+    acc.record_lift(0.30, "left")
+
+    row = acc.rows[0]
+    # First step: step_time is None (no prior touch), speed = belt
+    assert row.speed_m_s == 2.0
+    assert row.step_length_cm is None  # no step_time → no step_length
+
+
+def test_spatial_correction_respects_opposite_direction():
+    """Opposite-side direction inverts the spatial correction sign."""
+    cfg = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,  # 2.0 m/s
+        direction="Opposite side",
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(cfg)
+
+    # Establish baseline
+    acc.record_touch(0.0, "left", heel_cm=50.0, toe_cm=35.0)
+    acc.record_lift(0.15, "left")
+    acc.record_touch(0.35, "right", heel_cm=30.0, toe_cm=15.0)
+    acc.record_lift(0.50, "right")
+
+    # Step 3: left foot with forward drift
+    # Opposite side: forward = lower LED index (runner moves away from interface)
+    acc.record_touch(0.70, "left", heel_cm=48.0, toe_cm=33.0)
+    acc.record_lift(0.85, "left")
+
+    # Step 4: right foot
+    acc.record_touch(1.05, "right", heel_cm=32.0, toe_cm=17.0)
+    acc.record_lift(1.20, "right")
+
+    speeds = [r.speed_m_s for r in acc.rows if r.speed_m_s is not None]
+    unique = len(set(round(s, 4) for s in speeds))
+    assert unique > 1, f"Opposite direction should still produce varying speeds"
+
+
+def test_spatial_correction_preserves_step_length_ordering():
+    """Steps with forward drift should have larger step_length than
+    steps with backward drift, relative to the stagger baseline."""
+    cfg = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    acc = TreadmillGaitAccumulator(cfg)
+
+    # Two baseline steps (establish stagger for both transition directions)
+    acc.record_touch(0.0, "left", heel_cm=20.0, toe_cm=35.0)
+    acc.record_lift(0.25, "left")
+    acc.record_touch(0.50, "right", heel_cm=40.0, toe_cm=55.0)
+    acc.record_lift(0.75, "right")
+    # Second occurrence of each transition to establish stagger EWMA
+    acc.record_touch(1.00, "left", heel_cm=20.0, toe_cm=35.0)
+    acc.record_lift(1.25, "left")
+    acc.record_touch(1.50, "right", heel_cm=40.0, toe_cm=55.0)
+    acc.record_lift(1.75, "right")
+
+    # Now introduce drift: forward on left (+4 cm), backward on right (-3 cm)
+    acc.record_touch(2.00, "left", heel_cm=24.0, toe_cm=39.0)
+    acc.record_lift(2.25, "left")
+    acc.record_touch(2.50, "right", heel_cm=37.0, toe_cm=52.0)
+    acc.record_lift(2.75, "right")
+
+    belt_speed = 3.6 / 3.6  # 1.0 m/s
+    drift_steps = [r for r in acc.rows if r.index >= 4 and r.step_time_s is not None]
+    for r in drift_steps:
+        belt_dist = belt_speed * r.step_time_s * 100.0
+        assert r.step_length_cm != pytest.approx(belt_dist, abs=0.01), (
+            f"Step {r.index}: expected spatial correction, "
+            f"got step_length={r.step_length_cm} == belt_dist={belt_dist}"
+        )

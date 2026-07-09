@@ -318,6 +318,13 @@ class GaitEngine(QObject):
                 if hasattr(self._processor, "pop_visual_frames"):
                     for frame in self._processor.pop_visual_frames():
                         self.footprint_visual_frame.emit(frame.to_dict())
+                if (
+                    hasattr(self._processor, "make_status_snapshot")
+                    and timestamp - self._last_snapshot_ts >= self._snapshot_interval
+                ):
+                    snapshot = self._processor.make_status_snapshot(rel_time)
+                    self.gait_status_snapshot.emit(snapshot)
+                    self._last_snapshot_ts = timestamp
         else:
             self._process_gait(contact_bits, rel_time, timestamp)
 

@@ -100,6 +100,11 @@ class TreadmillAccumulator:
         # Track previous touch time for inter-touch step_time calculation
         self._last_touch_time_s: float | None = None
 
+        # Spatial correction tracking for per-step speed estimation
+        self._last_step_reference_cm: float | None = None
+        self._last_step_side: FootSide | None = None
+        self._stagger_estimates: dict[tuple[FootSide, FootSide], float] = {}
+
     # ---- Properties ----
 
     @property
@@ -158,6 +163,47 @@ class TreadmillAccumulator:
         else:
             self._finalize_row(time_s, "valid")
 
+    def _spatial_correction_cm(
+        self, current_ref: float | None, current_side: FootSide
+    ) -> float:
+        """Estimate spatial displacement corrected for foot stagger bias.
+
+        On a treadmill the runner stays roughly in place, but foot placement
+        drifts by a few cm each step.  Adjacent steps alternate left↔right,
+        introducing a systematic stagger (natural foot separation) that must
+        be subtracted to avoid a sawtooth artifact in per-step speed.
+        """
+        if self._last_step_reference_cm is None or current_ref is None:
+            return 0.0
+
+        raw_delta = current_ref - self._last_step_reference_cm
+
+        # Update stagger estimate for alternating-foot transitions
+        if (
+            current_side != self._last_step_side
+            and current_side != "unknown"
+            and self._last_step_side is not None
+            and self._last_step_side != "unknown"
+        ):
+            transition = (self._last_step_side, current_side)
+            alpha = 0.3  # EWMA learning rate
+            if transition not in self._stagger_estimates:
+                self._stagger_estimates[transition] = raw_delta
+            else:
+                self._stagger_estimates[transition] = (
+                    alpha * raw_delta
+                    + (1.0 - alpha) * self._stagger_estimates[transition]
+                )
+            corrected_delta = raw_delta - self._stagger_estimates[transition]
+        else:
+            corrected_delta = raw_delta
+
+        # Direction sign: forward drift adds to effective step length.
+        # "Interface side": runner faces increasing LED indices → +1
+        # "Opposite side": runner faces decreasing LED indices → -1
+        direction_sign = -1 if self._config.direction == "Opposite side" else 1
+        return direction_sign * corrected_delta
+
     def _finalize_row(self, time_s: float, row_status: RowStatus) -> None:
         """Build a TreadmillStepResult from the pending row and append to rows."""
         if self._pending is None:
@@ -206,6 +252,13 @@ class TreadmillAccumulator:
                 event_invalid_reason = "Flight time outside acceptable range"
                 statistics_exclusion_reason = "Flight time outside acceptable range"
 
+        # P1-4c: step_length_calculation reference point — record toe or heel
+        reference_cm: float | None = None
+        if self._config.step_length_calculation == "Tip-to-Tip":
+            reference_cm = p.toe_cm
+        elif self._config.step_length_calculation == "Heel-to-Heel":
+            reference_cm = p.heel_cm
+
         # Compute derived metrics for valid rows
         time: float | None = time_s
         distance_cm: float | None = None
@@ -215,20 +268,22 @@ class TreadmillAccumulator:
         cadence_steps_per_s: float | None = None
 
         if is_event_valid:
-            speed_m_s = belt_speed_ms
-            # Use the current row time as elapsed time
-            distance_cm = speed_m_s * time_s * 100.0
+            # Spatial correction: belt_distance + foot_placement_drift
+            spatial_cm = self._spatial_correction_cm(reference_cm, p.side)
             if p.lift_time_s is not None:
                 if step_time_s is not None and step_time_s > 0:
-                    step_length_cm = speed_m_s * step_time_s * 100.0
+                    step_length_cm = belt_speed_ms * step_time_s * 100.0 + spatial_cm
+                    speed_m_s = step_length_cm / 100.0 / step_time_s
                     cadence_steps_per_s = 1.0 / step_time_s
+                else:
+                    speed_m_s = belt_speed_ms
+            else:
+                speed_m_s = belt_speed_ms
+            distance_cm = belt_speed_ms * time_s * 100.0
 
-        # P1-4c: step_length_calculation reference point — record toe or heel
-        reference_cm: float | None = None
-        if self._config.step_length_calculation == "Tip-to-Tip":
-            reference_cm = p.toe_cm
-        elif self._config.step_length_calculation == "Heel-to-Heel":
-            reference_cm = p.heel_cm
+            # Update spatial tracking for next step
+            self._last_step_reference_cm = reference_cm
+            self._last_step_side = p.side
 
         result = TreadmillStepResult(
             index=self._next_index,

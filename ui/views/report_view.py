@@ -24,6 +24,7 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QFrame, QSizePolicy, QMessageBox, QFileDialog,
+    QScrollArea, QTabWidget,
 )
 
 from dayu_widgets.label import MLabel
@@ -100,10 +101,16 @@ class StatCard(QFrame):
 
     def set_value(self, text: str):
         self._value.setText(text)
+        self._apply_value_style("#f0f0f0")
 
     def set_color(self, color: str):
+        self._apply_value_style(color)
+
+    def _apply_value_style(self, color: str):
+        text = self._value.text()
+        font_size = 18 if len(text) >= 11 else 26
         self._value.setStyleSheet(
-            f"font-size: 26pt; font-weight: bold; "
+            f"font-size: {font_size}pt; font-weight: bold; "
             f"color: {color}; border: none; background: transparent;"
         )
 
@@ -145,13 +152,24 @@ class ReportView(QWidget):
         )
         main_layout.addWidget(self._reason_label)
 
-        # ===== 内容区: 左侧统计 + 右侧图表 =====
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(15)
+        # ===== 内容区: 概览页 + 明细页 =====
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #444; border-radius: 6px; }"
+            "QTabBar::tab { min-width: 96px; min-height: 30px; padding: 4px 16px; }"
+        )
+
+        self._overview_page = QWidget()
+        content_layout = QHBoxLayout(self._overview_page)
+        content_layout.setContentsMargins(4, 8, 4, 4)
+        content_layout.setSpacing(16)
 
         # --- 左侧: 统计卡片网格 ---
         left_container = QWidget()
-        left_container.setMinimumWidth(320)
+        left_container.setMinimumWidth(360)
+        left_container.setMaximumWidth(560)
+        left_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self._stats_layout = QGridLayout(left_container)
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
         self._stats_layout.setSpacing(8)
@@ -165,10 +183,14 @@ class ReportView(QWidget):
             self._stats_layout.addWidget(card, row, col)
             self._stat_cards.append(card)
 
-        content_layout.addWidget(left_container, 4)
+        content_layout.addWidget(left_container, 0)
+        content_layout.addStretch(1)
 
         # --- 右侧: 图表回顾 ---
         right_container = QWidget()
+        right_container.setMinimumWidth(460)
+        right_container.setMaximumWidth(780)
+        right_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
@@ -178,6 +200,7 @@ class ReportView(QWidget):
 
         self._replay_panel = FootprintReplayPanel()
         self._replay_panel.hide()
+        self._replay_panel.setMinimumHeight(520)
         right_layout.addWidget(self._replay_panel, 1)
 
         self._plot_container = QWidget()
@@ -205,8 +228,21 @@ class ReportView(QWidget):
 
         right_layout.addWidget(self._plot_container, 1)
 
-        content_layout.addWidget(right_container, 6)
-        main_layout.addLayout(content_layout, 1)
+        content_layout.addWidget(right_container, 0)
+        self._tabs.addTab(self._overview_page, "概览")
+
+        self._details_page = QScrollArea()
+        self._details_page.setWidgetResizable(True)
+        self._details_page.setFrameShape(QFrame.NoFrame)
+        self._details_content = QWidget()
+        self._details_layout = QVBoxLayout(self._details_content)
+        self._details_layout.setContentsMargins(8, 8, 8, 8)
+        self._details_layout.setSpacing(12)
+        self._details_layout.setAlignment(Qt.AlignTop)
+        self._details_page.setWidget(self._details_content)
+        self._tabs.addTab(self._details_page, "明细")
+
+        main_layout.addWidget(self._tabs, 1)
 
         # ===== 底部按钮 =====
         btn_layout = QHBoxLayout()
@@ -247,6 +283,7 @@ class ReportView(QWidget):
         self._reason_label.setText(reason_map.get(report.finish_reason, report.finish_reason))
         self._replay_panel.hide()
         self._plot_container.show()
+        self._tabs.setCurrentIndex(0)
         self._clear_dynamic_widgets()
 
         if isinstance(report, JumpTestReport):
@@ -312,6 +349,7 @@ class ReportView(QWidget):
         self._title.setText("📊 测试报告 — 步态分析")
         self._plot_container.hide()
         self._replay_panel.show()
+        self._replay_panel.set_direction("Interface side")
         self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
 
         stats = [
@@ -357,12 +395,13 @@ class ReportView(QWidget):
         self._title.setText(f"测试报告 — {test_type_label}")
         self._plot_container.hide()
         self._replay_panel.show()
-        self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
 
         # 配置快照
         snap = r.report_config_snapshot
         speed = snap.get("treadmill_speed", "--")
         direction = snap.get("direction", "--")
+        self._replay_panel.set_direction(direction)
+        self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
         foot_length = r.foot_length_cm_snapshot
 
         # 总览指标
@@ -433,12 +472,10 @@ class ReportView(QWidget):
         for col in range(len(columns)):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-        table.setMinimumHeight(min(len(steps) * 30 + 30, 400))
+        table.setMinimumHeight(max(len(steps) * 28 + 52, 120))
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # Insert table below stat cards
-        layout = self.layout()
-        layout.insertWidget(layout.count() - 1, table)
-        self._dynamic_widgets.append(table)
+        self._add_detail_widget(table)
 
     def _build_treadmill_metric_summary(self, summaries: dict[str, "MetricSummary"]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -480,11 +517,10 @@ class ReportView(QWidget):
         for col in range(len(columns)):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-        table.setMinimumHeight(min(len(rows_data) * 30 + 30, 300))
+        table.setMinimumHeight(max(len(rows_data) * 28 + 52, 120))
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        layout = self.layout()
-        layout.insertWidget(layout.count() - 1, table)
-        self._dynamic_widgets.append(table)
+        self._add_detail_widget(table)
 
     def _build_treadmill_left_right(self, lr: dict[str, "MetricSummary"]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -529,11 +565,10 @@ class ReportView(QWidget):
         for col in range(len(columns)):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-        table.setMinimumHeight(min(len(rows_data) * 30 + 30, 300))
+        table.setMinimumHeight(max(len(rows_data) * 28 + 52, 120))
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        layout = self.layout()
-        layout.insertWidget(layout.count() - 1, table)
-        self._dynamic_widgets.append(table)
+        self._add_detail_widget(table)
 
     # ------------------------------------------------------------------
     #  辅助方法
@@ -545,6 +580,10 @@ class ReportView(QWidget):
             w.setParent(None)
             w.deleteLater()
         self._dynamic_widgets.clear()
+
+    def _add_detail_widget(self, widget: QWidget):
+        self._details_layout.addWidget(widget)
+        self._dynamic_widgets.append(widget)
 
     def _fill_stat_cards(self, stats: list[tuple[str, str]]):
         """填充统计卡片。stats 为 (label, value) 列表。"""

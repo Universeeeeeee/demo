@@ -453,8 +453,9 @@ class ParamPanel(QWidget):
 
         # 设置默认值
         param_def = self._schema.get_param_def(param_name)
-        if param_def and param_def.default:
-            idx = combo.findText(str(param_def.default))
+        default = self._default_for_param(param_name, param_def)
+        if default is not None:
+            idx = combo.findText(str(default))
             if idx >= 0:
                 combo.setCurrentIndex(idx)
 
@@ -480,9 +481,10 @@ class ParamPanel(QWidget):
 
         # 特殊处理: 当 schema default 低于 range 下限时（如 automatic_data_filter
         # 的 default=0, range=10-90），扩展下限以容纳默认值。
-        if param_def and param_def.default is not None:
+        default = self._default_for_param(param_name, param_def)
+        if default is not None:
             try:
-                default_val = int(param_def.default)
+                default_val = int(default)
                 if default_val < lo:
                     lo = default_val
             except (ValueError, TypeError):
@@ -491,9 +493,9 @@ class ParamPanel(QWidget):
         spinbox.setRange(lo, hi)
 
         # 设置默认值
-        if param_def and param_def.default is not None:
+        if default is not None:
             try:
-                spinbox.setValue(int(param_def.default))
+                spinbox.setValue(int(default))
             except (ValueError, TypeError):
                 pass
 
@@ -527,10 +529,8 @@ class ParamPanel(QWidget):
         spinbox.setDecimals(1)
 
         # 设置默认值：优先 schema default，否则从 dataclass 字段默认值获取
-        default = None
-        if param_def.default is not None:
-            default = param_def.default
-        elif param_name != "treadmill_speed":
+        default = self._default_for_param(param_name, param_def)
+        if default is None and param_name != "treadmill_speed":
             # automatic_data_filter 特殊处理：range 10-90 但 default=0（关闭）
             # 从 dataclass 获取默认值
             default = self._get_dataclass_default(param_name)
@@ -544,6 +544,15 @@ class ParamPanel(QWidget):
         spinbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._widgets[param_name] = spinbox
         return spinbox
+
+    def _default_for_param(self, param_name: str, param_def: ParamDef | None) -> object | None:
+        """Return schema default, resolving per-test defaults when present."""
+        if param_def is None:
+            return None
+        default = param_def.default
+        if isinstance(default, dict):
+            return default.get(self._test_type)
+        return default
 
     def _get_dataclass_default(self, param_name: str) -> object | None:
         """从当前 test_type 对应的配置 dataclass 读取字段默认值。"""

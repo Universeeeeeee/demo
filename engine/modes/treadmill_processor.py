@@ -33,6 +33,7 @@ from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 from engine.footprint_visualization import FootprintTimelineRecorder
 from engine.modes.base import ModeProcessor
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
+from engine.modes.treadmill_accumulator import belt_speed_m_s
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_running_accumulator import TreadmillRunningAccumulator
 from engine.spatial_clusterer import ClusterTracker, extract_clusters
@@ -97,6 +98,7 @@ class TreadmillProcessor:
         self._contact_tracker = ContactBasedGaitTracker()
         self._accumulator = self._make_accumulator()
         self._visual_recorder = FootprintTimelineRecorder()
+        self._last_clusters = []
 
     # ---- ModeProcessor interface ----
 
@@ -107,6 +109,7 @@ class TreadmillProcessor:
         self._contact_tracker.reset()
         self._accumulator = self._make_accumulator()
         self._visual_recorder.reset()
+        self._last_clusters = []
 
     def process_raw_frame(
         self, contact_bits: List[int], rel_time: float, abs_time: float
@@ -125,6 +128,7 @@ class TreadmillProcessor:
         """
         # 1. Extract clusters
         clusters = extract_clusters(contact_bits)
+        self._last_clusters = clusters
 
         # 2. Update cluster tracker
         self._cluster_tracker.update(rel_time, clusters)
@@ -146,6 +150,75 @@ class TreadmillProcessor:
 
     def pop_visual_frames(self):
         return self._visual_recorder.pop_pending()
+
+    def make_status_snapshot(self, rel_time: float) -> dict:
+        ct = self._contact_tracker
+        active_count = len(ct.foot_contact_queue)
+        if active_count == 0:
+            status = "腾空 / 离地"
+        elif active_count == 1:
+            status = "单脚支撑"
+        else:
+            status = f"多支撑 ({active_count}脚)"
+
+        active_centroids = []
+        for cid in ct.foot_contact_queue:
+            if cid in ct.active_contacts:
+                centroid = ct.active_contacts[cid].latest_centroid
+                if centroid is not None:
+                    active_centroids.append(centroid)
+
+        valid_rows = [
+            row
+            for row in self._accumulator.rows
+            if row.is_event_valid and row.is_included_in_statistics
+        ]
+        step_lengths = [
+            row.step_length_cm
+            for row in valid_rows
+            if row.step_length_cm is not None
+        ]
+        speed_cm_s = [
+            row.speed_m_s * 100.0
+            for row in valid_rows
+            if row.speed_m_s is not None
+        ]
+        if not speed_cm_s:
+            speed_cm_s = [belt_speed_m_s(self._config) * 100.0]
+
+        support_by_side: dict[str, list[float]] = {"left": [], "right": []}
+        for row in valid_rows:
+            if row.side in support_by_side and row.contact_time_s is not None:
+                support_by_side[row.side].append(row.contact_time_s)
+
+        latest_extra_metrics = {}
+        left_support = support_by_side["left"]
+        right_support = support_by_side["right"]
+        if left_support and right_support:
+            left_avg = sum(left_support) / len(left_support)
+            right_avg = sum(right_support) / len(right_support)
+            denom = max((left_avg + right_avg) / 2.0, 1e-6)
+            latest_extra_metrics["imbalance_index"] = (
+                abs(left_avg - right_avg) / denom * 100.0
+            )
+
+        return {
+            "timestamp": rel_time,
+            "status": status,
+            "cluster_count": len(self._last_clusters),
+            "active_centroids": active_centroids,
+            "touch_count": ct.touch_count,
+            "lift_count": self.lift_count,
+            "stride_count": len(step_lengths),
+            "stride_sum": sum(step_lengths),
+            "latest_stride": step_lengths[-1] if step_lengths else None,
+            "velocity_count": len(speed_cm_s),
+            "velocity_sum": sum(speed_cm_s),
+            "latest_velocity": speed_cm_s[-1] if speed_cm_s else None,
+            "foot_a_support_times": list(support_by_side["left"]),
+            "foot_b_support_times": list(support_by_side["right"]),
+            "latest_extra_metrics": latest_extra_metrics,
+        }
 
     def build_report(
         self, reason: str, export_frames: tuple, export_timestamps: tuple

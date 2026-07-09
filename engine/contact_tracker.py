@@ -162,6 +162,7 @@ class ContactBasedGaitTracker:
         self.touch_extra_history: List[dict] = []
         self._last_touch_velocity_for_acc: Optional[float] = None
         self._last_touch_time_for_acc: Optional[float] = None
+        self._last_touch_foot_label: Optional[str] = None
 
     # ---------------------------------------------------------------
     #  公共 API
@@ -315,6 +316,8 @@ class ContactBasedGaitTracker:
         foot_label, confidence = self._infer_foot_label(contact)
         contact.foot_label = foot_label
         contact.label_confidence = confidence
+        if foot_label in ("A", "B") and confidence >= 0.7:
+            self._last_touch_foot_label = foot_label
 
         # 计算步长和步速
         if (
@@ -413,7 +416,10 @@ class ContactBasedGaitTracker:
             other = labeled[0]
             new_label = "B" if other.foot_label == "A" else "A"
             return new_label, 0.8
-        return None, 0.0
+        if self._last_touch_foot_label in ("A", "B"):
+            new_label = "B" if self._last_touch_foot_label == "A" else "A"
+            return new_label, 0.7
+        return "A", 0.7
 
     def _finalize_lost_contacts(
         self, timestamp: float

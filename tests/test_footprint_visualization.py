@@ -45,10 +45,38 @@ def test_build_visual_frame_derives_feet_from_contact_tracker():
     assert len(frame.feet) == 1
     foot = frame.feet[0]
     assert foot.contact_id == 1
-    assert foot.side == "unknown"
+    assert foot.side == "left"
     assert foot.status == "confirmed"
     assert foot.centroid_cm == 21.0
     assert foot.length_cm == 14.0
+
+
+def test_contact_tracker_alternates_foot_labels_without_double_support():
+    tracker = ContactBasedGaitTracker(
+        contact_confirm_frames=1,
+        contact_lift_miss_frames=1,
+        min_step_interval=0.0,
+        arm_frames=1,
+        max_contact_age=1.0,
+        min_cluster_length=10.0,
+        max_centroid_jitter=10.0,
+        jitter_window=1,
+    )
+
+    tracker.process_frame(0.0, [])
+    first_events = tracker.process_frame(
+        0.1,
+        [{"track_id": 1, "centroid_cm": 20.0, "length_cm": 24.0}],
+    )
+    tracker.process_frame(0.2, [])
+    second_events = tracker.process_frame(
+        0.8,
+        [{"track_id": 2, "centroid_cm": 45.0, "length_cm": 24.0}],
+    )
+
+    assert first_events[0].contact.foot_label == "A"
+    assert second_events[0].contact.foot_label == "B"
+    assert build_visual_frame(0.8, [0] * 96, tracker).feet[0].side == "right"
 
 
 def test_build_visual_frame_preserves_unknown_foot_measurements():
