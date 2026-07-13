@@ -17,7 +17,7 @@ from typing import Optional
 
 from qtpy.QtCore import Signal, Qt, QTimer
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
     QLabel, QFrame, QSizePolicy, QProgressBar,
 )
 
@@ -157,6 +157,7 @@ class ExecutionView(QWidget):
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
+        self._main_layout = main_layout
         main_layout.setContentsMargins(15, 10, 15, 10)
         main_layout.setSpacing(10)
 
@@ -267,25 +268,32 @@ class ExecutionView(QWidget):
         main_layout.addWidget(self._chart_container, 1)
 
         self._lower_split = QWidget()
-        lower_layout = QHBoxLayout(self._lower_split)
+        lower_layout = QGridLayout(self._lower_split)
+        self._lower_layout = lower_layout
         lower_layout.setContentsMargins(0, 0, 0, 0)
         lower_layout.setSpacing(10)
+        lower_layout.setColumnStretch(0, 3)
+        lower_layout.setColumnStretch(2, 1)
+        lower_layout.setRowStretch(0, 1)
 
         self._camera_panel = EmbeddedCameraPanel()
-        lower_layout.addWidget(self._camera_panel, 3)
+        lower_layout.addWidget(self._camera_panel, 0, 0, 2, 1)
 
         self._footprint_channel = FootprintChannelWidget()
-        lower_layout.addWidget(self._footprint_channel, 1)
+        lower_layout.addWidget(self._footprint_channel, 0, 2)
         self._footprint_channel.hide()
         self._lower_split.hide()
         main_layout.addWidget(self._lower_split, 1)
 
         # ===== 进度条 =====
+        self._progress_container = QFrame()
+        progress_layout = QGridLayout(self._progress_container)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+
         self._progress_bar = QProgressBar()
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat("")
         self._progress_bar.setValue(0)
-        self._progress_bar.setFixedHeight(28)
         self._progress_bar.setStyleSheet(
             "QProgressBar {"
             "  background-color: rgba(40, 40, 45, 0.8);"
@@ -301,34 +309,63 @@ class ExecutionView(QWidget):
             "  border-radius: 5px;"
             "}"
         )
-        self._progress_bar.hide()
-        main_layout.addWidget(self._progress_bar)
+        progress_layout.addWidget(self._progress_bar, 0, 0)
+
+        self._progress_overlay = QWidget()
+        self._progress_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._progress_overlay.setStyleSheet("background: transparent;")
+        overlay_layout = QVBoxLayout(self._progress_overlay)
+        overlay_layout.setContentsMargins(4, 8, 4, 8)
+        overlay_layout.addStretch()
+        self._progress_title = MLabel("剩余")
+        self._progress_title.setAlignment(Qt.AlignCenter)
+        self._progress_title.setStyleSheet(
+            "font-size: 10pt; color: #e0e0e0; background: transparent; border: none;"
+        )
+        overlay_layout.addWidget(self._progress_title)
+        self._progress_value = MLabel("--:--")
+        self._progress_value.setAlignment(Qt.AlignCenter)
+        self._progress_value.setStyleSheet(
+            "font-size: 11pt; font-weight: bold; color: #ffffff; "
+            "background: transparent; border: none;"
+        )
+        overlay_layout.addWidget(self._progress_value)
+        overlay_layout.addStretch()
+        progress_layout.addWidget(self._progress_overlay, 0, 0)
+        self._progress_overlay.hide()
+        self._progress_container.setFixedHeight(28)
+        self._progress_container.hide()
+        main_layout.addWidget(self._progress_container)
 
         # ===== 控制按钮栏 =====
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(12)
+        self._controls_container = QWidget()
+        self._controls_layout = QBoxLayout(
+            QBoxLayout.LeftToRight, self._controls_container
+        )
+        self._controls_layout.setContentsMargins(0, 0, 0, 0)
+        self._controls_layout.setSpacing(12)
 
         self.btn_start = MPushButton("▶ 开始采集").primary()
         self.btn_start.setMinimumHeight(50)
         self.btn_start.setStyleSheet("font-size: 16pt; font-weight: bold; border-radius: 8px;")
         self.btn_start.clicked.connect(self._on_start)
-        btn_layout.addWidget(self.btn_start)
+        self._controls_layout.addWidget(self.btn_start)
 
         self.btn_pause = MPushButton("⏸ 暂停")
         self.btn_pause.setMinimumHeight(50)
         self.btn_pause.setStyleSheet("font-size: 14pt; border-radius: 8px;")
         self.btn_pause.clicked.connect(self._on_pause)
         self.btn_pause.hide()
-        btn_layout.addWidget(self.btn_pause)
+        self._controls_layout.addWidget(self.btn_pause)
 
-        self.btn_stop = MPushButton("⏹ 结束并生成报告")
+        self.btn_stop = MPushButton("结束")
         self.btn_stop.setMinimumHeight(50)
         self.btn_stop.setStyleSheet("font-size: 14pt; border-radius: 8px;")
         self.btn_stop.clicked.connect(self._on_stop)
         self.btn_stop.hide()
-        btn_layout.addWidget(self.btn_stop)
+        self._controls_layout.addWidget(self.btn_stop)
 
-        main_layout.addLayout(btn_layout)
+        main_layout.addWidget(self._controls_container)
 
     def _apply_style(self):
         self.setStyleSheet(
@@ -350,6 +387,7 @@ class ExecutionView(QWidget):
 
         # 切换卡片可见性
         is_jump = self._mode == "纵跳"
+        self._arrange_execution_area(is_jump)
         for c in self._jump_cards:
             c.setVisible(is_jump)
         for c in self._gait_cards:
@@ -432,7 +470,7 @@ class ExecutionView(QWidget):
 
         # 进度
         self._stop_countdown()
-        self._progress_bar.hide()
+        self._set_progress_visible(False)
         self._progress_bar.setValue(0)
 
     def on_hop_event(self, ev):
@@ -541,6 +579,51 @@ class ExecutionView(QWidget):
     #  进度显示
     # ------------------------------------------------------------------
 
+    def _arrange_execution_area(self, is_jump: bool):
+        if is_jump:
+            self._lower_layout.removeWidget(self._progress_container)
+            self._lower_layout.removeWidget(self._controls_container)
+            if self._main_layout.indexOf(self._progress_container) < 0:
+                self._main_layout.addWidget(self._progress_container)
+            if self._main_layout.indexOf(self._controls_container) < 0:
+                self._main_layout.addWidget(self._controls_container)
+            self._progress_container.setMinimumWidth(0)
+            self._progress_container.setMaximumWidth(16777215)
+            self._progress_container.setFixedHeight(28)
+            self._progress_bar.setOrientation(Qt.Horizontal)
+            self._progress_bar.setTextVisible(True)
+            self._progress_overlay.hide()
+            self._controls_layout.setDirection(QBoxLayout.LeftToRight)
+            self._controls_layout.setSpacing(12)
+        else:
+            self._main_layout.removeWidget(self._progress_container)
+            self._main_layout.removeWidget(self._controls_container)
+            self._lower_layout.addWidget(self._progress_container, 0, 1, 2, 1)
+            self._lower_layout.addWidget(self._controls_container, 1, 2)
+            self._progress_container.setFixedWidth(72)
+            self._progress_container.setMinimumHeight(0)
+            self._progress_container.setMaximumHeight(16777215)
+            self._progress_bar.setOrientation(Qt.Vertical)
+            self._progress_bar.setTextVisible(False)
+            self._progress_overlay.show()
+            self._controls_layout.setDirection(QBoxLayout.TopToBottom)
+            self._controls_layout.setSpacing(8)
+
+    def _set_progress_visible(self, visible: bool):
+        self._progress_container.setVisible(visible)
+
+    def _set_progress_text(self, text: str):
+        self._progress_bar.setFormat(text)
+        if text.startswith("剩余 "):
+            self._progress_title.setText("剩余")
+            self._progress_value.setText(text.removeprefix("剩余 "))
+        elif text == "时间到":
+            self._progress_title.setText("时间")
+            self._progress_value.setText("到")
+        else:
+            self._progress_title.setText("进度")
+            self._progress_value.setText(text.removesuffix(" 跳"))
+
     def _init_progress(self, config: TestConfig):
         """初始化进度条。"""
         self._stop_countdown()
@@ -550,18 +633,18 @@ class ExecutionView(QWidget):
             self._jump_target = config.number_of_jumps
             self._progress_bar.setMaximum(self._jump_target)
             self._progress_bar.setValue(0)
-            self._progress_bar.setFormat(f"0 / {self._jump_target} 跳")
-            self._progress_bar.show()
+            self._set_progress_text(f"0 / {self._jump_target} 跳")
+            self._set_progress_visible(True)
         elif config.stop_type == "End of Time" and config.test_length:
             total = config.get_test_length_seconds() or 0
             self._countdown_remaining = total
             self._progress_bar.setMaximum(total)
             self._progress_bar.setValue(total)
             mm, ss = divmod(total, 60)
-            self._progress_bar.setFormat(f"剩余 {mm:02d}:{ss:02d}")
-            self._progress_bar.show()
+            self._set_progress_text(f"剩余 {mm:02d}:{ss:02d}")
+            self._set_progress_visible(True)
         else:
-            self._progress_bar.hide()
+            self._set_progress_visible(False)
 
     def _start_countdown(self):
         """启动倒计时定时器（在"开始采集"后调用）。"""
@@ -574,11 +657,11 @@ class ExecutionView(QWidget):
         self._countdown_remaining -= 1
         if self._countdown_remaining <= 0:
             self._stop_countdown()
-            self._progress_bar.setFormat("时间到")
+            self._set_progress_text("时间到")
             self._progress_bar.setValue(0)
         else:
             mm, ss = divmod(self._countdown_remaining, 60)
-            self._progress_bar.setFormat(f"剩余 {mm:02d}:{ss:02d}")
+            self._set_progress_text(f"剩余 {mm:02d}:{ss:02d}")
             total = self._progress_bar.maximum()
             self._progress_bar.setValue(self._countdown_remaining)
 
@@ -586,7 +669,7 @@ class ExecutionView(QWidget):
         if self._jump_target is None:
             return
         self._progress_bar.setValue(self._touch_count)
-        self._progress_bar.setFormat(f"{self._touch_count} / {self._jump_target} 跳")
+        self._set_progress_text(f"{self._touch_count} / {self._jump_target} 跳")
 
     def _stop_countdown(self):
         if self._countdown_timer:
