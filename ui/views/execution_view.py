@@ -26,6 +26,7 @@ from dayu_widgets.push_button import MPushButton
 from dayu_widgets import dayu_theme
 
 from config.test_config import TestConfig
+from ui.embedded_camera_panel import EmbeddedCameraPanel
 from ui.footprint_channel import FootprintChannelWidget
 
 # pyqtgraph 可选导入
@@ -178,7 +179,7 @@ class ExecutionView(QWidget):
             "font-size: 11pt; padding: 4px 12px; "
             "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
         )
-        self.btn_logi_camera.clicked.connect(lambda: self.camera_requested.emit("logi"))
+        self.btn_logi_camera.clicked.connect(lambda: self._select_camera("logi"))
         top_bar.addWidget(self.btn_logi_camera)
 
         self.btn_tinyse_camera = MPushButton("🤖 Tiny SE")
@@ -187,7 +188,7 @@ class ExecutionView(QWidget):
             "font-size: 11pt; padding: 4px 12px; "
             "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
         )
-        self.btn_tinyse_camera.clicked.connect(lambda: self.camera_requested.emit("tinyse"))
+        self.btn_tinyse_camera.clicked.connect(lambda: self._select_camera("tinyse"))
         self.btn_tinyse_camera.setToolTip("OBSBOT Tiny SE (100fps)")
         top_bar.addWidget(self.btn_tinyse_camera)
 
@@ -197,7 +198,7 @@ class ExecutionView(QWidget):
             "font-size: 11pt; padding: 4px 12px; "
             "background-color: #424242; border: 1px solid #555; border-radius: 6px;"
         )
-        self.btn_basic_camera.clicked.connect(lambda: self.camera_requested.emit("basic"))
+        self.btn_basic_camera.clicked.connect(lambda: self._select_camera("basic"))
         top_bar.addWidget(self.btn_basic_camera)
 
         main_layout.addLayout(top_bar)
@@ -265,9 +266,19 @@ class ExecutionView(QWidget):
         self._chart_container.setLayout(charts_layout)
         main_layout.addWidget(self._chart_container, 1)
 
+        self._lower_split = QWidget()
+        lower_layout = QHBoxLayout(self._lower_split)
+        lower_layout.setContentsMargins(0, 0, 0, 0)
+        lower_layout.setSpacing(10)
+
+        self._camera_panel = EmbeddedCameraPanel()
+        lower_layout.addWidget(self._camera_panel, 7)
+
         self._footprint_channel = FootprintChannelWidget()
+        lower_layout.addWidget(self._footprint_channel, 3)
         self._footprint_channel.hide()
-        main_layout.addWidget(self._footprint_channel, 1)
+        self._lower_split.hide()
+        main_layout.addWidget(self._lower_split, 1)
 
         # ===== 进度条 =====
         self._progress_bar = QProgressBar()
@@ -344,8 +355,13 @@ class ExecutionView(QWidget):
         for c in self._gait_cards:
             c.setVisible(not is_jump)
         self._chart_container.setVisible(is_jump)
+        self._lower_split.setVisible(not is_jump)
         self._footprint_channel.setVisible(not is_jump)
         self._footprint_channel.set_direction(getattr(config, "direction", None))
+        if is_jump:
+            self._camera_panel.shutdown()
+        else:
+            self._camera_panel.start_preview()
 
         # 切换图表标签
         if _PG_AVAILABLE:
@@ -376,6 +392,15 @@ class ExecutionView(QWidget):
         else:
             self.btn_tinyse_camera.setToolTip("OBSBOT Tiny SE (未检测到，点击可重试)")
 
+    def _select_camera(self, camera_type: str):
+        if camera_type == "basic":
+            if self._lower_split.isVisible():
+                self._camera_panel.start_preview()
+            return
+        self._camera_panel.set_camera_type(camera_type)
+        if self._lower_split.isVisible():
+            self._camera_panel.start_preview()
+
     def reset(self):
         """重置所有仪表盘和图表到初始状态。"""
         # 仪表盘
@@ -393,6 +418,8 @@ class ExecutionView(QWidget):
             self._plot_cadence.setXRange(0, self._initial_range, padding=0)
         if hasattr(self, "_footprint_channel"):
             self._footprint_channel.clear()
+        if hasattr(self, "_camera_panel"):
+            self._camera_panel.shutdown()
 
         # 实时统计
         self._max_h = 0.0
