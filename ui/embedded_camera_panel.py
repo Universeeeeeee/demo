@@ -42,8 +42,14 @@ class _AspectRatioContainer(QWidget):
         super().__init__(parent)
         self._preview = preview
         self._preview.setParent(self)
+        self._overlay = None
 
-    def resizeEvent(self, event):
+    def set_overlay(self, overlay: QWidget):
+        self._overlay = overlay
+        self._overlay.setParent(self)
+        self._layout_children()
+
+    def _layout_children(self):
         rect = self.contentsRect()
         unit = max(1, min(rect.width() // 16, rect.height() // 9))
         width = unit * 16
@@ -51,6 +57,15 @@ class _AspectRatioContainer(QWidget):
         left = rect.x() + (rect.width() - width) // 2
         top = rect.y() + (rect.height() - height) // 2
         self._preview.setGeometry(left, top, width, height)
+        if self._overlay is not None:
+            self._overlay.move(
+                left + width - self._overlay.width() - 8,
+                top + 8,
+            )
+            self._overlay.raise_()
+
+    def resizeEvent(self, event):
+        self._layout_children()
         super().resizeEvent(event)
 
 
@@ -66,6 +81,7 @@ class EmbeddedCameraPanel(QFrame):
         self._record_path: Optional[str] = None
         self._preview_start_time: Optional[float] = None
         self._preview_active = False
+        self._status_text = "Idle"
 
         self._build_ui()
         self._set_running(False)
@@ -79,14 +95,18 @@ class EmbeddedCameraPanel(QFrame):
             "}"
         )
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
 
-        header = QHBoxLayout()
-        self._title = MLabel("OBSBOT Tiny SE")
-        self._title.setStyleSheet("font-size: 10pt; color: #a8a8a8;")
-        header.addWidget(self._title)
-        header.addStretch()
+        self._preview = QLabel("未连接相机")
+        self._preview.setAlignment(Qt.AlignCenter)
+        self._preview.setMinimumSize(320, 180)
+        self._preview.setStyleSheet(
+            "background-color: #111; color: #888; border: none;"
+        )
+        self._preview_container = _AspectRatioContainer(self._preview)
+        self._preview_container.setMinimumSize(320, 180)
+        layout.addWidget(self._preview_container, 1)
 
         self._btn_settings = MPushButton("⚙")
         self._btn_settings.setFixedSize(30, 28)
@@ -99,34 +119,13 @@ class EmbeddedCameraPanel(QFrame):
         self._menu.setMinimumWidth(340)
         self._build_settings_controls()
         self._menu.addSeparator()
+        self._restart_action = self._menu.addAction("重新启动预览")
+        self._restart_action.triggered.connect(self._restart_preview)
         self._record_action = self._menu.addAction("Record")
         self._record_action.triggered.connect(self._on_record)
         self._menu.aboutToShow.connect(self._refresh_menu)
         self._btn_settings.setMenu(self._menu)
-        header.addWidget(self._btn_settings)
-        layout.addLayout(header)
-
-        self._preview = QLabel("未连接相机")
-        self._preview.setAlignment(Qt.AlignCenter)
-        self._preview.setMinimumSize(320, 180)
-        self._preview.setStyleSheet(
-            "background-color: #111; color: #888; border: none;"
-        )
-        self._preview_container = _AspectRatioContainer(self._preview)
-        self._preview_container.setMinimumSize(320, 180)
-        layout.addWidget(self._preview_container, 1)
-
-        footer = QHBoxLayout()
-        self._stats = MLabel("Idle")
-        self._stats.setStyleSheet("font-size: 9pt; color: #9a9a9a;")
-        footer.addWidget(self._stats, 1)
-
-        self._btn_preview = MPushButton("Start Preview").primary()
-        self._btn_preview.setFixedHeight(28)
-        self._btn_preview.setStyleSheet("font-size: 10pt; padding: 2px 12px;")
-        self._btn_preview.clicked.connect(self._toggle_preview)
-        footer.addWidget(self._btn_preview)
-        layout.addLayout(footer)
+        self._preview_container.set_overlay(self._btn_settings)
 
     def _build_settings_controls(self):
         panel = QWidget(self._menu)
@@ -200,13 +199,13 @@ class EmbeddedCameraPanel(QFrame):
         was_running = self._preview_active
         self.shutdown()
         self._camera_type = camera_type
-        self._title.setText(self._camera_title())
         self._preview.setText("未连接相机")
-        self._stats.setText("Idle")
+        self._set_status("Idle")
         if was_running:
             self.start_preview()
 
     def start_preview(self):
+        self._preview.setText("正在连接相机")
         if self._thread is not None:
             if hasattr(self._capture, "set_preview_enabled"):
                 self._capture.set_preview_enabled(True)
@@ -226,7 +225,6 @@ class EmbeddedCameraPanel(QFrame):
         thread = QThread(self)
         capture.moveToThread(thread)
         capture.frame_ready.connect(self._on_frame)
-        capture.stats_updated.connect(self._on_stats)
         capture.recording_finished.connect(self._on_recording_finished)
         capture.error.connect(self._on_error)
         thread.started.connect(capture.start)
@@ -252,14 +250,12 @@ class EmbeddedCameraPanel(QFrame):
         self._preview_active = False
         self._preview_start_time = None
         self._set_running(False)
-        self._stats.setText("Idle")
+        self._set_status("Idle")
         self._preview.setText("已停止")
 
-    def _toggle_preview(self):
-        if self._preview_active:
-            self.stop_preview()
-        else:
-            self.start_preview()
+    def _restart_preview(self):
+        self.shutdown()
+        self.start_preview()
 
     def shutdown(self):
         capture = self._capture
@@ -317,12 +313,6 @@ class EmbeddedCameraPanel(QFrame):
         self._preview.setPixmap(QPixmap.fromImage(image))
         self._preview_start_time = None
 
-    def _on_stats(self, fps: float, record_sec: float):
-        if not self._preview_active:
-            return
-        rec = f"  |  REC {record_sec:.1f}s" if record_sec > 0 else ""
-        self._stats.setText(f"Capture {fps:.2f} fps{rec}")
-
     def _on_record(self):
         capture = self._capture
         if capture is None:
@@ -339,12 +329,12 @@ class EmbeddedCameraPanel(QFrame):
 
     def _on_recording_finished(self, path: str):
         self._record_path = None
-        self._stats.setText(f"Saved: {path}")
+        self._set_status(f"Saved: {path}")
         self._refresh_menu()
 
     def _on_error(self, message: str):
         self._preview.setText("未连接相机")
-        self._stats.setText(f"Error: {message}")
+        self._set_status(f"Error: {message}")
         self.shutdown()
 
     def _apply_control_settings(self, control):
@@ -366,7 +356,7 @@ class EmbeddedCameraPanel(QFrame):
             control = TinySeCameraControl(0)
             if not control.init():
                 control.close()
-                self._stats.setText("SDK 控制不可用: 未检测到 Tiny SE")
+                self._set_status("SDK 控制不可用: 未检测到 Tiny SE")
                 return False
             self._control = control
             if apply_settings:
@@ -374,7 +364,7 @@ class EmbeddedCameraPanel(QFrame):
             return True
         except Exception as exc:
             self._control = None
-            self._stats.setText(f"SDK 控制不可用: {exc}")
+            self._set_status(f"SDK 控制不可用: {exc}")
             return False
 
     def _release_control(self):
@@ -385,7 +375,14 @@ class EmbeddedCameraPanel(QFrame):
 
     def _report_control_result(self, action: str, result: int):
         if result < 0:
-            self._stats.setText(f"{action}失败，返回码: {result}")
+            self._set_status(f"{action}失败，返回码: {result}")
+
+    def _set_status(self, text: str):
+        self._status_text = text
+        tooltip = "摄像头设置"
+        if text != "Idle":
+            tooltip = f"{tooltip}\n{text}"
+        self._btn_settings.setToolTip(tooltip)
 
     def _on_mirror(self, _state: int):
         if self._capture is not None and hasattr(self._capture, "set_mirror"):
@@ -434,16 +431,8 @@ class EmbeddedCameraPanel(QFrame):
         else:
             self._record_action.setText("Record")
 
-    def _set_running(self, running: bool):
-        self._btn_preview.setText("Stop Preview" if running else "Start Preview")
+    def _set_running(self, _running: bool):
         self._refresh_menu()
-
-    def _camera_title(self) -> str:
-        if self._camera_type == "logi":
-            return "Logitech MX Brio"
-        if self._camera_type == "basic":
-            return "基础预览"
-        return "OBSBOT Tiny SE"
 
     def _is_recording(self, capture) -> bool:
         if hasattr(capture, "is_recording"):
