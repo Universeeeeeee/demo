@@ -272,10 +272,10 @@ class ExecutionView(QWidget):
         lower_layout.setSpacing(10)
 
         self._camera_panel = EmbeddedCameraPanel()
-        lower_layout.addWidget(self._camera_panel, 7)
+        lower_layout.addWidget(self._camera_panel, 3)
 
         self._footprint_channel = FootprintChannelWidget()
-        lower_layout.addWidget(self._footprint_channel, 3)
+        lower_layout.addWidget(self._footprint_channel, 1)
         self._footprint_channel.hide()
         self._lower_split.hide()
         main_layout.addWidget(self._lower_split, 1)

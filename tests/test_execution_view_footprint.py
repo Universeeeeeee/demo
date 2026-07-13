@@ -47,6 +47,8 @@ def test_execution_view_shows_footprint_channel_for_treadmill(qtbot):
     assert isinstance(view._footprint_channel, FootprintChannelWidget)
     assert view._footprint_channel.isVisible()
     assert not view._chart_container.isVisible()
+    assert view._lower_split.layout().stretch(0) == 3
+    assert view._lower_split.layout().stretch(1) == 1
 
 
 def test_execution_view_keeps_jump_charts_for_jump(qtbot):
