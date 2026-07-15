@@ -175,8 +175,17 @@ def classify_event(
     label, ratio = _dominant_label(frame_labels)
     if label is FootLabel.UNKNOWN or ratio < _CONSISTENCY_RATIO:
         return unknown_decision(event_id, event_time_s, "window_inconsistent")
-    if _value_range(left_y) > _MAX_STABLE_RANGE or _value_range(right_y) > _MAX_STABLE_RANGE:
-        return unknown_decision(event_id, event_time_s, "feet_not_stable")
+    if label is FootLabel.BOTH:
+        stable = (
+            _value_range(left_y) <= _MAX_STABLE_RANGE
+            and _value_range(right_y) <= _MAX_STABLE_RANGE
+        )
+    elif label is FootLabel.LEFT:
+        stable = _value_range(left_y) <= _MAX_STABLE_RANGE
+    else:
+        stable = _value_range(right_y) <= _MAX_STABLE_RANGE
+    if not stable:
+        return unknown_decision(event_id, event_time_s, "contact_foot_not_stable")
 
     difference = abs(median(left_y) - median(right_y))
     quality = median(qualities)

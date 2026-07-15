@@ -21,12 +21,29 @@ class VisionDiagnosticContractTests(unittest.TestCase):
                 r"C:\Iron_Jump\models\pose_landmarker_full.task",
                 "--output",
                 "vision-results.csv",
+                "--interval-ms",
+                "100",
             ]
         )
 
         self.assertEqual(args.camera, "tinyse")
         self.assertTrue(args.model.endswith("pose_landmarker_full.task"))
         self.assertEqual(args.output, "vision-results.csv")
+        self.assertEqual(args.interval_ms, 100)
+
+    def test_live_entry_exists_and_reuses_isolated_camera_window(self):
+        live_path = ROOT / "tools/vision_live.py"
+        source = live_path.read_text(encoding="utf-8")
+
+        self.assertIn("tools.vision_diagnostic", source)
+        self.assertIn("main", source)
+
+    def test_window_uses_timer_for_continuous_events(self):
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertIn("self._event_timer = QTimer(self)", source)
+        self.assertIn("self._event_timer.timeout.connect(self._submit_event)", source)
+        self.assertIn("self._event_timer.start(args.interval_ms)", source)
 
     def test_import_does_not_load_qt_or_camera(self):
         sys.modules.pop("tools.vision_diagnostic", None)

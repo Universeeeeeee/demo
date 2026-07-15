@@ -27,12 +27,25 @@ CSV_FIELDS = (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Test Tiny SE/Logitech camera frames with MediaPipe foot labels."
+        description="Show continuous MediaPipe foot labels from Tiny SE/Logitech."
     )
     parser.add_argument("--camera", choices=("tinyse", "logi"), default="tinyse")
     parser.add_argument("--model", required=True, help="Path to Pose Landmarker Full .task")
     parser.add_argument("--output", default="vision-results.csv", help="CSV result path")
+    parser.add_argument(
+        "--interval-ms",
+        type=_positive_int,
+        default=100,
+        help="Rolling visual-state update interval (default: 100 ms)",
+    )
     return parser
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("interval must be positive")
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,9 +59,7 @@ def run(args: argparse.Namespace) -> int:
     from qtpy.QtGui import QImage, QKeySequence, QPixmap, QShortcut
     from qtpy.QtWidgets import (
         QApplication,
-        QHBoxLayout,
         QLabel,
-        QPushButton,
         QVBoxLayout,
         QWidget,
     )
@@ -64,7 +75,7 @@ def run(args: argparse.Namespace) -> int:
     class DiagnosticWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
-            self.setWindowTitle("Iron_Jump 视觉左右脚诊断")
+            self.setWindowTitle("Iron_Jump 左右脚视觉实时状态")
             self.resize(1100, 760)
             self._event_id = 0
             self._closing = False
@@ -83,26 +94,18 @@ def run(args: argparse.Namespace) -> int:
             self._preview.setMinimumSize(960, 540)
             self._preview.setStyleSheet("background:#111; color:#aaa;")
 
-            self._result = QLabel("尚未触发事件")
+            self._result = QLabel("等待视觉窗口……")
             self._result.setStyleSheet("font-size:18px; font-weight:600;")
             self._status = QLabel("正在初始化视觉模型……")
             self._queue = QLabel("队列：frames=0 events=0")
             self._help = QLabel(
-                "空格：模拟一次光栅触地事件    Q：退出\n"
-                "注意：这是独立视觉诊断，不代表真实光栅同步已经验证。"
+                "相机画面将自动连续判断左右脚状态    Q：退出\n"
+                "注意：这是视觉参考状态，不代表光栅触地时刻。"
             )
-
-            trigger = QPushButton("模拟触地（Space）")
-            trigger.setShortcut(QKeySequence("Space"))
-            trigger.clicked.connect(self._submit_event)
-
-            controls = QHBoxLayout()
-            controls.addWidget(trigger)
-            controls.addWidget(self._result, 1)
 
             layout = QVBoxLayout(self)
             layout.addWidget(self._preview, 1)
-            layout.addLayout(controls)
+            layout.addWidget(self._result)
             layout.addWidget(self._status)
             layout.addWidget(self._queue)
             layout.addWidget(self._help)
@@ -127,8 +130,12 @@ def run(args: argparse.Namespace) -> int:
             self._queue_timer.timeout.connect(self._refresh_queue)
             self._queue_timer.start(100)
 
+            self._event_timer = QTimer(self)
+            self._event_timer.timeout.connect(self._submit_event)
+
             try:
                 self._start_camera()
+                self._event_timer.start(args.interval_ms)
             except Exception as exc:
                 self._status.setText(f"相机不可用：{exc}")
 
@@ -157,7 +164,6 @@ def run(args: argparse.Namespace) -> int:
         def _submit_event(self) -> None:
             self._event_id += 1
             event_time_s = time.perf_counter()
-            self._result.setText(f"事件 {self._event_id}：等待窗口完成……")
             self._service.submit_touch_event(self._event_id, event_time_s)
 
         @Slot(object)
@@ -189,7 +195,7 @@ def run(args: argparse.Namespace) -> int:
         @Slot(float, float)
         def _on_camera_stats(self, fps: float, _record_seconds: float) -> None:
             self.setWindowTitle(
-                f"Iron_Jump 视觉左右脚诊断 — {args.camera} — {fps:.1f} FPS"
+                f"Iron_Jump 左右脚视觉实时状态 — {args.camera} — {fps:.1f} FPS"
             )
 
         @Slot(str)
@@ -232,6 +238,7 @@ def run(args: argparse.Namespace) -> int:
                 return
             self._closing = True
             self._queue_timer.stop()
+            self._event_timer.stop()
             capture = self._capture
             thread = self._camera_thread
             if capture is not None:

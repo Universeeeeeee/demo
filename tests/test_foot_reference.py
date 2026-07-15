@@ -79,6 +79,18 @@ class FootReferenceTests(unittest.TestCase):
         self.assertIs(result.label, FootLabel.RIGHT)
         self.assertGreaterEqual(result.confidence, 0.9)
 
+    def test_classifier_allows_swing_foot_to_move_when_left_is_stable(self):
+        samples = [
+            _sample(2.20, left_y=0.91, right_y=0.68),
+            _sample(2.24, left_y=0.91, right_y=0.58),
+            _sample(2.28, left_y=0.90, right_y=0.70),
+        ]
+
+        result = classify_event(10, 2.25, samples)
+
+        self.assertIs(result.label, FootLabel.LEFT)
+        self.assertGreaterEqual(result.confidence, 0.9)
+
     def test_classifier_labels_two_level_stable_feet_as_both(self):
         samples = [
             _sample(3.20, left_y=0.90, right_y=0.89),

@@ -49,12 +49,13 @@ Invoke-WebRequest `
   -Uri "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" `
   -OutFile ".\models\pose_landmarker_full.task"
 
-python tools\vision_diagnostic.py `
+python tools\vision_live.py `
   --camera tinyse `
   --model .\models\pose_landmarker_full.task `
   --output vision-results.csv
 ```
 
-Press Space to submit a simulated touch event and Q to exit. The CSV records
-timestamps, label, confidence, rejection reason, and end-to-end latency. This
-manual trigger does not validate synchronization with the optical grid.
+The independent window continuously evaluates rolling visual windows (default
+100 ms interval); press Q to exit. The CSV records timestamps, label,
+confidence, rejection reason, and end-to-end latency. Continuous visual state
+does not validate synchronization with the optical grid.
