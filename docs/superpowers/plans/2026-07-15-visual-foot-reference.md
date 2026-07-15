@@ -219,7 +219,37 @@ Run: `python -m pytest tests/test_vision_service.py -q`
 
 Expected: PASS。
 
-### Task 6: 固定包边界和公开调用示例
+### Task 6: 增加 Windows 独立诊断程序
+
+**Files:**
+- Create: `tools/vision_diagnostic.py`
+- Create: `tests/test_vision_diagnostic.py`
+
+- [ ] **Step 1: 写失败测试**
+
+验证诊断程序只依赖 `camera` 和 `vision` 的公开接口；支持选择 `logi`/`tinyse`、指定 Full `.task` 模型路径、用空格键提交带当前 `perf_counter` 时间戳的模拟触地事件、显示最新四类结果，并把事件时间、结果时间、标签、置信度、原因和延迟写入 CSV。
+
+- [ ] **Step 2: 运行并确认失败**
+
+Run: `python -m pytest tests/test_vision_diagnostic.py -q`
+
+Expected: FAIL，诊断入口不存在。
+
+- [ ] **Step 3: 实现最小诊断入口**
+
+```powershell
+python tools/vision_diagnostic.py --camera tinyse --model C:\Iron_Jump\models\pose_landmarker_full.task --output vision-results.csv
+```
+
+诊断窗口显示相机状态、模型状态、帧率、队列深度、最近一次事件标签和端到端延迟。空格键模拟光栅 touch，`Q` 安全退出。该工具不得 import engine、processor、报告或主 UI，也不得把手动事件测试描述成光栅同步已经验证。
+
+- [ ] **Step 4: 运行测试**
+
+Run: `python -m pytest tests/test_vision_diagnostic.py -q`
+
+Expected: PASS。
+
+### Task 7: 固定包边界和公开调用示例
 
 **Files:**
 - Modify: `vision/__init__.py`
@@ -246,7 +276,7 @@ Run: `python -m pytest tests/test_vision_package_boundary.py -q`
 
 Expected: PASS。
 
-### Task 7: 回归检查与 Windows 验收关卡
+### Task 8: 回归检查与 Windows 验收关卡
 
 **Files:**
 - Modify: `plan.md`
@@ -254,7 +284,7 @@ Expected: PASS。
 
 - [ ] **Step 1: Mac 自动化回归**
 
-Run: `python -m pytest tests/test_foot_reference.py tests/test_vision_event_scheduler.py tests/test_mediapipe_pose_adapter.py tests/test_camera_analysis_frames.py tests/test_vision_service.py tests/test_vision_package_boundary.py tests/test_embedded_camera_panel.py -q`
+Run: `python -m pytest tests/test_foot_reference.py tests/test_vision_event_scheduler.py tests/test_mediapipe_pose_adapter.py tests/test_camera_analysis_frames.py tests/test_vision_service.py tests/test_vision_diagnostic.py tests/test_vision_package_boundary.py tests/test_embedded_camera_panel.py -q`
 
 Expected: PASS。若当前 shell 不是项目 Python 3.11 或缺 PySide6/dayu_widgets，应切换项目环境重跑；不能把 Anaconda Python 3.13 的缺包当作模块失败。
 
@@ -270,7 +300,7 @@ Expected: `git diff --check` 退出码 0；`rg` 无匹配。确认本轮除 `vis
 
 - [ ] **Step 4: Windows CPU 性能检查**
 
-通过独立 Service 同时输入真实相机帧和光栅事件；记录队列深度、拒识原因以及包含 `post_event_ms` 的 P50/P95/P99。P95 目标不超过 200ms；达不到时先降低视觉采样率，再评估 Full→Lite，不降低光栅采样率。
+先用 `tools/vision_diagnostic.py` 的手动事件验证相机、模型、窗口和结果输出，再用一个后续薄适配器同时输入真实相机帧和光栅事件；记录队列深度、拒识原因以及包含 `post_event_ms` 的 P50/P95/P99。P95 目标不超过 200ms；达不到时先降低视觉采样率，再评估 Full→Lite，不降低光栅采样率。
 
 - [ ] **Step 5: 真人标签验收**
 

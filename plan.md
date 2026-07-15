@@ -151,6 +151,7 @@
 5. 原项目首版只允许相机采集类增加一个兼容的“未镜像帧 + 采集时间戳”信号；现有相机预览、录制和 `frame_ready` 接口保持不变。光栅事件由调用方通过独立服务的 `submit_touch_event()` 主动提交。
 6. 独立模块输出 `left/right/both/unknown` 和置信度，不直接修改光栅判断。高置信融合、当前接触延迟结算、A/B 映射更新和用户界面开关留到视觉模块通过 Windows 真人数据验证后，再以薄适配器接入。
 7. Mac 端完成纯算法、假模型和 Qt 信号级自动化测试；MediaPipe 模型文件、Windows 依赖版本、PyInstaller 包含规则、CPU P95 延迟和真人准确率必须在 Windows 10/11 x64 真机分别验收后才能勾选。不得把“核心测试通过”表述为“真人左右脚准确率已验证”。
+8. 提供独立 Windows 诊断程序，只调用 `camera` 和 `vision` 的公开接口；支持手动触发模拟触地事件、实时查看标签/置信度/延迟/拒识原因并导出 CSV，不接入原项目 engine 或主 UI。
 
 详细到文件、接口、测试和命令的执行清单见 `docs/superpowers/plans/2026-07-15-visual-foot-reference.md`。
 
