@@ -5,7 +5,7 @@ pytest.importorskip("dayu_widgets")
 from qtpy.QtWidgets import QApplication, QTableWidget
 
 from config.test_report import JumpTestReport
-from config.treadmill_report import TreadmillGaitReport
+from config.treadmill_report import GaitCycleRecord, TreadmillGaitReport, summarize
 from engine.footprint_visualization import FootprintVisualFrame
 from ui.footprint_channel import FootprintReplayPanel
 from ui.views.report_view import ReportView, StatCard
@@ -148,6 +148,56 @@ def test_treadmill_report_overview_keeps_tables_off_the_replay_page():
     assert not any(view._overview_page.isAncestorOf(widget) for widget in view._dynamic_widgets)
     assert view._replay_panel.width() <= 780
     assert view._replay_panel.height() >= 520
+
+
+def test_treadmill_report_shows_cycle_overview_timeline_and_details(qtbot):
+    cycle = GaitCycleRecord(
+        index=0,
+        side="left",
+        start_time_s=0.0,
+        end_time_s=1.0,
+        gait_cycle_s=1.0,
+        stance_phase_s=0.6,
+        stance_phase_percent=60.0,
+        swing_phase_s=0.4,
+        swing_phase_percent=40.0,
+        step_time_s=0.5,
+        single_support_s=0.4,
+        single_support_percent=40.0,
+        total_double_support_s=0.2,
+        total_double_support_percent=20.0,
+        load_response_s=0.1,
+        load_response_percent=10.0,
+        pre_swing_s=0.1,
+        pre_swing_percent=10.0,
+        total_flight_time_s=0.0,
+    )
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=3,
+        lift_count=2,
+        resolved_starting_foot="left",
+        starting_foot_source="manual_override",
+        gait_cycles=(cycle,),
+        cycle_metric_summaries={"gait_cycle_s": summarize((1.0,))},
+        cycle_side_summaries={
+            "left": {"gait_cycle_s": summarize((1.0,))},
+            "right": {"gait_cycle_s": summarize(())},
+        },
+        report_config_snapshot={"treadmill_speed": 5.0, "direction": "Interface side"},
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    labels = [card._label.text() for card in view._stat_cards if card.isVisible()]
+    assert "左脚有效周期" in labels
+    assert "右脚有效周期" in labels
+    assert "平均步态周期" in labels
+    assert view._cycle_timeline_table.rowCount() == 1
+    assert view._cycle_detail_table.rowCount() == 1
+    assert view._cycle_detail_table.horizontalHeaderItem(1).text() == "脚"
 
 
 def test_stat_card_reduces_font_for_long_values():

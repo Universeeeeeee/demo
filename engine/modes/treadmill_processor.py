@@ -14,6 +14,7 @@ LED clusters are used ONLY for timing (contact/lift detection).
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from typing import Any, Final, List
 
@@ -24,12 +25,15 @@ from config.treadmill_config import (
     TreadmillRunningConfig,
 )
 from config.treadmill_report import (
+    GaitCycleRecord,
     MetricSummary,
     TreadmillGaitReport,
     TreadmillRunningReport,
+    TreadmillStepResult,
     summarize,
 )
 from engine.contact_tracker import ContactBasedGaitTracker, GaitStepEvent
+from engine.gait_cycle import GaitCycleBuilder
 from engine.footprint_visualization import FootprintTimelineRecorder
 from engine.modes.base import ModeProcessor
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
@@ -39,6 +43,24 @@ from engine.modes.treadmill_running_accumulator import TreadmillRunningAccumulat
 from engine.spatial_clusterer import ClusterTracker, extract_clusters
 
 log = logging.getLogger(__name__)
+
+_CYCLE_SUMMARY_FIELDS: Final[tuple[str, ...]] = (
+    "gait_cycle_s",
+    "stance_phase_s",
+    "stance_phase_percent",
+    "swing_phase_s",
+    "swing_phase_percent",
+    "step_time_s",
+    "single_support_s",
+    "single_support_percent",
+    "total_double_support_s",
+    "total_double_support_percent",
+    "load_response_s",
+    "load_response_percent",
+    "pre_swing_s",
+    "pre_swing_percent",
+    "total_flight_time_s",
+)
 
 
 # Heel/toe reference offsets in cm from observed centroid.
@@ -95,8 +117,14 @@ class TreadmillProcessor:
             self._toe_offset_cm = fl * 0.5
 
         self._cluster_tracker = ClusterTracker()
-        self._contact_tracker = ContactBasedGaitTracker()
+        self._contact_tracker = ContactBasedGaitTracker(min_step_interval=0.05)
         self._accumulator = self._make_accumulator()
+        self._cycle_builder = GaitCycleBuilder()
+        self._label_to_side: dict[str, str] = {}
+        self._contact_side: dict[int, str] = {}
+        self._last_assigned_side: str | None = None
+        self._last_rel_time = 0.0
+        self._live_cycle_cursor = 0
         self._visual_recorder = FootprintTimelineRecorder()
         self._last_clusters = []
 
@@ -108,6 +136,12 @@ class TreadmillProcessor:
         self._cluster_tracker = ClusterTracker()
         self._contact_tracker.reset()
         self._accumulator = self._make_accumulator()
+        self._cycle_builder = GaitCycleBuilder()
+        self._label_to_side = {}
+        self._contact_side = {}
+        self._last_assigned_side = None
+        self._last_rel_time = 0.0
+        self._live_cycle_cursor = 0
         self._visual_recorder.reset()
         self._last_clusters = []
 
@@ -127,6 +161,7 @@ class TreadmillProcessor:
         the caller to re-emit via Qt signals.
         """
         # 1. Extract clusters
+        self._last_rel_time = rel_time
         clusters = extract_clusters(contact_bits)
         self._last_clusters = clusters
 
@@ -202,6 +237,11 @@ class TreadmillProcessor:
                 abs(left_avg - right_avg) / denom * 100.0
             )
 
+        gait_cycle_state = self._cycle_builder.make_live_snapshot(
+            rel_time, completed_from_index=self._live_cycle_cursor
+        )
+        self._live_cycle_cursor = gait_cycle_state["completed_cycle_count"]
+
         return {
             "timestamp": rel_time,
             "status": status,
@@ -218,6 +258,8 @@ class TreadmillProcessor:
             "foot_a_support_times": list(support_by_side["left"]),
             "foot_b_support_times": list(support_by_side["right"]),
             "latest_extra_metrics": latest_extra_metrics,
+            "gait_cycle_state": gait_cycle_state,
+            "gait_cycle_asymmetry_percent": self._live_cycle_asymmetry(),
         }
 
     def build_report(
@@ -231,6 +273,7 @@ class TreadmillProcessor:
         """
         self._accumulator.apply_automatic_data_filter()
         rows = self._accumulator.rows
+        gait_cycles = self._cycles_with_row_inclusion(rows)
         config_snapshot = self._config.to_dict()
 
         # Build metric summaries from valid, included rows
@@ -298,6 +341,10 @@ class TreadmillProcessor:
                     sum(left_ct) / len(left_ct) - sum(right_ct) / len(right_ct)
                 )
 
+        cycle_metric_summaries, cycle_side_summaries, cycle_asymmetry = (
+            self._build_cycle_summaries(gait_cycles)
+        )
+
         base_kwargs: dict[str, Any] = dict(
             finish_reason=reason,
             touch_count=self._contact_tracker.touch_count,
@@ -314,6 +361,14 @@ class TreadmillProcessor:
             export_frames=export_frames,
             export_timestamps=export_timestamps,
             visual_timeline=self._visual_recorder.frames,
+            raw_gait_events=self._cycle_builder.raw_events,
+            gait_cycles=gait_cycles,
+            boundary_partials=self._cycle_builder.build_boundary_partials(
+                self._last_rel_time
+            ),
+            cycle_metric_summaries=cycle_metric_summaries,
+            cycle_side_summaries=cycle_side_summaries,
+            cycle_asymmetry_percent=cycle_asymmetry,
         )
 
         if isinstance(self._config, TreadmillRunningConfig):
@@ -339,13 +394,12 @@ class TreadmillProcessor:
         if not isinstance(ev, GaitStepEvent):
             return
 
-        # Determine side from foot_label: "A" -> "left", "B" -> "right"
-        # (or vice-versa depending on direction; for simplicity map A=left)
-        side = "left"
-        if ev.contact.foot_label == "B":
-            side = "right"
-        elif ev.contact.foot_label is None:
-            side = "unknown"
+        side = self._resolve_event_side(ev)
+        event_time = rel_time
+        if ev.kind == "touch" and ev.contact.touch_time is not None:
+            event_time = ev.contact.touch_time
+        elif ev.kind == "lift" and ev.contact.lift_time is not None:
+            event_time = ev.contact.lift_time
 
         centroid_cm = ev.contact.centroid_at_touch or ev.contact.latest_centroid or 0.0
 
@@ -361,12 +415,145 @@ class TreadmillProcessor:
             toe_cm = centroid_cm - self._toe_offset_cm
 
         if ev.kind == "touch":
+            self._cycle_builder.record_touch(event_time, side)
             self._accumulator.record_touch(
-                time_s=rel_time, side=side, heel_cm=heel_cm, toe_cm=toe_cm
+                time_s=event_time, side=side, heel_cm=heel_cm, toe_cm=toe_cm
             )
         elif ev.kind == "lift":
             self.lift_count += 1
-            self._accumulator.record_lift(time_s=rel_time, side=side)
+            row_count = len(self._accumulator.rows)
+            self._accumulator.record_lift(time_s=event_time, side=side)
+            included = None
+            if len(self._accumulator.rows) > row_count:
+                included = self._accumulator.rows[-1].is_included_in_statistics
+            self._cycle_builder.record_lift(
+                event_time,
+                side,
+                is_included_in_statistics=included,
+            )
+
+    def _resolve_event_side(self, ev: GaitStepEvent) -> str:
+        contact_id = ev.contact.contact_id
+        known = self._contact_side.get(contact_id)
+        if known is not None:
+            return known
+
+        label = ev.contact.foot_label
+        side = self._label_to_side.get(label or "")
+        if side is None and label in ("A", "B"):
+            if not self._label_to_side and self._config.starting_foot_override:
+                side = self._config.starting_foot_override
+                opposite = "left" if side == "right" else "right"
+                self._label_to_side[label] = side
+                self._label_to_side["B" if label == "A" else "A"] = opposite
+            else:
+                side = "left" if label == "A" else "right"
+                self._label_to_side[label] = side
+
+        if side is None:
+            if self._last_assigned_side is None:
+                side = self._config.starting_foot_override or "unknown"
+            elif self._last_assigned_side == "left":
+                side = "right"
+            elif self._last_assigned_side == "right":
+                side = "left"
+            else:
+                side = "unknown"
+
+        if ev.kind == "touch":
+            self._contact_side[contact_id] = side
+            if side in ("left", "right"):
+                self._last_assigned_side = side
+        return side
+
+    def _cycles_with_row_inclusion(
+        self, rows: tuple[TreadmillStepResult, ...]
+    ) -> tuple[GaitCycleRecord, ...]:
+        row_inclusion = {}
+        for row in rows:
+            if row.time_s is None or row.contact_time_s is None:
+                continue
+            touch_time_s = row.time_s - row.contact_time_s
+            row_inclusion[(row.side, round(touch_time_s, 9))] = (
+                row.is_included_in_statistics
+            )
+
+        return tuple(
+            replace(
+                cycle,
+                is_included_in_statistics=(
+                    cycle.is_included_in_statistics
+                    and row_inclusion.get(
+                        (cycle.side, round(cycle.start_time_s, 9)), True
+                    )
+                ),
+            )
+            for cycle in self._cycle_builder.completed_cycles
+        )
+
+    def _build_cycle_summaries(
+        self, source_cycles: tuple[GaitCycleRecord, ...] | None = None
+    ):
+        cycles = [
+            cycle for cycle in (
+                source_cycles
+                if source_cycles is not None
+                else self._cycle_builder.completed_cycles
+            )
+            if cycle.is_included_in_statistics
+        ]
+        overall: dict[str, MetricSummary] = {}
+        by_side: dict[str, dict[str, MetricSummary]] = {
+            "left": {},
+            "right": {},
+        }
+        asymmetry: dict[str, float] = {}
+
+        for field_name in _CYCLE_SUMMARY_FIELDS:
+            all_values = tuple(
+                value for cycle in cycles
+                if (value := getattr(cycle, field_name)) is not None
+            )
+            overall[field_name] = summarize(all_values)
+            for side in ("left", "right"):
+                side_values = tuple(
+                    value for cycle in cycles
+                    if cycle.side == side
+                    and (value := getattr(cycle, field_name)) is not None
+                )
+                by_side[side][field_name] = summarize(side_values)
+
+            left_mean = by_side["left"][field_name].mean
+            right_mean = by_side["right"][field_name].mean
+            if left_mean is None or right_mean is None:
+                continue
+            denominator = (left_mean + right_mean) / 2.0
+            if denominator:
+                asymmetry[field_name] = (
+                    abs(left_mean - right_mean) / denominator * 100.0
+                )
+
+        return overall, by_side, asymmetry
+
+    def _live_cycle_asymmetry(self) -> dict[str, float]:
+        side_values = {
+            side: [
+                cycle.gait_cycle_s
+                for cycle in self._cycle_builder.completed_cycles
+                if cycle.side == side and cycle.is_included_in_statistics
+            ]
+            for side in ("left", "right")
+        }
+        if not side_values["left"] or not side_values["right"]:
+            return {}
+        left_mean = sum(side_values["left"]) / len(side_values["left"])
+        right_mean = sum(side_values["right"]) / len(side_values["right"])
+        denominator = (left_mean + right_mean) / 2.0
+        if not denominator:
+            return {}
+        return {
+            "gait_cycle_s": abs(left_mean - right_mean) / denominator * 100.0
+        }
 
 
 __all__ = ["TreadmillProcessor"]

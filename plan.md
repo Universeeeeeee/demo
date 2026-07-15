@@ -1,456 +1,301 @@
-# Iron_Jump 参数配置系统开发计划
+# Iron_Jump 统一项目计划
 
-## 已完成的基础设施
-
-| 阶段 | 内容 | 关键文件 |
-|---|---|---|
-| P1 | 配置数据模型 | `config/param_schema.py`, `config/test_config.py` |
-| P2 | Agent 模块重构（输出 TestConfig） | `agent/models.py`, `rule_engine.py`, `llm_agent.py`, `gait_agent.py` |
-| P3 | 算法引擎适配（接受 TestConfig + 自动停止） | `engine/gait_engine.py` |
-| P4 | UI 参数配置面板 | `ui/param_panel.py` |
-
-当前已建立完整的 Jump Test 范式：参数配置 → 数据采集 → 实时分析 → 报告生成。以下计划均基于此范式扩展。
-
----
-
-## 2026-06-23 状态校准与当前下一步
-
-### 已落地但旧计划未同步
-
-| 项目 | 当前代码事实 | 关键文件 |
-|---|---|---|
-| SubjectStore UI MVP | 已接入主 UI：受试者搜索/新建、加载上次参数、测试结束自动存档、历史记录回填配置 | `data/subject_store.py`, `ui/views/setup_view.py`, `ui/main_window.py`, `ui/views/history_view.py`, `tests/test_subject_store.py`, `tests/test_history_view.py` |
-| Agent 集成主 UI | 已完成：`AgentConfigPanel` 嵌入 `SetupView`，支持智能/手动配置切换 | `ui/views/agent_config_panel.py`, `ui/views/setup_view.py`, `tests/test_agent_config_panel.py` |
-| Phase 9.1 保护测试 | 已有小样本测试覆盖 single foot、spatial cluster、contact tracker、build_report | `tests/test_engine_protection.py`, `tests/test_jump_report.py` |
-
-### 当前执行顺序
-
-1. **论文 P0 主实验**：先设计步态参数准确性验证方案，确定参考标准、采集对照数据和评价指标。
-2. **论文 P0 Agent 辅助实验**：编写 10~30 条典型指令，并实现 Agent 评估脚本。
-3. **工程 Phase 9.2a → 9.2**：先升级纵跳离线诊断，验证“确认仍用高阈值、统计时间由关联原始轨迹回填”的方案；通过多 session 人工标注复验后，再小范围修改 `SingleFootDetector`。只有纵跳时间戳语义稳定后，才继续抽出 `engine/gait_core.py`，让 `GaitEngine(QObject)` 逐步变成 Qt 适配壳。
-
-### 当前计算逻辑审计：边界记录 + 事件确认
-
-| 模式 | 当前逻辑 | 判断 |
-|---|---|---|
-| 原始帧导出 | `GaitEngine.process_raw_frame()` 先把每帧 `contact_bits` 和相对时间写入 FIFO 导出缓存，再进入算法处理 | 记录的是全量帧，不是只记录边界 |
-| 纵跳 Jump Test | `SingleFootDetector` 连续 `confirm_samples` 帧满足触地/离地条件后才发事件；事件时间使用**确认成功帧时间**。当前 `Jump Test` 配置为 `touch_ratio_threshold=0.12`、`lift_ratio_threshold=0.05`、`confirm_samples=2`，且 `_extract_primary_cluster()` 会过滤 `<10 LED` 的主簇。因此当前 lift 近似等价于“连续 2 帧没有长度 `>=10 LED` 的有效主簇”。`GaitEngine._accumulate_hop_stats()` 用确认后的 touch/lift 时间计算腾空、接触、周期。 | **只有事件确认，没有边界回填**。session5 离线诊断支持边界回填方向，但只是一组探索数据，不能直接作为生产改造证据 |
-| 步态 Gait Test | `extract_clusters()` 每帧提取簇 `start/end/centroid`；`ClusterTracker` 维护 `appear_time/disappear_time`；`ContactBasedGaitTracker` 先 candidate，连续帧确认后 touch_time 回填 `first_seen_time`，丢失多帧确认后 lift_time 回填 `last_seen_time` | 是“边界记录 + 事件确认”：触地/离地都先记录边界，再等待确认 |
-
-**2026-06-24 修订准则**：若旧文档仍写成“touch/lift 统一候选起点回填”或“纵跳已经确定改为简单边界记录 + 事件确认”，以以下结论为准：
-
-1. 纵跳不拆成“小簇检测器”和“高阈值检测器”。每帧只做一次原始簇提取，得到 `raw_clusters`；`confirm_cluster` 是从同一份 `raw_clusters` 中按当前生产规则筛出的主簇。
-2. `confirm_cluster` 仍是唯一事件确认依据；原始小簇不直接输出 touch/lift，只维护候选接触轨迹和边界时间。
-3. touch 与 lift 不对称：touch 的统计边界是同一关联轨迹的 `first_seen_time`；lift 第一阶段只在**当前生产确认语义**成立时，回填确认前同一 active track 的 `last_seen_time`。
-4. 第一阶段不升级 lift 确认规则。像 `12 LED -> 0 -> 5 LED -> 3 LED -> 0 -> 0` 这种序列，在当前生产语义下会在 `5 LED` 帧附近确认 lift，不能为了回填后续 `3 LED` 而暗中改变确认机制。
-5. `FootEvent.time` 应表示统计用边界时间；`confirm_time` 表示确认成功帧时间；必要时再保留 `first_confirm_frame_time` 用于分析 `confirm_samples` 延迟。
-
-**Phase 9.2a 离线验证范围**：
-
-- 先扩展 `tools/jump_timing_diagnostics.py`，不要直接改 `GaitEngine`、UI、报告或生产纵跳链路。
-- 对照至少拆成：A 当前确认成功帧；B 首个满足当前确认条件帧；C touch-only 关联 `first_seen`；D lift-only 在当前确认语义下关联 `last_seen`；E touch+lift 同时关联回填。
-- `raw track` 匹配必须是一对一分配：一帧内一个 raw cluster 最多匹配一条 track，一条 active track 最多接收一个 raw cluster；可用稳定贪心评分，不需要先上 Hungarian。
-- 早期小簇是否能接到确认簇，必须看时空连续性，而不是简单取窗口内最早非零帧。`1 LED` 簇不能只靠质心距离连接，至少要满足区间重叠、边缘接近，或连续相邻帧持续出现。
-- `max_missing_frames`、`max_edge_gap_led`、`max_centroid_shift_led`、`max_touch_candidate_age_ms` 都是实验候选参数，不是生产常量。先输出 `candidate_to_confirm_ms` 分布，再决定是否硬过滤。
-- 主指标是 `contact_time MAE`、`air_time MAE` 和事件匹配稳定性；`jump_height MAE` 只是由 `air_time` 推导出的报告层影响，除非有独立参考设备，否则不作为独立证据。
-- 生产准入最低要求：至少 3 个独立采集 session、15~20 个已匹配完整跳跃；每个 session 单独算 MAE；多数 session 不劣于当前基线；不增加漏检、误检、配对失败；`fallback_rate` 必须为 0 或有可解释例外。
-
----
-
-## 🔴 Phase 0: 论文创新点 — 面向步态分析系统的 Agent 参数配置与意图澄清模块（最高优先级）
-
-> **论文主线**：步态分析系统设计与实现（数据采集 → 参数计算 → 结果可视化 → 报告生成）
+> 最后更新：2026-07-15
 >
-> **Agent 定位**：系统交互层 / 智能配置模块，**不是独立研究课题**。用于降低系统使用门槛，让用户通过自然语言完成分析任务配置。
->
-> **关键判断**：主实验验证**步态参数准确性**，Agent 只做**轻量级模块可用性验证**（10~30 条典型场景）。Agent 不需要大规模数据集，但必须有最小验证，不能只靠引用论文支撑。
->
-> **讨论记录**：
-> - `chatgpt.md` 全文 — 与 ChatGPT 的完整研究讨论（ClarifyGPT 综述 → 意图检测主流框架 → Pydantic AI + ClarifyGPT 组合评价 → 创新点建议 → 评价指标设计 → **论文主线纠偏：Agent 降权为创新点之一**）
-> - 2026-05-15 与 Claude 对话 (Round 1) — 对照 chatgpt.md 建议逐项审计代码实现，识别差距
-> - 2026-05-15 与 Claude 对话 (Round 2) — 根据 chatgpt.md 更新内容重写 Phase 0，论文主线从 Agent 拉回步态分析
+> 本文件是项目唯一的计划类文档。已完成事项、当前实现状态和后续待办都集中在这里；具体参数定义、架构说明和实验诊断仍放在各自的参考文档中。
 
-### 论文三贡献（最终版）
+## 1. 当前已完成能力
+
+### 1.1 基础测试流程
+
+- Jump Test 已形成完整流程：配置 → 采集 → 实时分析 → 报告。
+- Setup → Execution → Report 多视图流程已接入主 UI。
+- `GaitEngine` 通过模式 processor 运行，保留 Qt 生命周期和兼容入口。
+- `ui/data_show.py` 作为旧版回退方案保留，不能删除。
+
+### 1.2 Agent 参数配置
+
+- 离线规则引擎和在线 LLM 配置助手均已实现。
+- `LLMTestConfig`、Pydantic 校验、`to_test_config()` 转换已实现。
+- ClarifyGPT 风格的多采样、一致性检查和澄清追问已实现。
+- Agent 已嵌入 `SetupView`，不再只依赖独立测试窗口。
+- Jump、Treadmill Gait、Treadmill Running 已分别使用独立 prompt：
+  - `agent/prompts/jump.md`
+  - `agent/prompts/treadmill_gait.md`
+  - `agent/prompts/treadmill_running.md`
+
+### 1.3 受试者和历史记录
+
+- `SubjectStore` 已接入主 UI。
+- 已支持受试者搜索/新建、加载上次参数、测试结束自动存档和历史记录回填。
+- 跑步机报告的配置快照、报告摘要和报告详情已接入存储。
+
+### 1.4 跑步机模式
+
+- `Treadmill Gait Test` 和 `Treadmill Running Test` 已实现独立配置模型、processor、累积器和报告模型。
+- `GaitEngine` 已按 `test_type` 分发到 `TreadmillProcessor`。
+- 已实现跑步机速度反算距离/速度、起始脚、逐步结果、有效性和统计过滤。
+- 已接入参数面板、Agent prompt、报告页、历史记录和测试覆盖。
+- 仍需注意：旧方案文档中的 Task 复选框已失真，不能作为当前进度依据。
+
+### 1.5 足迹可视化
+
+- 已实现统一的 `FootprintVisualFrame` 和固定 cadence 记录器。
+- 执行页已使用双 96-LED 通道和足迹绘制。
+- 步态/跑步机报告已支持 `visual_timeline` 回放。
+- 旧设计中关于“引擎生成 canonical frame、UI 只负责渲染”的所有权边界已落地。
+- 相关实现和测试包括：
+  - `engine/footprint_visualization.py`
+  - `ui/footprint_channel.py`
+  - `tests/test_footprint_visualization.py`
+  - `tests/test_footprint_channel.py`
+  - `tests/test_execution_view_footprint.py`
+  - `tests/test_report_view_footprint.py`
+
+### 1.6 Tiny SE 相机
+
+- OBSBOT C wrapper 已实现设备查询、格式查询、录制参数、镜像、AI 模式和自动对焦接口。
+- `TinySeCameraControl` 已接入 `tinyse_camera.py` 和 UI。
+- DirectShow 采集、录制和统计链路已实现并有测试。
+- 当前未完成的是：验证 UVC 实际输出是否达到 1920×1080@100fps，以及是否需要进一步的设备模式切换。
+
+## 2. 当前仍需推进的工作
+
+### 2.1 论文主实验（P0）
+
+- 设计步态参数准确性验证方案：参考标准、对照数据、评价指标。
+- 完成 10–30 条 Agent 典型指令，覆盖明确、缺参数、模糊、冲突和格式场景。
+- 实现 Agent 评估脚本：配置生成成功率、关键参数正确率、澄清有效率。
+- 论文中将 Agent 定位为系统交互/辅助模块，不把它夸大为唯一创新点。
+
+### 2.2 纵跳算法验证
+
+- 按当前“统计边界时间与确认时间分离”的准则继续离线验证。
+- 至少覆盖多个独立 session 后，再决定是否修改 `SingleFootDetector` 的时间戳语义。
+- 当前诊断依据见 `docs/步态参数相关/纵跳计时误差诊断与方案验证.md`，该文档保留。
+
+### 2.3 硬件和设备扩展
+
+- `External impulse`：补充 `E_STATUS_REPORT` 转发和自动停止链路。
+- 多米段级联：参数化 LED 数量、空间坐标、距离映射和聚类逻辑，替换单段 96 LED 假设。
+
+### 2.4 相机路线
+
+- 在 Windows 设备上完成 UVC 格式列表和实际帧率验证。
+- 根据验证结果决定是否继续 SDK 模式切换，或退回较低帧率方案。
+- 决定相机是保持独立预览/录制窗口，还是后续嵌入主分析界面。
+
+#### 2.4.1 左右脚视觉参考标签（P1）
+
+**目标**：使用视觉结果为光栅触地事件提供 `left`、`right`、`both` 或 `unknown` 参考标签。光栅继续负责精确的触地/离地时刻；视觉标签属于可拒识的参考结果，不作为绝对真值。
+
+**已确认方案**：
+
+- 模型：MediaPipe Tasks `Pose Landmarker Full`（BlazePose GHUM Full）。
+- 运行方式：CPU + `VIDEO` 模式，单人，关闭分割掩码。
+- 关键点：左右髋、膝、踝、脚跟和 foot index；foot index 只作为足部方向参考，不解释为精确鞋底触地点。
+- 执行边界：视觉推理放入独立 Worker，不在相机 UI 回调或 1000Hz 光栅处理链中同步执行。
+- 可选开关：用户不启用视觉、模型初始化失败或推理超时时，完全保留现有光栅逻辑。
+
+**毫秒窗口和全局顺序**：
+
+- 不固定推理帧数。事件 `e` 在单调时钟 `t_e` 上的视觉窗口为 `[t_e - pre_event_ms, t_e + post_event_ms]`。
+- `pre_event_ms`、`post_event_ms` 和 `inference_interval_ms` 是独立可配置项；首版使用尚未标定的保守起点，正式默认值由真实相机帧率、CPU 延迟和异常步态回放实测确定。
+- 相机帧和光栅事件必须使用同一单调时钟域。环形缓冲保存未镜像原始帧及采集时间戳，UI 镜像只影响显示。
+- 事件调度器按 `t_e` 排序，并等待窗口右边界进入相机缓冲后再提交推理。
+- 全局只维护一条严格递增的推理时间线和一个按时间戳索引的姿态结果缓存。`VIDEO` 模式不得再次提交小于或等于已推理游标的旧时间戳。
+- 多个事件窗口重叠时，重叠帧只推理一次：已有时段复用全局姿态缓存，只对游标之后的新帧按时间戳递增推理，最后再按各事件的毫秒窗口分发结果。
+- 推理游标、事件队列和姿态缓存都是 session 级状态；测试开始/结束时显式初始化和释放，不复用上一个 session 的姿态结果。
+- 如果事件过晚到达、所需旧姿态已过期，或 CPU 积压导致无法在延迟目标内完成，该事件输出 `unknown` 并回退光栅结果，不得倒序重放帧。
+
+**数据流**：
 
 ```text
-1. 设计并实现一个步态分析系统，支持步态数据输入、关键参数提取、
-   结果展示与报告生成。
-
-2. 提出一套步态参数计算与验证流程，对步频、步长、步速、步态周期
-   等指标进行计算，并通过对比实验验证系统准确性。
-
-3. 设计一个面向步态分析任务的 Agent 参数配置模块，借鉴 ClarifyGPT
-   的多采样一致性检测思想，结合 Pydantic 结构化输出实现自然语言到
-   分析配置的转换，并通过典型场景测试验证其可用性。
+相机采集（原始帧 + 单调时间戳）
+  → 按时间保留的环形帧缓冲
+光栅触地事件（event_id + 绝对单调时间）
+  → 毫秒事件窗口队列
+  → 全局递增 VIDEO 推理 + 姿态结果缓存
+  → 按 event_id 取回窗口内关键点序列
+  → 质量门 + 时序一致性 + 事件级置信度
+  → left / right / both / unknown
+  → 独立参考标签输出
+  → 后续薄适配器可做高置信融合；否则保留光栅判断
 ```
 
-### Agent 的论文表述（降权版）
+**模式约束**：
 
-> 在系统交互层，本文借鉴 ClarifyGPT (ACM FSE 2024) 的多采样一致性检测与意图澄清思想，设计了面向步态分析参数配置的 Agent 模块。该模块通过 Pydantic 约束结构化 JSON 输出，并在多次采样配置不一致时触发澄清问题，以减少用户自然语言配置中的歧义。
+- 跑步机/步态模式的左右交替只作为异常提示和拒识依据，不得反向覆盖高质量视觉结果。
+- `both` 在纵跳模式是有效标签；在跑步机/步态模式表示近同时多脚接触，不参与左右映射翻转。
+- 任一关键链路缺失、置信度不足、窗口结果矛盾、双脚无法分离或视觉延迟超标时输出 `unknown`。
 
-**为什么表述要降权**：论文主线是步态分析，不能写成 "ClarifyGPT for Agent Configuration"。Agent 是锦上添花，不是主角。
+**开发与验证任务**：
 
-### 理论依据（论文引用即可，不需要自建数据集验证）
+- [ ] 冻结 Python、Qt 绑定、MediaPipe、OpenCV 和 PyInstaller 的 Windows 版本矩阵。
+- [ ] 为相机帧增加单调采集时间戳，实现未镜像环形帧缓冲。
+- [ ] 实现毫秒窗口调度器、全局递增推理游标和可复用的姿态结果缓存。
+- [ ] 在独立 Worker 中接入 Pose Landmarker Full `VIDEO` 模式，只暴露帧输入、事件输入、结果输出和生命周期接口。
+- [ ] 实现视觉质量门和四类独立参考标签；高置信融合及光栅安全回退另立薄适配任务，不进入首版模块。
+- [ ] 增加测试前入镜质量检查，覆盖髋、膝、踝、脚跟和 foot index 的可见性。
+- [ ] 对 Full 与可选 Lite 分别标定置信阈值；不允许未验证的静默降级。
+- [ ] 补充窗口重叠、严格递增时间戳、缓存过期、镜像隔离、四类标签和回退路径的自动化测试。
+- [ ] 在无独显 Windows CPU 设备上进行端到端压测：光栅帧无丢失、队列不积压、UI 无明显停顿，从触地事件到视觉结果的 P95 延迟（包含等待 `post_event_ms`）目标不超过 200ms。
+- [ ] 按受试者、机位和 session 分组验证已输出标签的精确率与覆盖率，单独统计交叉步、设备外踩踏、踉跄、遮挡和近同时接触。
 
-| 依据 | 来源 | 引用目的 |
-|---|---|---|
-| ClarifyGPT 多采样一致性检测 + 澄清问题生成 | ACM FSE 2024 | 说明 Agent 歧义检测与追问机制有理论来源 |
-| Pydantic AI 结构化输出（JSON Schema + 校验） | pydantic.dev docs | 说明工程选型的合理性 |
-| 意图检测主流框架综述（Intent + Slot → DST → LLM 路由） | Rasa / arXiv 2101.08091 / OpenAI | 说明 Agent 设计参考了成熟的技术路线 |
+**首个可执行版本（本轮范围）**：
 
-### 实验设计（两层结构）
+1. 先实现不依赖 Qt 和 MediaPipe 安装状态的核心层：视觉事件/帧/姿态数据契约、毫秒窗口调度、严格递增推理游标、重叠窗口缓存复用、四类标签质量门。所有时间统一使用 `time.perf_counter()` 的秒值，配置边界才使用毫秒。
+2. 再实现 MediaPipe Tasks 适配层和独立视觉 Worker。模型或依赖缺失、初始化失败、时间戳非法、队列溢出和推理异常都只产生 `unknown`，不得影响相机预览和光栅线程。
+3. 两种相机采集实现新增“未镜像 BGR 帧 + 采集时间戳”分析通道；现有预览信号保持兼容，镜像仅在显示分支执行。
+4. 首版保持为独立 `vision/` 模块，只暴露帧输入、触地事件输入、事件级结果和生命周期接口；不修改 `GaitEngine`、`TreadmillProcessor`、累积器、报告或主 UI。调用方不创建视觉服务即等同于关闭视觉。
+5. 原项目首版只允许相机采集类增加一个兼容的“未镜像帧 + 采集时间戳”信号；现有相机预览、录制和 `frame_ready` 接口保持不变。光栅事件由调用方通过独立服务的 `submit_touch_event()` 主动提交。
+6. 独立模块输出 `left/right/both/unknown` 和置信度，不直接修改光栅判断。高置信融合、当前接触延迟结算、A/B 映射更新和用户界面开关留到视觉模块通过 Windows 真人数据验证后，再以薄适配器接入。
+7. Mac 端完成纯算法、假模型和 Qt 信号级自动化测试；MediaPipe 模型文件、Windows 依赖版本、PyInstaller 包含规则、CPU P95 延迟和真人准确率必须在 Windows 10/11 x64 真机分别验收后才能勾选。不得把“核心测试通过”表述为“真人左右脚准确率已验证”。
 
-#### 主实验：步态参数准确性验证（论文重心）
+详细到文件、接口、测试和命令的执行清单见 `docs/superpowers/plans/2026-07-15-visual-foot-reference.md`。
 
-```text
-系统计算值 vs 人工标注 / 参考系统 / 标准数据
+### 2.5 跑步机步态周期检测与显示
 
-指标：MAE / RMSE / 相对误差 / 相关系数 / ICC / Bland-Altman
+**当前范围**：
+
+- 第一阶段只覆盖 `Treadmill Gait Test` 和 `Treadmill Running Test`。
+- 检测过程和报告中的步态周期相关术语统一使用中文；内部字段继续使用稳定的英文标识。
+- 步态周期采用 OptoJump 的同侧脚语义：同一只脚从一次触地到下一次触地形成一个周期，左、右脚分别生成周期记录；左右脚仅在计算步时间、单支撑和双支撑等跨侧指标时关联。
+- 普通地面 `Sprint and Gait Test` 暂不接入；跑步机模式验证可靠后，再复用已验证的周期计算能力扩展普通地面模式。
+- 第一阶段以用户的起始脚配置作为真实左右映射锚点，随后沿用当前左右脚交替推断原则；不等待视觉模块，已有的高置信视觉确认或纠正方案作为后续增强接入。
+
+**边界片段与统计规则（已确认）**：
+
+- 原始触地、离地事件全部保存，边界片段可以保存和回放。
+- 单次接触的触地与离地边界完整时，可以计算接触时间等该次接触自身的指标。
+- 只有同一只脚的前后两次触地都齐全时，才生成一条**步态周期记录**。
+- 测试首尾未形成完整同侧周期的片段标记为**边界不完整片段**，不能伪装成完整步态周期。
+- 边界不完整片段中的缺失字段显示 `N/A`，不能填 `0`。
+- 边界不完整片段不进入完整周期的均值、标准差、变异系数和不对称统计。
+- 左右脚的有效周期数允许不同，不通过删除有效周期或补造周期强行对齐。
+- 不建立左右周期一一配对记录，也不引入 `paired_count` 或“有效配对数”概念。
+
+**检测过程显示规则（已确认）**：
+
+- 实时检测页同时展示“当前未完成周期状态”和“已完成周期列表”。
+- 当前未完成周期状态是临时、可变的运行时状态，可以显示左脚支撑、右脚摆动、双支撑、腾空及已持续时间。
+- 当前未完成周期不进入正式表格、统计、报告或导出。
+- 下一次同侧触地到达、周期边界完整后，才把临时状态转换为不可变的**步态周期记录**，追加到已完成周期列表。
+- 已完成周期记录提交后不再被后续实时事件原地修改；若需要过滤或人工修正，应保留原记录并单独记录纳入状态或修正来源。
+
+**正式报告结构（已确认）**：
+
+- 概览层分别显示左、右有效周期数和主要周期指标的汇总值。
+- 周期图按同侧周期逐条绘制横向阶段时间条，不把左右脚合并成一个周期。
+- 明细表逐周期显示所属脚、周期时间、各阶段秒数和百分比、有效性及统计纳入状态。
+- 边界不完整片段只用于回放或独立诊断明细，不进入正式周期图和完整周期统计。
+
+**首期周期指标范围（已确认）**：
+
+- 首期计算并显示：步态周期、支撑相及占比、摆动相及占比、步时间、单支撑及占比、总双支撑及占比、负荷反应期及占比、摆动前期及占比。
+- `Treadmill Running Test` 另外显示腾空时间；没有左右接触重叠且数据完整时，双支撑相关结果为真实的 `0`。
+- 着地相、全足支撑期和推进相虽然已有预留字段，但当前缺少可靠的足底内部事件检测，首期统一显示 `N/A`。
+- 在独立验证前，不得使用质心位置或估算的足跟/足尖位置近似生成着地相、全足支撑期和推进相。
+
+**不对称统计规则（已确认）**：
+
+- 不进行左右周期一一配对；左、右侧分别使用各自全部有效周期计算汇总值，左右样本数允许不同并同时展示。
+- 各指标的不对称率统一按 `|左侧均值 - 右侧均值| / ((左侧均值 + 右侧均值) / 2) × 100%` 计算。
+- 首期对步态周期、支撑相、摆动相等主要周期指标分别计算不对称率，不使用单一模糊的“不平衡指数”代替所有指标。
+- 统一实时页和报告页口径，移除当前“实时页显示相对差百分比、报告仅保存有符号秒差”的不一致。
+
+**分阶段验证方式（已确认）**：
+
+- 第一阶段使用合成事件序列完成算法、检测页和报告开发，验证全部时间关系、统计公式、边界语义及显示/导出一致性。
+- 第一阶段通过只表示逻辑和数据语义自洽，不宣称真实检测准确性已经完成验证。
+- 开发完成后提醒用户提供 `Treadmill Gait Test` 和 `Treadmill Running Test` 原始帧数据，再与 OptoJump 结果或人工标注对照完成准确性验证。
+
+**开发顺序**：
+
+- [x] 打通已有 `starting_foot_override` 配置，让处理器以用户配置映射首个有效触地及后续交替事件，移除周期计算中 `A=left`、`B=right` 的固定假设。
+- [x] 定义左右脚触地/离地事件到同侧完整步态周期的归属与关联规则，并隔离首尾边界不完整片段。
+- [x] 在不依赖 Qt 的算法层计算步态周期、支撑相、摆动相、单支撑和双支撑等结果，避免由 UI 根据事件自行推断。
+- [x] 保持着地相、全足支撑期和推进相为 `N/A`，另立独立验证任务后再实现，禁止以质心近似填值。
+- [x] 将进行中的可变周期状态与不可变步态周期记录分开建模，以同侧下一次触地作为唯一提交点。
+- [x] 在跑步机检测页同时显示当前未完成周期状态和已完成周期列表；临时状态不得进入正式表格、统计、报告或导出。
+- [x] 在跑步机报告中实现概览、逐周期阶段时间条和明细表，并保持屏幕显示、报告数据与 Excel 导出语义一致。
+- [x] 按左右独立有效周期汇总值计算各主要指标的不对称率，同时展示左右样本数，并统一报告和导出口径。
+- [x] 使用合成事件序列验证同侧周期边界、跨侧事件关联、步行双支撑、跑步腾空及 `0` / `N/A` 语义；补充真实采集回放和参考数据后，再完成准确性验证。
+- [ ] 第一阶段开发完成时，提醒用户提供跑步机步态和跑步原始帧数据，用于第二阶段真实准确性验证。
+
+### 2.6 架构分层
+
+按风险从低到高推进，不进行一次性大搬家：
+
+1. 抽取不依赖 Qt 的 gait core。
+2. 将 USB bytes → bits、分包合并和 `contact_bits` 转换抽为可测试模块。
+3. 让报告由结果快照生成，减少 View 读取 engine 私有字段。
+4. 将 Excel 导出移出 `ReportView`。
+5. 引入 `DeviceTopology(segment_count, leds_per_segment, spacing_cm)`。
+6. 清理模块启动时的路径 hack，并补充依赖边界检查。
+
+### 2.7 未来测试类型
+
+暂未实现：Sprint and Gait、Tapping、Reaction Times、Static Test (Sway) 等。新增模式应沿用配置 → processor → report → UI 的分发模式，不污染 Jump Test 和现有跑步机模式。
+
+## 3. 已确认的业务和架构决策
+
+- 配置参数、会话元数据、结果参数、汇总统计分层保存。
+- 跑步机距离/速度由跑步机设定速度和事件时间反算，不复用普通步态的空间位移口径。
+- 跑步机报告使用独立 `TreadmillGaitReport` / `TreadmillRunningReport`，不压入普通 `GaitTestReport`。
+- 步态周期按同侧脚相邻触地划分，左右脚分别生成周期记录；跨侧事件关联只用于步时间、单支撑和双支撑等指标。
+- 原始事件与边界不完整片段全部保留，但只有两次同侧触地齐全时才生成步态周期记录；边界不完整片段不进入完整周期及不对称统计，左右有效周期数允许不同且不强制配对。
+- 不建立左右周期一一配对记录，也不引入 `paired_count` 或“有效配对数”概念；步时间、单支撑和双支撑仍按实际跨侧事件关系计算。
+- 不对称率基于左右各自全部有效周期的指标均值计算，不做逐周期配对；公式统一为两侧均值绝对差除以两侧均值的平均值，并同时展示左右样本数。
+- 检测页采用“当前未完成周期状态 + 已完成周期列表”两层显示；临时状态不进入正式输出，只有周期闭合后才转换为不可变步态周期记录并追加到列表。
+- 跑步机正式报告采用“概览 + 逐周期阶段时间条 + 明细表”三层结构；边界不完整片段仅用于回放或诊断，不进入正式周期图和统计。
+- 首期只生成触地、离地及左右接触重叠事件能够可靠支持的周期指标；着地相、全足支撑期和推进相在独立验证前保持 `N/A`，不得使用质心近似。
+- 跑步机周期功能首期以用户起始脚配置为左右映射锚点，并沿用当前交替推断原则；高置信视觉结果对左右映射的确认或纠正按已有方案后续接入，不作为首期前置条件。
+- 足迹回放使用固定 cadence 的 canonical timeline，不由 UI 根据 touch/lift 事件自行推断。
+- 左右脚视觉模块首版使用 MediaPipe Pose Landmarker Full + CPU + `VIDEO` 模式；采用可配置毫秒事件窗口和全局递增推理缓存，视觉只输出可拒识的参考标签，不替代光栅触地/离地时序。
+- `Suspended` 等未来状态可以保留枚举，但当前第一阶段不生成该状态。
+- 暂不接入 Gyko/IMU、跑步机控制器自动读速、BioFeedback 正式模式。
+- 暂不添加 overload 的能量/功率计算，除非补充体重输入和公式依据。
+
+## 4. 文档和参考资料分工
+
+- `README.md`：Agent onboarding、运行方式和核心约束。
+- `docs/architecture.md`：通用系统架构；代码演进后需要同步，但不作为计划清单。
+- `docs/treadmill_architecture.md`：跑步机架构和数据契约。
+- `docs/参数相关/跑步机模式参数.md`：跑步机配置参数与结果参数定义。
+- `docs/参数相关/代码步态参数汇总.md`：理论指标到代码实现的映射。
+- `docs/步态参数相关/optojump参数汇总.md`：OptoJump 领域参数参考。
+- `docs/步态参数相关/纵跳计时误差诊断与方案验证.md`：纵跳离线诊断历史和当前准则。
+- `camera/obsbot_sdk_wrapper/README.md`：相机 wrapper 编译和设备实测记录。
+
+## 5. 验证入口
+
+建议在具备项目测试依赖的环境中运行：
+
+```bash
+python -m pytest -q
 ```
 
-参考做法：步态分析系统验证文献通常和参考系统（GAITRite、Vicon、Qualisys 等）比较时空步态参数或运动学参数，报告准确性、有效性或一致性。
+重点回归范围：
 
-#### 辅助实验：Agent 配置模块可用性验证（控制篇幅）
-
-**规模**：10~30 条典型用户指令（不叫"数据集"，叫"典型使用场景测试用例"）
-
-| 类型 | 示例指令 | 验证点 |
-|---|---|---|
-| 明确指令 | "分析视频中的步频、步长和步速，输出图表" | 是否能直接生成合法配置 |
-| 缺参数指令 | "帮我分析一下步态" | 是否能追问分析指标或输入来源 |
-| 模糊指令 | "给我详细一点的结果" | 是否能追问详细程度、指标范围 |
-| 冲突指令 | "快速分析，但要输出完整三维运动学参数" | 是否能识别配置冲突 |
-| 格式指令 | "结果导出成 Excel" | 是否能正确配置输出格式 |
-
-**Agent 评价指标（轻量级，3 项即可）**：
-
-| 指标 | 作用 |
-|---|---|
-| 配置生成成功率 | 用户指令能否生成合法 JSON 配置 |
-| 关键参数正确率 | 生成配置里的关键步态分析参数是否正确 |
-| 澄清有效率 | 模糊指令下，系统是否能问到关键缺失参数 |
-
-**对比 baseline（简化版）**：
-
-| 方法 | 说明 |
-|---|---|
-| Single Agent 单次配置 | 无多采样、无澄清追问 |
-| 本方法（Pydantic + 多采样一致性 + 澄清机制） | 当前实现 |
-
-不需要做 5 组 baseline 的大规模对比。
-
-### 当前实现 vs 论文要求 — 差距清单（重分级）
-
-| 差距项 | 当前实现 | 论文需要 | 优先级 |
-|---|---|---|---|
-| Agent 典型场景测试用例 | 无 | 10~30 条指令 + 3 项指标评估 | **P0** |
-| 步态参数准确性验证方案 | 无 | MAE / RMSE / ICC / Bland-Altman 对比实验 | **P0**（主实验） |
-| 一致性度量 | 二分法（1组/多组） | 当前二分法对 Agent 辅助实验已够用，无需量化分数 | ~~P0~~ → **够用** |
-| 追问生成 | 模板拼接 | 当前模板对步态参数场景已够用，无需歧义类型分类 | ~~P1~~ → **够用** |
-| 语义等价比较 | `==` 字段级比较 | 步态参数字段均为枚举/整数，字段级比较已足够 | ~~P0~~ → **够用** |
-
-### 论文版 TODO（重新分级）
-
-- [ ] **P0（主实验）** 设计步态参数准确性验证方案：确定参考标准、采集对照数据、选定评价指标
-- [ ] **P0（Agent）** 编写 10~30 条典型用户指令测试用例，覆盖明确/缺参数/模糊/冲突/格式 5 类场景
-- [ ] **P0（Agent）** 实现 Agent 评估脚本：配置生成成功率 / 关键参数正确率 / 澄清有效率
-- [x] **P1** Agent 集成到主 UI（SetupView 配置助手入口），不在独立 `agent_test_ui.py` 中验证
-- [ ] **P2** `LLMTestConfig` 新增 `confidence` 字段（锦上添花，非必需）
-
-### 对应代码位置
-
-| 论文概念 | 代码位置 | 需改动 |
-|---|---|---|
-| 结构化输出 | `agent/models.py` — `LLMTestConfig` | 可选加 `confidence` |
-| 多采样一致性检测 | `agent/llm_agent.py` — `_verify_config()`, `_cluster_configs()`, `_find_disagreements()` | 当前实现已够用 |
-| 差异驱动追问 | `agent/llm_agent.py` — `_generate_clarification()` | 当前实现已够用 |
-| Pydantic 校验链 | `agent/models.py` → `config/param_schema.py` | 无 |
-| 典型场景测试 | 新文件 `tests/test_agent_scenarios.py` | 新建 |
-
----
-
-## 已确认决策
-
-| 决策项 | 结论 |
-|---|---|
-| 滤波逻辑位置 | 在 `GaitEngine._accumulate_hop_stats()` 中做事后过滤，不在 `SingleFootDetector.consume()` 内部 |
-| `External impulse` stop_type | 硬件层未实现，UI 选项保留但功能不可用 |
-| overload 参数 | 暂不添加能量/功率计算 |
-| Agent 框架 | PydanticAI 单框架 + ClarifyGPT 设计思想，不引入新依赖 |
-
----
-
-## ✅ LLM 追问能力（已解决）
-
-> 通过 `Union[LLMTestConfig, ChatResponse]` 让 LLM 自主选择输出类型，
-> 信息不足时自动退回 ChatResponse 追问，不再硬猜配置。
-> 追问可靠性由 ClarifyGPT 多采样机制保障。
-
----
-
-## ✅ Phase 4.5: LLMTestConfig 结构化输出层（已完成）
-
-> LLMTestConfig(BaseModel) 已实现，含 Literal/Field(ge/le) 约束 + `@field_validator("test_length")` 格式归一化 + `to_test_config()` 转换。
-> LLM 输出 JSON → Pydantic 校验 → LLMTestConfig → to_test_config() → TestConfig → ParamSchema.validate() 三层校验链完整。
-
-### 设计原则
-
-- **不改 `TestConfig`** — 它是整个系统的通用配置（engine / ui / controller 都依赖），改为 BaseModel 牵一发而动全身
-- **加转换层** — `LLMTestConfig(BaseModel)` 只在 `agent/llm_agent.py` 内部使用，通过 `.to_test_config()` 转换为系统通用的 `TestConfig`
-- **无损转换** — `LLMTestConfig` 的约束更严格，任何通过它校验的值一定是 `TestConfig` 的合法值
-
-### 数据流
-
-```
-LLM 输出 JSON
-  → Pydantic 校验 → LLMTestConfig (BaseModel, 严格约束)
-  → .to_test_config() → TestConfig (dataclass, 系统通用)
-  → ParamSchema.validate() → 业务逻辑二次校验
+```bash
+python -m pytest \
+  tests/test_treadmill_config.py \
+  tests/test_treadmill_report.py \
+  tests/test_treadmill_processor.py \
+  tests/test_mode_runtime.py \
+  tests/test_subject_store.py \
+  tests/test_footprint_visualization.py \
+  tests/test_execution_view_footprint.py \
+  tests/test_report_view_footprint.py \
+  tests/test_tinyse_camera_widget.py -q
 ```
 
-### 改动文件
+## 6. 论文相关资料
 
-| 文件 | 改动 |
-|---|---|
-| `agent/models.py` | 新增 `LLMTestConfig(BaseModel)`，~50 行 |
-| `agent/llm_agent.py` | `result_type` 从 `TestConfig` 改为 `LLMTestConfig`，chat() 中加 `.to_test_config()` 转换 |
+以下文件属于论文、研究或写作辅助资料，本次不修改：
 
-### 已知风险：LLM 边界行为
-
-> [!WARNING]
-> 以下场景 LLM 可能处理不当，需在测试中重点验证：
-
-| 场景 | 预期行为 | 潜在风险 | 应对策略 |
-|---|---|---|---|
-| 用户说"做50个跳，跳到跳不动也行" | number_of_jumps=50, stop_type="Status change" | LLM 可能误解"跳不动"为 End of Time | 依赖 SYSTEM_PROMPT 语义引导；未来由 ClarifyGPT 多采样检测分歧 |
-| 用户说"测2分钟" | test_length="02:00", stop_type="End of Time" | LLM 可能输出 "2m"、"120s" 等非 mm:ss 格式 | `LLMTestConfig` 中对 `test_length` 加 `@field_validator` 校验 mm:ss 格式 |
-| 用户说"最大腾空设2000" | max_flight_time=2000 | 在约束范围内 (0~5000)，正确 | — |
-| 用户说"最大腾空设10000" | 无法生成 | 超出 le=5000，pydantic-ai 触发重试(retries=2)，LLM 可能坚持原值导致最终失败 | `chat()` 的 except 分支应返回有意义的错误提示而非裸异常信息 |
-
----
-
-## Phase 4.8: 用户识别与参数复用
-
-> 根据数据库中的历史受试者信息，自动识别回访用户并加载上次的测试参数，减少重复配置。
-> 核心价值是**参数复用**，不是身份识别本身——不要过度设计识别环节。
-
-### 当前状态（2026-06-23）
-
-| 子阶段 | 状态 | 说明 |
-|---|---|---|
-| 4.8a MVP | ✅ 已完成 | 主 UI 支持打字搜索受试者、精确/LIKE 查询、创建受试者、加载上次参数、测试结束自动记录 session |
-| 4.8b 拼音匹配 | 📋 待开发 | 暂未引入 `pypinyin`，不做同音字匹配 |
-| 4.8c 语音输入优化 | 📋 按需 | 暂未做 ASR 热词或 N-best 候选匹配 |
-
-### 设计决策
-
-| 决策项 | 结论 | 理由 |
-|---|---|---|
-| 匹配方式 | 数据库直查，不用 LLM | 姓名匹配是字符串检索问题，不需要语义理解。LLM 延迟高、成本高、且结果不确定 |
-| LLM 的角色 | 仅负责从自然语言中提取姓名（NER） | "我是李明，帮我配上次的参数" → 提取 "李明" → 交给数据库匹配 |
-| 语音输入同音字 | 拼音中间层匹配（`pypinyin`） | 数据库规模小（几十~几百人）、有 UI 辅助确认，不需要工业级 ASR 纠错 |
-
-### 数据流
-
-```
-用户输入（文字/语音 ASR 结果）
-  → [LLM: 意图识别 + 姓名提取]
-  → 姓名字符串
-  → [三层匹配]:
-      层级 1: 精确汉字匹配 → 唯一命中 → 加载历史参数
-      层级 2: 拼音匹配 (pypinyin) → 唯一命中 → 加载历史参数（需用户确认汉字）
-      层级 3: 多候选 → UI 弹出列表让操作员选择
-      无命中 → 当作新用户，走正常配置流程
-```
-
-### 分阶段实施
-
-| 子阶段 | 内容 | 工作量 |
-|---|---|---|
-| **4.8a (MVP)** | 打字输入姓名 → 精确匹配 → 命中则加载参数；未命中则走新用户流程 | 半天 |
-| **4.8b** | 引入 `pypinyin`，构建拼音索引，精确匹配失败后降级拼音匹配，多候选弹确认列表 | 1 天 |
-| **4.8c (按需)** | 语音输入优化：ASR 热词增强、N-best 候选匹配 | 2-3 天 |
-
-> [!IMPORTANT]
-> **先做 4.8a 验证"参数复用"本身是否被认可，再迭代后续子阶段。**
-
-### 改动文件
-
-| 文件 | 改动 |
-|---|---|
-| `agent/models.py` | 可能新增 `UserProfile` 数据模型 |
-| `agent/llm_agent.py` 或 `agent/gait_agent.py` | 新增用户识别 → 参数加载的前置逻辑 |
-| 新增 `data/user_db.py` 或类似模块 | 受试者信息存储与查询（精确匹配 + 拼音索引） |
-| `requirements.txt` | 4.8b 阶段新增 `pypinyin` 依赖 |
-
----
-
-## ✅ Phase 5: ClarifyGPT 模式集成（已完成）
-
-> 借鉴 ClarifyGPT (ACM FSE 2024) 的 "Detect → Clarify → Refine" 思想，已实现。
-
-### 核心原则
-
-> **"代码做裁判，模型做分析"**
-
-| 角色 | 负责方 | 职责 |
-|:---|:---|:---|
-| **裁判** | Python 代码 | 客观判定"有没有分歧"（`_find_disagreements()`） |
-| **分析师** | LLM | 主观分析"为什么有分歧"并生成追问（`_generate_clarification()`） |
-
-### 已实现方案
-
-ClarifyGPT 原论文的核心方法论是"采样 N 个代码方案 → 按测试输出聚类 → 各组随机选代表"。本项目适配如下：
-
-| ClarifyGPT 论文 | 本项目实现 | 对应代码 |
-|---|---|---|
-| 采样 N 个独立代码方案 | `asyncio.gather(N × agent.run())`，同快照、同事件循环 | `_verify_config` |
-| 按测试输出聚类 | `_cluster_configs()`：按 `(stop_type, jumps, test_length)` 组合值分组 | `_cluster_configs()` |
-| 每组随机选代表 → 问题生成 | 单组 → `random.choice()`；多组 → `_generate_clarification()` | `_verify_config`, `_generate_clarification()` |
-
-具体优化项：
-1. **异步并行采样**（P0）: `chat()` 内部用 `asyncio.run(_flow())` + `_verify_config()` 用 `asyncio.gather()` 同时发起 N-1 次 `agent.run()`。配置生成从 ~21s 降到 ~14s。所有 N 个样本地位平等
-2. **聚类一致性检查**: `_cluster_configs()` 按 CRITICAL_FIELDS 分组，`_find_disagreements()` 做多值比较
-3. **歧义追问**: `_generate_clarification()` 将分歧字段翻译为自然语言
-4. **预热机制**（P1）: `switch_mode("online")` 时 `warmup()` 提前初始化 Agent，首次对话 ~20s→~5s
-5. **SYSTEM_PROMPT 精简**（P2）: ~520 tokens→~257 tokens(-51%)
-6. **规则引擎保守聚合**（P3）: `_apply_rules()` 取最保守值，14 个单元测试覆盖
-
----
-
-## Phase 6: 更多测试类型扩展
-
-> 当前纵跳（Jump Test）是第一个范式，需扩展到其他测试类型。
-
-### 目标测试类型
-
-| 类型 | Iron_parameters.json 中的 key | 状态 |
-|---|---|---|
-| Jump Test | `Jump Test` | ✅ 已完成 |
-| Sprint and Gait Test | `Sprint and Gait Test` | 📋 待开发 |
-| Treadmill Running Test | `Treadmill Running Test` | 📋 待开发 |
-| Treadmill Gait Test | `Treadmill Gait Test` | 📋 待开发 |
-| Tapping Test | `Tapping Test` | 📋 待开发 |
-| Reaction Times | `Reaction Times` | 📋 待开发 |
-| Static Test (Sway) | `Static Test (Sway)` | 📋 待开发 |
-
-### 扩展点
-
-| 模块 | 需要做什么 |
-|---|---|
-| `config/test_config.py` | 为新测试类型添加特有字段（如步态的 stride_length_threshold 等） |
-| `engine/gait_engine.py` | 步态模式的 `_process_gait()` 已存在骨架，需完善停止条件和滤波 |
-| `agent/rule_engine.py` | `PROFILE_RULES` 添加非纵跳测试类型的规则 |
-| `agent/llm_agent.py` | `SYSTEM_PROMPT` 扩展为覆盖多种测试类型的参数规则 |
-| `ui/views/execution_view.py` | 不同测试类型的仪表盘布局和指标卡片 |
-| `ui/views/report_view.py` | 不同测试类型的报告模板 |
-
----
-
-## Phase 7: 硬件扩展
-
-### 7a: External impulse 信号支持
-
-当前 `UsbWorker._on_frame()` 只处理 `E_DATA_REPORT`，丢弃了 `E_STATUS_REPORT`。
-
-| 改动文件 | 内容 |
-|---|---|
-| `hardware/usb_worker.py` | 新增 `status_signal`，转发 `E_STATUS_REPORT` 帧 |
-| `engine/gait_engine.py` | 监听 status_signal，实现 `External impulse` 自动停止 |
-
-### 7b: 多米段设备级联
-
-当前所有模块假设单米段（96 LED）。级联后 LED 数量变为 N×96。
-
-| 改动文件 | 关注点 |
-|---|---|
-| `hardware/usb_worker.py` | 数据拼接：多段设备的帧合并 |
-| `engine/spatial_clusterer.py` | 聚类算法：坐标空间从 [0, 96) 扩展到 [0, N×96) |
-| `engine/single_foot_tracker.py` | 触地比例计算：`bits[:96]` 等硬编码需参数化 |
-| `engine/contact_tracker.py` | 步长/步速计算：物理距离映射需适配多段 |
-| `config/test_config.py` | 可能新增设备拓扑配置（段数、排列方式） |
-
----
-
-## Phase 8: 其他待定项
-
-| 项目 | 说明 | 优先级 |
-|---|---|---|
-| overload 参数 / 能量功率计算 | 需要 `body_weight` 输入，公式待确认 | 低 |
-| PDF 导出 | ReportView 增加 PDF 导出能力 | 低 |
-| 受试者档案管理 | 基础受试者选择和历史记录已接入；Dashboard 页集中管理受试者信息仍可后续补 | 低 |
-| Agent 集成到主 UI | ✅ 已完成：`AgentConfigPanel` 已嵌入 SetupView | 已完成 |
-| Markdown 表格渲染 | ✅ 已解决：`QTextDocument.setDefaultStyleSheet()` 嵌入 table/td/th 边框 CSS + markdown-it-py.enable("table") | 中 |
-| 底层参数沉默 | min_contact_time/min_flight_time/max_flight_time 已加 SYSTEM_PROMPT 沉默规则 + 移出 ClarifyGPT 分歧检查，LLM 偶有违反 | 低 |
-
----
-
-## Phase 9: PyQt 架构分层改造计划
-
-> 目标不是“大搬家”，而是在不破坏当前 Jump Test 工作流的前提下，逐步把 Qt、硬件、文件导出等外层细节从业务核心中剥离出来。
-
-### 当前判断
-
-| 模块 | 当前状态 | 主要问题 |
-|---|---|---|
-| `ui/session_controller.py` | 已承担 Qt 会话协调职责 | 可以继续作为 Presenter/Controller，但不应长期读取或修改 engine 私有字段 |
-| `engine/gait_engine.py` | 算法 + Qt QObject/Signal/QTimer 混合 | 算法核心还不能完全脱离 Qt 单独测试 |
-| `hardware/usb_worker.py` | USB 读取 + 帧解析 + Qt 信号 + UI 节流混合 | 硬件解析逻辑不够独立，后续多米段和状态帧扩展会变重 |
-| `ui/views/report_view.py` | View 内直接生成 Excel | 文件导出属于基础设施能力，应从 View 中移出 |
-| `engine/single_foot_tracker.py` / `engine/spatial_clusterer.py` | 有 `96`、`1.04cm` 等硬件假设 | 多米段设备级联时需要参数化 |
-
-### 成功标准
-
-1. 算法核心可以不启动 Qt 直接跑单元测试。
-2. USB/相机/Excel 这类外部系统都在外层，业务代码不直接依赖。
-3. 当前 Jump Test 的配置、采集、实时分析、报告工作流不退化。
-4. 新测试类型、多米段设备、Agent 主 UI 集成都有明确扩展点。
-5. 每个阶段都有测试或可运行检查，不靠手工观察判断“应该没问题”。
-
-### 目标结构
-
-```text
-Iron_Jump/
-├── ui/                         # Qt 界面、视图、Qt Controller、Qt Worker
-│   ├── views/
-│   ├── workers/
-│   └── session_controller.py
-├── application/                # 用例编排：开始测试、停止测试、生成报告
-│   ├── session_service.py
-│   └── report_service.py
-├── engine/                     # 纯算法/领域逻辑
-│   ├── gait_core.py
-│   ├── single_foot_tracker.py
-│   ├── contact_tracker.py
-│   └── spatial_clusterer.py
-├── hardware/                   # 纯硬件协议、DLL、USB 读取，不放 Qt
-│   ├── protocol.py
-│   ├── receive.py
-│   └── frame_decoder.py
-├── infrastructure/             # Excel、文件、相机 SDK、持久化
-│   ├── excel_exporter.py
-│   └── camera/
-├── config/                     # 参数 schema / TestConfig
-├── agent/                      # 规则引擎 + LLM 配置助手
-└── tests/
-```
-
-### 分阶段执行
-
-| 阶段 | 内容 | 验证 |
-|---|---|---|
-| ✅ 9.0 锁定现状 | 已补齐测试入口依赖并消除 pytest 收集警告；现有 `tests/` 可统一运行 | 2026-06-08: `python -m pytest -q tests` → 32 passed |
-| ✅ 9.1 加保护测试 | 已给 `single_foot_tracker`、`spatial_clusterer`、`contact_tracker`、`build_report` 加小样本测试 | `tests/test_engine_protection.py`, `tests/test_jump_report.py` |
-| 9.2a 纵跳时间戳离线验证 | session5 仅证明“事件确认时间”和“统计边界时间”值得拆开验证；下一步先更新离线诊断工具，比较 A 当前确认帧、B 首个确认条件帧、C touch-only 关联 `first_seen`、D lift-only 关联 `last_seen`、E touch+lift 关联回填。第一阶段 lift 只回填当前确认前的 `last_seen`，不升级确认语义 | 保护 Jump Test 指标不被边界偏移污染；至少 3 个独立 session / 15~20 个完整跳跃通过后，再给 `SingleFootDetector` 写失败测试并实现 `FootEvent.time`=边界时间、`confirm_time`=确认帧时间 |
-| 9.2 抽纯算法核心 | 新增 `engine/gait_core.py`，迁出 `GaitEngine` 中的状态机、统计、停止判断；现有 `GaitEngine(QObject)` 先保留为 Qt 适配壳 | `gait_core` 无 Qt import；原 UI 流程不变 |
-| 9.3 拆 USB Worker | 把 bytes→bits、分包合并、contact_bits 转换抽到 `hardware/frame_decoder.py`；Qt 信号部分保留为薄 Worker | 帧解析可单测；Qt Worker 只负责生命周期和信号转发 |
-| 9.4 改报告边界 | 让算法核心输出 `SessionSnapshot/TestResult`，`build_report()` 不再读取 engine 私有状态 | `SessionController` 不再直接改 `_paused/_finished` |
-| 9.5 Excel 外移 | 把 `ReportView` 中的 Excel 生成移到 `infrastructure/excel_exporter.py` | Excel 导出逻辑可脱离 Qt 测试 |
-| 9.6 参数化设备拓扑 | 新增 `DeviceTopology(segment_count, leds_per_segment=96, spacing_cm=1.04)`，逐步替换硬编码 | 单米段输出不变，多米段 fixture 可跑 |
-| 9.7 Agent 集成主 UI | 不直接搬 `agent_test_ui.py`，在 `SetupView` 增加配置助手入口；LLM 调用继续用独立 Qt Worker | 主界面可生成并回填 `TestConfig` |
-| 9.8 包入口清理 | 移除 `main_window.py` 中的 `sys.path` hack，改为稳定模块启动方式 | import 检查通过 |
-| 9.9 文档收口 | 更新 README / 本计划，明确哪些层允许 Qt、哪些层禁止 Qt | 新增简单依赖检查脚本 |
-
-### 优先级
-
-先做 `9.0 → 9.1 → 9.2 → 9.3`。这四步收益最大，也最能降低后续扩展风险。不要先做大规模目录迁移，也不要先重写 UI；当前关键是把 `GaitEngine` 和 `UsbWorker` 变成薄适配壳，让算法和硬件解析被测试锁住。
+- `素材.md`
+- `writing.md`
+- `chatgpt.md`
+- `mentor.md`

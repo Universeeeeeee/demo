@@ -13,7 +13,13 @@ from agent.models import AthleteProfile
 from config.test_config import TestConfig as _TestConfig
 from config.test_report import JumpTestReport
 from config.treadmill_config import TreadmillGaitConfig
-from config.treadmill_report import TreadmillGaitReport, summarize
+from config.treadmill_report import (
+    GaitBoundaryPartial,
+    GaitCycleRecord,
+    GaitEventRecord,
+    TreadmillGaitReport,
+    summarize,
+)
 from data.subject_store import SubjectProfile, SubjectStore
 
 
@@ -245,6 +251,38 @@ class SubjectStoreTest(unittest.TestCase):
             per_step_results=(),
             metric_summaries={"contact_time_s": summarize(())},
             report_config_snapshot=config.to_dict(),
+            raw_gait_events=(GaitEventRecord(0, 0.0, "left", "touch"),),
+            gait_cycles=(
+                GaitCycleRecord(
+                    index=0,
+                    side="left",
+                    start_time_s=0.0,
+                    end_time_s=1.0,
+                    gait_cycle_s=1.0,
+                    stance_phase_s=0.6,
+                    stance_phase_percent=60.0,
+                    swing_phase_s=0.4,
+                    swing_phase_percent=40.0,
+                    step_time_s=0.5,
+                    single_support_s=0.4,
+                    single_support_percent=40.0,
+                    total_double_support_s=0.2,
+                    total_double_support_percent=20.0,
+                    load_response_s=0.1,
+                    load_response_percent=10.0,
+                    pre_swing_s=0.1,
+                    pre_swing_percent=10.0,
+                    total_flight_time_s=0.0,
+                ),
+            ),
+            boundary_partials=(
+                GaitBoundaryPartial("right", 0.5, 1.2, 0.7, "摆动相"),
+            ),
+            cycle_metric_summaries={"gait_cycle_s": summarize((1.0,))},
+            cycle_side_summaries={
+                "left": {"gait_cycle_s": summarize((1.0,))},
+                "right": {"gait_cycle_s": summarize(())},
+            },
         )
 
         session_id = self.store.record_session(
@@ -255,7 +293,12 @@ class SubjectStoreTest(unittest.TestCase):
         session = self.store.get_session(session_id)
 
         self.assertEqual(session.report_summary["report_type"], "treadmill_gait")
+        self.assertEqual(session.report_summary["valid_cycle_count"], 1)
+        self.assertEqual(session.report_detail["report_schema_version"], 2)
         self.assertEqual(session.report_detail["report_config_snapshot"]["treadmill_speed"], 5.0)
+        self.assertEqual(session.report_detail["raw_gait_events"][0]["side"], "left")
+        self.assertEqual(session.report_detail["gait_cycles"][0]["gait_cycle_s"], 1.0)
+        self.assertEqual(session.report_detail["boundary_partials"][0]["phase"], "摆动相")
 
 
 if __name__ == "__main__":

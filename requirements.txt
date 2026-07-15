@@ -1,5 +1,5 @@
 qtpy
-PySide2
+PySide6
 openpyxl
 numpy
 pyqtgraph

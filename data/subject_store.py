@@ -542,7 +542,7 @@ def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict
 
     return {
         "report_type": report_type,
-        "report_schema_version": 1,
+        "report_schema_version": 2,
         "finish_reason": report.finish_reason,
         "touch_count": report.touch_count,
         "lift_count": report.lift_count,
@@ -555,6 +555,18 @@ def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict
         "left_right_results": {k: _asdict(v) for k, v in report.left_right_results.items()},
         "asymmetry_metrics": report.asymmetry_metrics,
         "report_config_snapshot": report.report_config_snapshot,
+        "raw_gait_events": [_asdict(event) for event in report.raw_gait_events],
+        "gait_cycles": [_asdict(cycle) for cycle in report.gait_cycles],
+        "boundary_partials": [_asdict(partial) for partial in report.boundary_partials],
+        "cycle_metric_summaries": {
+            key: _asdict(value)
+            for key, value in report.cycle_metric_summaries.items()
+        },
+        "cycle_side_summaries": {
+            side: {key: _asdict(value) for key, value in summaries.items()}
+            for side, summaries in report.cycle_side_summaries.items()
+        },
+        "cycle_asymmetry_percent": report.cycle_asymmetry_percent,
     }
 
 
@@ -605,20 +617,42 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
             }
         )
     elif isinstance(report, TreadmillGaitReport):
+        valid_cycles = [
+            cycle for cycle in report.gait_cycles
+            if cycle.is_included_in_statistics
+        ]
         base.update(
             {
                 "report_type": "treadmill_gait",
                 "valid_step_count": sum(
                     1 for row in report.per_step_results if row.is_included_in_statistics
                 ),
+                "valid_cycle_count": len(valid_cycles),
+                "left_valid_cycle_count": sum(
+                    1 for cycle in valid_cycles if cycle.side == "left"
+                ),
+                "right_valid_cycle_count": sum(
+                    1 for cycle in valid_cycles if cycle.side == "right"
+                ),
             }
         )
     elif isinstance(report, TreadmillRunningReport):
+        valid_cycles = [
+            cycle for cycle in report.gait_cycles
+            if cycle.is_included_in_statistics
+        ]
         base.update(
             {
                 "report_type": "treadmill_running",
                 "valid_step_count": sum(
                     1 for row in report.per_step_results if row.is_included_in_statistics
+                ),
+                "valid_cycle_count": len(valid_cycles),
+                "left_valid_cycle_count": sum(
+                    1 for cycle in valid_cycles if cycle.side == "left"
+                ),
+                "right_valid_cycle_count": sum(
+                    1 for cycle in valid_cycles if cycle.side == "right"
                 ),
             }
         )

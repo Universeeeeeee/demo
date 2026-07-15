@@ -18,7 +18,8 @@ from typing import Optional
 from qtpy.QtCore import Signal, Qt, QTimer
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
-    QLabel, QFrame, QSizePolicy, QProgressBar,
+    QLabel, QFrame, QSizePolicy, QProgressBar, QTableWidget,
+    QTableWidgetItem, QHeaderView,
 )
 
 from dayu_widgets.label import MLabel
@@ -43,6 +44,10 @@ except Exception:
     _PG_AVAILABLE = False
 
 G = 9.81
+
+
+def _format_cycle_value(value) -> str:
+    return "N/A" if value is None else f"{value:.3f}"
 
 
 # ======================================================================
@@ -285,6 +290,37 @@ class ExecutionView(QWidget):
         self._lower_split.hide()
         main_layout.addWidget(self._lower_split, 1)
 
+        self._cycle_panel = QFrame()
+        cycle_layout = QVBoxLayout(self._cycle_panel)
+        cycle_layout.setContentsMargins(8, 6, 8, 6)
+        cycle_layout.setSpacing(5)
+        self._current_cycle_label = MLabel("当前未完成周期：等待触地事件")
+        self._current_cycle_label.setWordWrap(True)
+        self._current_cycle_label.setStyleSheet(
+            "font-size: 10pt; color: #d9dee8; background: transparent;"
+        )
+        cycle_layout.addWidget(self._current_cycle_label)
+        self._completed_cycle_label = MLabel("已完成周期")
+        self._completed_cycle_label.setStyleSheet(
+            "font-size: 10pt; color: #aab2c0; background: transparent;"
+        )
+        cycle_layout.addWidget(self._completed_cycle_label)
+        self._completed_cycle_table = QTableWidget(0, 6)
+        self._completed_cycle_table.setHorizontalHeaderLabels([
+            "序号", "脚", "步态周期 (s)", "支撑相 (s)",
+            "摆动相 (s)", "双支撑 (s)",
+        ])
+        self._completed_cycle_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._completed_cycle_table.setSelectionMode(QTableWidget.NoSelection)
+        self._completed_cycle_table.setAlternatingRowColors(True)
+        self._completed_cycle_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch
+        )
+        self._completed_cycle_table.setMaximumHeight(170)
+        cycle_layout.addWidget(self._completed_cycle_table)
+        self._cycle_panel.hide()
+        main_layout.addWidget(self._cycle_panel)
+
         # ===== 进度条 =====
         self._progress_container = QFrame()
         progress_layout = QGridLayout(self._progress_container)
@@ -387,6 +423,10 @@ class ExecutionView(QWidget):
 
         # 切换卡片可见性
         is_jump = self._mode == "纵跳"
+        is_treadmill = config.test_type in (
+            "Treadmill Gait Test",
+            "Treadmill Running Test",
+        )
         self._arrange_execution_area(is_jump)
         for c in self._jump_cards:
             c.setVisible(is_jump)
@@ -395,6 +435,10 @@ class ExecutionView(QWidget):
         self._chart_container.setVisible(is_jump)
         self._lower_split.setVisible(not is_jump)
         self._footprint_channel.setVisible(not is_jump)
+        self._cycle_panel.setVisible(is_treadmill)
+        self._card_imbalance._title.setText(
+            "步态周期不对称率" if is_treadmill else "不平衡指数"
+        )
         self._footprint_channel.set_direction(getattr(config, "direction", None))
         if is_jump:
             self._camera_panel.shutdown()
@@ -456,6 +500,9 @@ class ExecutionView(QWidget):
             self._plot_cadence.setXRange(0, self._initial_range, padding=0)
         if hasattr(self, "_footprint_channel"):
             self._footprint_channel.clear()
+        if hasattr(self, "_cycle_panel"):
+            self._current_cycle_label.setText("当前未完成周期：等待触地事件")
+            self._completed_cycle_table.setRowCount(0)
         if hasattr(self, "_camera_panel"):
             self._camera_panel.shutdown()
 
@@ -527,9 +574,76 @@ class ExecutionView(QWidget):
             avg_vel = snapshot["velocity_sum"] / snapshot["velocity_count"]
             self._card_velocity.set_value(f"{avg_vel:.1f}")
 
-        em = snapshot.get("latest_extra_metrics", {})
-        if em and em.get("imbalance_index") is not None:
-            self._card_imbalance.set_value(f"{em['imbalance_index']:.1f}")
+        is_treadmill = self._config is not None and self._config.test_type in (
+            "Treadmill Gait Test",
+            "Treadmill Running Test",
+        )
+        if is_treadmill:
+            asymmetry = snapshot.get("gait_cycle_asymmetry_percent", {})
+            value = asymmetry.get("gait_cycle_s")
+            self._card_imbalance.set_value(
+                f"{value:.1f}" if value is not None else "N/A"
+            )
+        else:
+            em = snapshot.get("latest_extra_metrics", {})
+            if em and em.get("imbalance_index") is not None:
+                self._card_imbalance.set_value(f"{em['imbalance_index']:.1f}")
+
+        cycle_state = snapshot.get("gait_cycle_state")
+        if cycle_state:
+            self._render_gait_cycle_state(cycle_state)
+
+    def _render_gait_cycle_state(self, state: dict):
+        side_labels = {"left": "左脚", "right": "右脚", "unknown": "未知脚"}
+        parts = [
+            f"当前未完成周期：{state.get('support_state', '等待事件')}"
+        ]
+        current = state.get("current_cycles", {})
+        for side in ("left", "right", "unknown"):
+            value = current.get(side)
+            if not value:
+                continue
+            elapsed = value.get("elapsed_s")
+            elapsed_text = f"{elapsed:.3f} s" if elapsed is not None else "N/A"
+            parts.append(
+                f"{side_labels[side]}：{value.get('phase', 'N/A')} {elapsed_text}"
+            )
+        self._current_cycle_label.setText("  |  ".join(parts))
+
+        cycles = state.get("completed_cycles", [])
+        if "completed_cycle_count" not in state:
+            self._completed_cycle_table.setRowCount(0)
+            start_row = 0
+        else:
+            start_row = state.get(
+                "completed_cycle_start_index",
+                state["completed_cycle_count"] - len(cycles),
+            )
+            current_rows = self._completed_cycle_table.rowCount()
+            if state["completed_cycle_count"] < current_rows:
+                self._completed_cycle_table.setRowCount(0)
+                current_rows = 0
+            if current_rows > start_row:
+                cycles = cycles[current_rows - start_row:]
+                start_row = current_rows
+            elif current_rows < start_row:
+                return
+
+        self._completed_cycle_table.setRowCount(start_row + len(cycles))
+        for offset, cycle in enumerate(cycles):
+            row = start_row + offset
+            values = [
+                str(cycle.get("index", row) + 1),
+                side_labels.get(cycle.get("side"), "未知脚"),
+                _format_cycle_value(cycle.get("gait_cycle_s")),
+                _format_cycle_value(cycle.get("stance_phase_s")),
+                _format_cycle_value(cycle.get("swing_phase_s")),
+                _format_cycle_value(cycle.get("total_double_support_s")),
+            ]
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                self._completed_cycle_table.setItem(row, column, item)
 
     def on_footprint_visual_frame(self, frame: dict):
         self._latest_footprint_frame = frame

@@ -31,31 +31,32 @@ def test_preview_frame_fills_larger_sixteen_by_nine_area(qtbot):
     assert pixmap.height() == panel._preview.contentsRect().height()
 
 
-def test_preview_uses_one_toggle_button(qtbot):
+def test_default_preview_chrome_only_shows_settings_gear(qtbot):
     panel = EmbeddedCameraPanel()
     qtbot.addWidget(panel)
+    panel.resize(1200, 720)
+    panel.show()
+    qtbot.wait(10)
 
-    panel._set_running(False)
-    assert panel._btn_preview.text() == "Start Preview"
+    assert not hasattr(panel, "_title")
+    assert not hasattr(panel, "_stats")
+    assert not hasattr(panel, "_btn_preview")
+    assert panel._btn_settings.parent() is panel._preview_container
+    assert panel._btn_settings.isVisible()
+    assert panel._preview.geometry().contains(panel._btn_settings.geometry())
 
-    panel._set_running(True)
-    assert panel._btn_preview.text() == "Stop Preview"
-    assert not hasattr(panel, "_btn_stop")
 
-
-def test_preview_toggle_dispatches_current_state(qtbot, monkeypatch):
+def test_restart_preview_action_restarts_capture(qtbot, monkeypatch):
     panel = EmbeddedCameraPanel()
     qtbot.addWidget(panel)
     calls = []
+    monkeypatch.setattr(panel, "shutdown", lambda: calls.append("shutdown"))
     monkeypatch.setattr(panel, "start_preview", lambda: calls.append("start"))
-    monkeypatch.setattr(panel, "stop_preview", lambda: calls.append("stop"))
 
-    panel._preview_active = False
-    panel._toggle_preview()
-    panel._preview_active = True
-    panel._toggle_preview()
+    panel._restart_action.trigger()
 
-    assert calls == ["start", "stop"]
+    assert panel._restart_action.text() == "重新启动预览"
+    assert calls == ["shutdown", "start"]
 
 
 def test_tinyse_settings_include_existing_camera_controls(qtbot):

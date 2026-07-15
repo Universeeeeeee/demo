@@ -21,6 +21,7 @@ from typing import Optional
 from openpyxl import Workbook
 
 from qtpy.QtCore import Signal, Qt
+from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QFrame, QSizePolicy, QMessageBox, QFileDialog,
@@ -36,6 +37,7 @@ from config.test_report import TestReport, JumpTestReport, GaitTestReport
 from config.treadmill_report import (
     TreadmillGaitReport,
     TreadmillRunningReport,
+    GaitCycleRecord,
     TreadmillStepResult,
 )
 from path_utils import get_base_dir as _get_base_dir
@@ -113,6 +115,68 @@ class StatCard(QFrame):
             f"font-size: {font_size}pt; font-weight: bold; "
             f"color: {color}; border: none; background: transparent;"
         )
+
+
+class CyclePhaseBar(QWidget):
+    """Compact horizontal rendering of one completed gait cycle."""
+
+    _COLORS = {
+        "负荷反应期": QColor("#8e44ad"),
+        "单支撑": QColor("#16a085"),
+        "摆动前期": QColor("#c0392b"),
+        "支撑相": QColor("#2980b9"),
+        "摆动相": QColor("#f39c12"),
+    }
+
+    def __init__(self, cycle: GaitCycleRecord, parent=None):
+        super().__init__(parent)
+        self._cycle = cycle
+        self.setMinimumHeight(24)
+        if all(
+            value is not None
+            for value in (
+                cycle.load_response_s,
+                cycle.single_support_s,
+                cycle.pre_swing_s,
+            )
+        ):
+            tooltip = "负荷反应期、单支撑、摆动前期和摆动相按实际时长绘制"
+        else:
+            tooltip = "子阶段无法可靠拆分，按支撑相和摆动相绘制"
+        self.setToolTip(tooltip)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        total = self._cycle.gait_cycle_s
+        if total <= 0:
+            return
+        segments = self._segments()
+        x = 0.0
+        for label, duration in segments:
+            if duration is None or duration <= 0:
+                continue
+            width = self.width() * duration / total
+            painter.fillRect(int(x), 2, max(int(width), 1), self.height() - 4, self._COLORS[label])
+            x += width
+
+    def _segments(self):
+        detailed = (
+            self._cycle.load_response_s,
+            self._cycle.single_support_s,
+            self._cycle.pre_swing_s,
+        )
+        if all(value is not None for value in detailed):
+            return [
+                ("负荷反应期", self._cycle.load_response_s),
+                ("单支撑", self._cycle.single_support_s),
+                ("摆动前期", self._cycle.pre_swing_s),
+                ("摆动相", self._cycle.swing_phase_s),
+            ]
+        return [
+            ("支撑相", self._cycle.stance_phase_s),
+            ("摆动相", self._cycle.swing_phase_s),
+        ]
 
 
 # ======================================================================
@@ -407,14 +471,41 @@ class ReportView(QWidget):
         # 总览指标
         stats = [
             ("触地次数", f"{r.touch_count}"),
-            ("腾空次数", f"{r.lift_count}"),
+            ("离地次数", f"{r.lift_count}"),
             ("有效步数", f"{sum(1 for s in r.per_step_results if s.is_included_in_statistics)}"),
-            ("起始脚", r.resolved_starting_foot),
+            ("起始脚", _side_label(r.resolved_starting_foot)),
             ("速度", f"{speed} km/h"),
             ("方向", direction),
             ("足长", f"{foot_length} cm" if foot_length else "--"),
         ]
+        left_count = sum(
+            1 for cycle in r.gait_cycles
+            if cycle.side == "left" and cycle.is_included_in_statistics
+        )
+        right_count = sum(
+            1 for cycle in r.gait_cycles
+            if cycle.side == "right" and cycle.is_included_in_statistics
+        )
+        stats.extend([
+            ("左脚有效周期", str(left_count)),
+            ("右脚有效周期", str(right_count)),
+        ])
+        if r.gait_cycles:
+            cycle_summary = r.cycle_metric_summaries.get("gait_cycle_s")
+            stance_summary = r.cycle_metric_summaries.get("stance_phase_percent")
+            swing_summary = r.cycle_metric_summaries.get("swing_phase_percent")
+            if cycle_summary and cycle_summary.mean is not None:
+                stats.append(("平均步态周期", f"{cycle_summary.mean:.3f} s"))
+            if stance_summary and stance_summary.mean is not None:
+                stats.append(("平均支撑相", f"{stance_summary.mean:.1f}%"))
+            if swing_summary and swing_summary.mean is not None:
+                stats.append(("平均摆动相", f"{swing_summary.mean:.1f}%"))
         self._fill_stat_cards(stats)
+
+        if r.gait_cycles:
+            self._build_cycle_timeline(r.gait_cycles)
+            self._build_cycle_detail_table(r.gait_cycles)
+            self._build_cycle_summary_table(r)
 
         # 逐步详情表
         if r.per_step_results:
@@ -427,6 +518,143 @@ class ReportView(QWidget):
         # 左右侧对比
         if r.left_right_results:
             self._build_treadmill_left_right(r.left_right_results)
+
+    def _build_cycle_timeline(self, cycles: tuple[GaitCycleRecord, ...]):
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        table = QTableWidget(len(cycles), 5)
+        table.setHorizontalHeaderLabels([
+            "序号", "脚", "周期阶段图", "周期 (s)", "纳入统计",
+        ])
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        for row, cycle in enumerate(cycles):
+            side = "左脚" if cycle.side == "left" else "右脚" if cycle.side == "right" else "未知脚"
+            for column, text in enumerate((str(cycle.index + 1), side)):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row, column, item)
+            table.setCellWidget(row, 2, CyclePhaseBar(cycle))
+            item = QTableWidgetItem(_fmt(cycle.gait_cycle_s))
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 3, item)
+            included_item = QTableWidgetItem(
+                "是" if cycle.is_included_in_statistics else "否"
+            )
+            included_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 4, included_item)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.setMinimumHeight(min(max(len(cycles) * 30 + 52, 120), 420))
+        self._cycle_timeline_table = table
+        self._add_detail_widget(table)
+
+    def _build_cycle_detail_table(self, cycles: tuple[GaitCycleRecord, ...]):
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        columns = [
+            "序号", "脚", "步态周期(s)", "支撑相(s)", "支撑相(%)",
+            "摆动相(s)", "摆动相(%)", "步时间(s)", "单支撑(s)",
+            "单支撑(%)", "总双支撑(s)", "总双支撑(%)",
+            "负荷反应期(s)", "负荷反应期(%)", "摆动前期(s)",
+            "摆动前期(%)", "腾空时间(s)", "纳入统计",
+        ]
+        table = QTableWidget(len(cycles), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        for row, cycle in enumerate(cycles):
+            values = [
+                str(cycle.index + 1),
+                "左脚" if cycle.side == "left" else "右脚" if cycle.side == "right" else "未知脚",
+                _fmt(cycle.gait_cycle_s),
+                _fmt(cycle.stance_phase_s),
+                _fmt(cycle.stance_phase_percent),
+                _fmt(cycle.swing_phase_s),
+                _fmt(cycle.swing_phase_percent),
+                _fmt(cycle.step_time_s),
+                _fmt(cycle.single_support_s),
+                _fmt(cycle.single_support_percent),
+                _fmt(cycle.total_double_support_s),
+                _fmt(cycle.total_double_support_percent),
+                _fmt(cycle.load_response_s),
+                _fmt(cycle.load_response_percent),
+                _fmt(cycle.pre_swing_s),
+                _fmt(cycle.pre_swing_percent),
+                _fmt(cycle.total_flight_time_s),
+                "是" if cycle.is_included_in_statistics else "否",
+            ]
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(text or "N/A")
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row, column, item)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setMinimumHeight(min(max(len(cycles) * 28 + 52, 120), 520))
+        self._cycle_detail_table = table
+        self._add_detail_widget(table)
+
+    def _build_cycle_summary_table(
+        self, report: TreadmillGaitReport | TreadmillRunningReport
+    ):
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        names = {
+            "gait_cycle_s": "步态周期 (s)",
+            "stance_phase_s": "支撑相 (s)",
+            "stance_phase_percent": "支撑相 (%)",
+            "swing_phase_s": "摆动相 (s)",
+            "swing_phase_percent": "摆动相 (%)",
+            "step_time_s": "步时间 (s)",
+            "single_support_s": "单支撑 (s)",
+            "single_support_percent": "单支撑 (%)",
+            "total_double_support_s": "总双支撑 (s)",
+            "total_double_support_percent": "总双支撑 (%)",
+            "load_response_s": "负荷反应期 (s)",
+            "load_response_percent": "负荷反应期 (%)",
+            "pre_swing_s": "摆动前期 (s)",
+            "pre_swing_percent": "摆动前期 (%)",
+            "total_flight_time_s": "腾空时间 (s)",
+        }
+        rows = []
+        for key, summary in report.cycle_metric_summaries.items():
+            if summary.count == 0:
+                continue
+            left = report.cycle_side_summaries.get("left", {}).get(key)
+            right = report.cycle_side_summaries.get("right", {}).get(key)
+            rows.append([
+                names.get(key, key),
+                _fmt(summary.mean),
+                str(left.count if left else 0),
+                _fmt(left.mean if left else None),
+                str(right.count if right else 0),
+                _fmt(right.mean if right else None),
+                _fmt(report.cycle_asymmetry_percent.get(key)),
+            ])
+
+        table = QTableWidget(len(rows), 7)
+        table.setHorizontalHeaderLabels([
+            "指标", "总体均值", "左脚数量", "左脚均值",
+            "右脚数量", "右脚均值", "不对称率(%)",
+        ])
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        for row_index, row in enumerate(rows):
+            for column, text in enumerate(row):
+                item = QTableWidgetItem(text or "N/A")
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_index, column, item)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setMinimumHeight(max(len(rows) * 28 + 52, 120))
+        self._cycle_summary_table = table
+        self._add_detail_widget(table)
 
     def _build_treadmill_step_table(self, steps: tuple[TreadmillStepResult, ...]):
         """Build step detail table below the stat cards."""
@@ -616,7 +844,11 @@ class ReportView(QWidget):
 
         has_treadmill_steps = isinstance(
             self._report, (TreadmillGaitReport, TreadmillRunningReport)
-        ) and bool(self._report.per_step_results)
+        ) and bool(
+            self._report.per_step_results
+            or self._report.gait_cycles
+            or self._report.raw_gait_events
+        )
 
         if not frames and not has_jump_metrics and not has_treadmill_steps:
             QMessageBox.information(self, "导出", "本次测试无可导出数据。")
@@ -677,6 +909,45 @@ class ReportView(QWidget):
                 for row in _treadmill_metric_rows(self._report):
                     ws_steps.append(row)
 
+                if self._report.gait_cycles:
+                    ws_cycles = wb.create_sheet("步态周期")
+                    ws_cycles.append(GAIT_CYCLE_EXPORT_HEADERS)
+                    for row in _gait_cycle_rows(self._report):
+                        ws_cycles.append(row)
+
+                if self._report.raw_gait_events:
+                    ws_events = wb.create_sheet("原始步态事件")
+                    ws_events.append(["序号", "时间(s)", "脚", "事件"])
+                    for event in self._report.raw_gait_events:
+                        ws_events.append([
+                            event.index + 1,
+                            event.time_s,
+                            _side_label(event.side),
+                            "触地" if event.kind == "touch" else "离地",
+                        ])
+
+                if self._report.cycle_metric_summaries:
+                    ws_cycle_summary = wb.create_sheet("步态周期统计")
+                    ws_cycle_summary.append([
+                        "指标", "总体数量", "总体均值",
+                        "左脚数量", "左脚均值", "右脚数量", "右脚均值",
+                        "不对称率(%)",
+                    ])
+                    for name, summary in self._report.cycle_metric_summaries.items():
+                        left = self._report.cycle_side_summaries.get("left", {}).get(name)
+                        right = self._report.cycle_side_summaries.get("right", {}).get(name)
+                        ws_cycle_summary.append([
+                            GAIT_CYCLE_METRIC_LABELS.get(name, name),
+                            summary.count, _excel_cycle_value(summary.mean),
+                            left.count if left else 0,
+                            _excel_cycle_value(left.mean if left else None),
+                            right.count if right else 0,
+                            _excel_cycle_value(right.mean if right else None),
+                            _excel_cycle_value(
+                                self._report.cycle_asymmetry_percent.get(name)
+                            ),
+                        ])
+
                 # Sheet 3 (optional): Metric Summaries
                 metric_summaries = self._report.metric_summaries
                 if metric_summaries:
@@ -711,6 +982,42 @@ TREADMILL_EXPORT_COLUMNS = [
     "statistics_exclusion_reason",
     "step_reference_cm",
 ]
+
+GAIT_CYCLE_EXPORT_FIELDS = [
+    "index", "side", "start_time_s", "end_time_s", "gait_cycle_s",
+    "stance_phase_s", "stance_phase_percent", "swing_phase_s",
+    "swing_phase_percent", "step_time_s", "single_support_s",
+    "single_support_percent", "total_double_support_s",
+    "total_double_support_percent", "load_response_s",
+    "load_response_percent", "pre_swing_s", "pre_swing_percent",
+    "total_flight_time_s", "is_included_in_statistics",
+]
+
+GAIT_CYCLE_EXPORT_HEADERS = [
+    "序号", "脚", "开始时间(s)", "结束时间(s)", "步态周期(s)",
+    "支撑相(s)", "支撑相(%)", "摆动相(s)", "摆动相(%)",
+    "步时间(s)", "单支撑(s)", "单支撑(%)", "总双支撑(s)",
+    "总双支撑(%)", "负荷反应期(s)", "负荷反应期(%)",
+    "摆动前期(s)", "摆动前期(%)", "腾空时间(s)", "纳入统计",
+]
+
+GAIT_CYCLE_METRIC_LABELS = {
+    "gait_cycle_s": "步态周期 (s)",
+    "stance_phase_s": "支撑相 (s)",
+    "stance_phase_percent": "支撑相 (%)",
+    "swing_phase_s": "摆动相 (s)",
+    "swing_phase_percent": "摆动相 (%)",
+    "step_time_s": "步时间 (s)",
+    "single_support_s": "单支撑 (s)",
+    "single_support_percent": "单支撑 (%)",
+    "total_double_support_s": "总双支撑 (s)",
+    "total_double_support_percent": "总双支撑 (%)",
+    "load_response_s": "负荷反应期 (s)",
+    "load_response_percent": "负荷反应期 (%)",
+    "pre_swing_s": "摆动前期 (s)",
+    "pre_swing_percent": "摆动前期 (%)",
+    "total_flight_time_s": "腾空时间 (s)",
+}
 
 
 def _jump_metric_rows(report: JumpTestReport) -> list[list[object]]:
@@ -748,6 +1055,14 @@ def _fmt(value: float | None) -> str:
     return f"{value:.3f}"
 
 
+def _side_label(side: str) -> str:
+    return {"left": "左脚", "right": "右脚", "unknown": "未知"}.get(side, side)
+
+
+def _excel_cycle_value(value):
+    return "N/A" if value is None else value
+
+
 def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport) -> list[list[object]]:
     """Extract key columns from per_step_results for Excel export and testing."""
     rows = []
@@ -770,4 +1085,18 @@ def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport)
                 step.step_reference_cm,
             ]
         )
+    return rows
+
+
+def _gait_cycle_rows(report: TreadmillGaitReport | TreadmillRunningReport) -> list[list[object]]:
+    rows = []
+    for cycle in report.gait_cycles:
+        row = [
+            _excel_cycle_value(getattr(cycle, name))
+            for name in GAIT_CYCLE_EXPORT_FIELDS
+        ]
+        row[0] = cycle.index + 1
+        row[1] = _side_label(cycle.side)
+        row[-1] = "是" if cycle.is_included_in_statistics else "否"
+        rows.append(row)
     return rows

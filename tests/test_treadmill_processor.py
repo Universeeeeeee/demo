@@ -8,6 +8,7 @@ from config.treadmill_report import TreadmillRunningReport, TreadmillStepResult
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_processor import TreadmillProcessor
+from engine.contact_tracker import ContactState, GaitStepEvent
 from engine.modes.treadmill_running_accumulator import (
     RUNNING_OVERLAP_TOLERANCE_S,
     TreadmillRunningAccumulator,
@@ -27,6 +28,228 @@ def test_accumulator_resolves_starting_foot_from_first_contact():
 
     assert acc.resolved_starting_foot == "right"
     assert acc.starting_foot_source == "auto_first_contact"
+
+
+def test_processor_uses_configured_starting_foot_for_internal_labels():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        starting_foot_override="right",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    def event(kind, contact_id, label, time_s):
+        contact = ContactState(
+            contact_id=contact_id,
+            foot_label=label,
+            centroid_at_touch=40.0,
+            latest_centroid=40.0,
+        )
+        processor._handle_step_event(GaitStepEvent(kind=kind, contact=contact), time_s)
+
+    event("touch", 1, "A", 0.0)
+    event("lift", 1, "A", 0.4)
+    event("touch", 2, "B", 0.5)
+    event("lift", 2, "B", 0.9)
+    event("touch", 3, "A", 1.0)
+
+    assert [raw.side for raw in processor._cycle_builder.raw_events] == [
+        "right", "right", "left", "left", "right",
+    ]
+    assert processor._cycle_builder.completed_cycles[0].side == "right"
+
+
+def test_processor_uses_detected_contact_boundaries_not_emit_delay():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    first = ContactState(
+        contact_id=1,
+        foot_label="A",
+        touch_time=0.10,
+        lift_time=0.40,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+    second = ContactState(
+        contact_id=2,
+        foot_label="A",
+        touch_time=1.10,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+
+    processor._handle_step_event(GaitStepEvent("touch", first), rel_time=0.18)
+    processor._handle_step_event(GaitStepEvent("lift", first), rel_time=0.50)
+    processor._handle_step_event(GaitStepEvent("touch", second), rel_time=1.18)
+
+    assert [event.time_s for event in processor._cycle_builder.raw_events] == [
+        0.10, 0.40, 1.10,
+    ]
+    cycle = processor._cycle_builder.completed_cycles[0]
+    assert cycle.gait_cycle_s == pytest.approx(1.0)
+    assert cycle.stance_phase_s == pytest.approx(0.3)
+
+
+def test_processor_report_preserves_cycles_raw_events_and_boundary_partials():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=8.0,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    processor._cycle_builder.record_touch(0.0, "left")
+    processor._cycle_builder.record_lift(0.2, "left")
+    processor._cycle_builder.record_touch(0.3, "right")
+    processor._cycle_builder.record_lift(0.5, "right")
+    processor._cycle_builder.record_touch(0.6, "left")
+    processor._last_rel_time = 0.6
+
+    report = processor.build_report("manual", (), ())
+
+    assert len(report.raw_gait_events) == 5
+    assert len(report.gait_cycles) == 1
+    assert report.gait_cycles[0].side == "left"
+    assert {partial.side for partial in report.boundary_partials} == {"left", "right"}
+
+
+def test_processor_uses_gait_accumulator_for_overlapping_contacts():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        starting_foot_override="left",
+        min_contact_time=0,
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    def emit(kind, contact_id, label, time_s):
+        contact = ContactState(
+            contact_id=contact_id,
+            foot_label=label,
+            touch_time=time_s if kind == "touch" else None,
+            lift_time=time_s if kind == "lift" else None,
+            centroid_at_touch=40.0,
+            latest_centroid=40.0,
+        )
+        processor._handle_step_event(GaitStepEvent(kind, contact), time_s)
+
+    emit("touch", 1, "A", 0.0)
+    emit("touch", 2, "B", 0.5)
+    emit("lift", 1, "A", 0.8)
+    emit("lift", 2, "B", 1.3)
+
+    rows = processor._accumulator.rows
+    assert [row.row_status for row in rows] == ["valid", "valid"]
+    assert [row.contact_time_s for row in rows] == pytest.approx([0.8, 0.8])
+
+
+def test_invalid_contact_excludes_its_completed_cycle_from_statistics():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        starting_foot_override="left",
+        min_contact_time=600,
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    def emit(kind, contact_id, label, time_s):
+        contact = ContactState(
+            contact_id=contact_id,
+            foot_label=label,
+            touch_time=time_s if kind == "touch" else None,
+            lift_time=time_s if kind == "lift" else None,
+            centroid_at_touch=40.0,
+            latest_centroid=40.0,
+        )
+        processor._handle_step_event(GaitStepEvent(kind, contact), time_s)
+
+    emit("touch", 1, "A", 0.0)
+    emit("lift", 1, "A", 0.1)
+    emit("touch", 2, "B", 0.2)
+    emit("lift", 2, "B", 0.3)
+    emit("touch", 3, "A", 1.0)
+
+    report = processor.build_report("manual", (), ())
+
+    assert report.gait_cycles[0].is_included_in_statistics is False
+    assert report.cycle_metric_summaries["gait_cycle_s"].count == 0
+
+
+def test_processor_live_snapshot_returns_completed_cycles_incrementally():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    builder = processor._cycle_builder
+    builder.record_touch(0.0, "left")
+    builder.record_lift(0.4, "left")
+    builder.record_touch(1.0, "left")
+
+    first = processor.make_status_snapshot(1.0)["gait_cycle_state"]
+    second = processor.make_status_snapshot(1.1)["gait_cycle_state"]
+
+    assert first["completed_cycle_count"] == 1
+    assert len(first["completed_cycles"]) == 1
+    assert second["completed_cycle_count"] == 1
+    assert second["completed_cycles"] == []
+
+
+def test_cycle_summaries_allow_different_side_counts_and_use_mean_asymmetry():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    builder = processor._cycle_builder
+
+    builder.record_touch(0.0, "left")
+    builder.record_lift(0.4, "left")
+    builder.record_touch(0.5, "right")
+    builder.record_lift(0.9, "right")
+    builder.record_touch(1.0, "left")
+    builder.record_lift(1.4, "left")
+    builder.record_touch(1.5, "right")
+    builder.record_lift(1.9, "right")
+    builder.record_touch(2.2, "left")
+    processor._last_rel_time = 2.2
+
+    report = processor.build_report("manual", (), ())
+
+    left = report.cycle_side_summaries["left"]["gait_cycle_s"]
+    right = report.cycle_side_summaries["right"]["gait_cycle_s"]
+    assert left.count == 2
+    assert right.count == 1
+    assert left.mean == pytest.approx(1.1)
+    assert right.mean == pytest.approx(1.0)
+    assert report.cycle_asymmetry_percent["gait_cycle_s"] == pytest.approx(
+        0.1 / 1.05 * 100.0
+    )
+    live = processor.make_status_snapshot(2.2)
+    assert live["gait_cycle_asymmetry_percent"]["gait_cycle_s"] == pytest.approx(
+        0.1 / 1.05 * 100.0
+    )
 
 
 def test_accumulator_marks_short_contact_as_invalid_and_excluded():

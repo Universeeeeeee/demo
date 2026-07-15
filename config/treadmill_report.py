@@ -79,12 +79,61 @@ CorrectionSource = Literal[
     "manual_restore",
 ]
 
+GaitEventKind = Literal["touch", "lift"]
+
+
+@dataclass(frozen=True)
+class GaitEventRecord:
+    """A raw, side-resolved gait event kept for replay and audit."""
+
+    index: int
+    time_s: float
+    side: FootSide
+    kind: GaitEventKind
+
+
+@dataclass(frozen=True)
+class GaitCycleRecord:
+    """One immutable same-side gait cycle, from touch to next touch."""
+
+    index: int
+    side: FootSide
+    start_time_s: float
+    end_time_s: float
+    gait_cycle_s: float
+    stance_phase_s: float | None
+    stance_phase_percent: float | None
+    swing_phase_s: float | None
+    swing_phase_percent: float | None
+    step_time_s: float | None
+    single_support_s: float | None
+    single_support_percent: float | None
+    total_double_support_s: float | None
+    total_double_support_percent: float | None
+    load_response_s: float | None
+    load_response_percent: float | None
+    pre_swing_s: float | None
+    pre_swing_percent: float | None
+    total_flight_time_s: float | None
+    is_included_in_statistics: bool = True
+
+
+@dataclass(frozen=True)
+class GaitBoundaryPartial:
+    """An open same-side boundary fragment that is not a complete cycle."""
+
+    side: FootSide
+    start_time_s: float
+    snapshot_time_s: float
+    elapsed_s: float
+    phase: str
+
 
 # ---- 逐步结果 ----
 
 @dataclass(frozen=True)
 class TreadmillStepResult:
-    """跑步机测试的单个步态周期结果行。"""
+    """跑步机测试的一次接触/逐步结果，不代表完整同侧步态周期。"""
     index: int
     side: FootSide
     row_status: RowStatus
@@ -136,6 +185,12 @@ class TreadmillReportBase:
     export_frames: tuple = ()
     export_timestamps: tuple = ()
     visual_timeline: tuple = ()
+    raw_gait_events: tuple[GaitEventRecord, ...] = ()
+    gait_cycles: tuple[GaitCycleRecord, ...] = ()
+    boundary_partials: tuple[GaitBoundaryPartial, ...] = ()
+    cycle_metric_summaries: dict[str, MetricSummary] = field(default_factory=dict)
+    cycle_side_summaries: dict[str, dict[str, MetricSummary]] = field(default_factory=dict)
+    cycle_asymmetry_percent: dict[str, float] = field(default_factory=dict)
 
 
 # ---- 具体报告类型 ----

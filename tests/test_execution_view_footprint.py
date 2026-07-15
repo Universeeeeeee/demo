@@ -2,7 +2,8 @@ import pytest
 
 pytest.importorskip("dayu_widgets")
 
-from qtpy.QtWidgets import QApplication
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QApplication, QBoxLayout, QGridLayout
 
 from config.test_config import TestConfig
 from config.treadmill_config import TreadmillGaitConfig
@@ -47,8 +48,61 @@ def test_execution_view_shows_footprint_channel_for_treadmill(qtbot):
     assert isinstance(view._footprint_channel, FootprintChannelWidget)
     assert view._footprint_channel.isVisible()
     assert not view._chart_container.isVisible()
-    assert view._lower_split.layout().stretch(0) == 3
-    assert view._lower_split.layout().stretch(1) == 1
+    layout = view._lower_split.layout()
+    assert isinstance(layout, QGridLayout)
+    assert layout.getItemPosition(layout.indexOf(view._camera_panel)) == (0, 0, 2, 1)
+    assert layout.getItemPosition(layout.indexOf(view._progress_container)) == (0, 1, 2, 1)
+    assert layout.getItemPosition(layout.indexOf(view._footprint_channel)) == (0, 2, 1, 1)
+    assert layout.getItemPosition(layout.indexOf(view._controls_container)) == (1, 2, 1, 1)
+    assert layout.columnStretch(0) == 3
+    assert layout.columnStretch(2) == 1
+
+
+def test_gait_time_and_controls_use_vertical_lower_layout(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.resize(1600, 900)
+    view.show()
+
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="End of Time",
+            test_length="01:00",
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+
+    assert view._progress_bar.orientation() == Qt.Vertical
+    assert view._progress_title.text() == "剩余"
+    assert view._progress_value.text() == "01:00"
+    assert view._progress_container.isVisible()
+    assert view._progress_container.width() == 72
+    assert view._controls_layout.direction() == QBoxLayout.TopToBottom
+    assert view.btn_stop.text() == "结束"
+    assert view._controls_container.geometry().left() == view._footprint_channel.geometry().left()
+    assert view._controls_container.geometry().right() == view._footprint_channel.geometry().right()
+
+
+def test_gait_running_controls_stack_in_right_column(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.show()
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="End of Time",
+            test_length="01:00",
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+
+    view._on_start()
+
+    assert not view.btn_start.isVisible()
+    assert view.btn_pause.isVisible()
+    assert view.btn_stop.isVisible()
+    assert view._controls_layout.direction() == QBoxLayout.TopToBottom
 
 
 def test_execution_view_keeps_jump_charts_for_jump(qtbot):
@@ -61,3 +115,82 @@ def test_execution_view_keeps_jump_charts_for_jump(qtbot):
 
     assert view._chart_container.isVisible()
     assert not view._footprint_channel.isVisible()
+    assert view._progress_bar.orientation() == Qt.Horizontal
+    assert view._controls_layout.direction() == QBoxLayout.LeftToRight
+
+
+def test_execution_view_shows_current_and_completed_gait_cycles(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.show()
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+
+    view.on_gait_snapshot({
+        "touch_count": 3,
+        "stride_count": 0,
+        "velocity_count": 0,
+        "latest_extra_metrics": {},
+        "gait_cycle_asymmetry_percent": {"gait_cycle_s": 4.5},
+        "gait_cycle_state": {
+            "support_state": "左脚单支撑",
+            "completed_cycle_count": 1,
+            "completed_cycle_start_index": 0,
+            "current_cycles": {
+                "left": {
+                    "side": "left",
+                    "start_time_s": 1.0,
+                    "elapsed_s": 0.4,
+                    "phase": "支撑相",
+                }
+            },
+            "completed_cycles": [{
+                "index": 0,
+                "side": "right",
+                "gait_cycle_s": 1.0,
+                "stance_phase_s": 0.6,
+                "swing_phase_s": 0.4,
+                "total_double_support_s": 0.2,
+            }],
+        },
+    })
+
+    assert view._cycle_panel.isVisible()
+    assert "左脚单支撑" in view._current_cycle_label.text()
+    assert "左脚：支撑相 0.400 s" in view._current_cycle_label.text()
+    assert view._completed_cycle_table.rowCount() == 1
+    assert view._completed_cycle_table.item(0, 1).text() == "右脚"
+    assert view._card_imbalance._title.text() == "步态周期不对称率"
+    assert view._card_imbalance._value.text() == "4.5"
+
+    view.on_gait_snapshot({
+        "touch_count": 3,
+        "stride_count": 0,
+        "velocity_count": 0,
+        "gait_cycle_asymmetry_percent": {"gait_cycle_s": 4.5},
+        "gait_cycle_state": {
+            "support_state": "腾空",
+            "completed_cycle_count": 1,
+            "completed_cycle_start_index": 1,
+            "current_cycles": {},
+            "completed_cycles": [],
+        },
+    })
+
+    assert view._completed_cycle_table.rowCount() == 1
+
+
+def test_execution_view_does_not_enable_cycle_panel_for_ground_gait(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.show()
+
+    view.configure(TestConfig(test_type="Gait Test"))
+
+    assert not view._cycle_panel.isVisible()
