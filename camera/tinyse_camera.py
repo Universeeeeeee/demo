@@ -284,6 +284,7 @@ class TinySeCameraControl:
 
 class TinySeCameraCapture(QObject):
     frame_ready = Signal(np.ndarray)
+    analysis_frame_ready = Signal(object, float)
     stats_updated = Signal(float, float)
     recording_finished = Signal(str)
     error = Signal(str)
@@ -488,6 +489,8 @@ class TinySeCameraCapture(QObject):
         frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if frame is None:
             return
+        captured_at_s = time.perf_counter()
+        self.analysis_frame_ready.emit(frame, captured_at_s)
         if self._mirror:
             frame = cv2.flip(frame, 1)
         self.frame_ready.emit(frame)

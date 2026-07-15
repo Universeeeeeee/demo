@@ -80,6 +80,7 @@ class CameraCapture(QObject):
     """
 
     frame_ready = Signal(np.ndarray)
+    analysis_frame_ready = Signal(object, float)
     stats_updated = Signal(float, float)
     recording_finished = Signal(str)
     error = Signal(str)
@@ -173,6 +174,9 @@ class CameraCapture(QObject):
                 if not ok:
                     self.error.emit("无法读取视频帧")
                     break
+
+                captured_at_s = time.perf_counter()
+                self.analysis_frame_ready.emit(frame, captured_at_s)
 
                 # 镜像处理（预览 + 录制都走同一帧）
                 frame = cv2.flip(frame, 1)
