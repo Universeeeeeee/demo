@@ -108,6 +108,23 @@ class VisionServiceTests(unittest.TestCase):
         self.assertEqual(decisions[0].label, FootLabel.LEFT)
         self.assertFalse(service.is_running)
 
+    def test_service_emits_pose_samples_without_touch_events(self):
+        service = FootVisionService(
+            self.config,
+            "fake.task",
+            adapter_factory=_FakeAdapter,
+        )
+        ready = threading.Event()
+        samples = []
+        service.pose_ready.connect(lambda item: (samples.append(item), ready.set()))
+
+        service.start()
+        service.submit_frame(object(), 0.100)
+
+        self.assertTrue(ready.wait(1.0))
+        service.stop()
+        self.assertEqual(samples[0].timestamp_s, 0.100)
+
     def test_unavailable_model_returns_unknown_without_crashing(self):
         service = FootVisionService(
             self.config,

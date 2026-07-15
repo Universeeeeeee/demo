@@ -145,6 +145,17 @@ class EventWindowSchedulerTests(unittest.TestCase):
         self.assertEqual(scheduler.pose_cache_count, 0)
         self.assertIsNone(scheduler.inference_cursor_ms)
 
+    def test_pose_stream_is_inferred_without_synthetic_touch_events(self):
+        scheduler = EventWindowScheduler(self.config)
+        scheduler.add_frames(_frames(0, 200, 10))
+        infer = _Infer()
+
+        decisions = scheduler.process_ready(infer, _classify, now_s=0.200)
+
+        self.assertEqual(decisions, [])
+        self.assertGreater(scheduler.pose_cache_count, 0)
+        self.assertEqual(infer.timestamps, sorted(set(infer.timestamps)))
+
 
 if __name__ == "__main__":
     unittest.main()

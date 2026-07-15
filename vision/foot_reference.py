@@ -127,6 +127,10 @@ _BOTH_MARGIN = 0.04
 _SINGLE_MARGIN = 0.08
 _MAX_STABLE_RANGE = 0.04
 _CONSISTENCY_RATIO = 0.80
+_MIN_LANDING_EXTENSION = 0.025
+_FULL_LANDING_EXTENSION = 0.08
+_MAX_LANDING_SETTLE_RANGE = 0.05
+_BOTH_LANDING_SCORE_MARGIN = 0.12
 
 
 def unknown_decision(
@@ -209,6 +213,101 @@ def classify_event(
     return VisionDecision(event_id, label, confidence, reason, event_time_s)
 
 
+def classify_landing_event(
+    event_id: int,
+    event_time_s: float,
+    samples: Sequence[FootPoseSample],
+    config: VisionConfig | None = None,
+) -> VisionDecision:
+    """Classify which foot descends and settles around a real touch event.
+
+    The optical grid supplies the contact time. This classifier only assigns
+    the side by comparing each foot's extension relative to its hip before and
+    after that timestamp. A stationary stance foot is therefore not selected
+    merely because it remains lower in the image.
+    """
+
+    cfg = config or VisionConfig()
+    ordered = sorted(samples, key=lambda sample: sample.timestamp_s)
+    before = [sample for sample in ordered if sample.timestamp_s <= event_time_s]
+    after = [sample for sample in ordered if sample.timestamp_s >= event_time_s]
+    if len(before) < 2 or len(after) < 2:
+        return unknown_decision(
+            event_id,
+            event_time_s,
+            "insufficient_landing_samples",
+        )
+
+    qualities = {
+        side: median(_landing_quality(sample, side) for sample in ordered)
+        for side in (FootLabel.LEFT, FootLabel.RIGHT)
+    }
+    if min(qualities.values()) < cfg.min_landmark_quality:
+        return unknown_decision(event_id, event_time_s, "landmarks_not_visible")
+
+    descents: dict[FootLabel, float] = {}
+    scores: dict[FootLabel, float] = {}
+    for side in (FootLabel.LEFT, FootLabel.RIGHT):
+        early_count = max(1, len(before) // 2)
+        early_extension = median(
+            _leg_extension(sample, side) for sample in before[:early_count]
+        )
+        contact_extensions = [_leg_extension(sample, side) for sample in after]
+        contact_extension = median(contact_extensions)
+        descent = max(0.0, contact_extension - early_extension)
+        settle_range = _value_range(contact_extensions)
+        movement_score = min(1.0, descent / _FULL_LANDING_EXTENSION)
+        settle_score = max(
+            0.0,
+            1.0 - settle_range / _MAX_LANDING_SETTLE_RANGE,
+        )
+        descents[side] = descent
+        scores[side] = (
+            movement_score * 0.65
+            + settle_score * 0.20
+            + qualities[side] * 0.15
+        )
+
+    left_moved = descents[FootLabel.LEFT] >= _MIN_LANDING_EXTENSION
+    right_moved = descents[FootLabel.RIGHT] >= _MIN_LANDING_EXTENSION
+    if not left_moved and not right_moved:
+        return unknown_decision(event_id, event_time_s, "no_landing_motion")
+
+    if (
+        left_moved
+        and right_moved
+        and abs(scores[FootLabel.LEFT] - scores[FootLabel.RIGHT])
+        <= _BOTH_LANDING_SCORE_MARGIN
+    ):
+        label = FootLabel.BOTH
+        confidence = median(
+            (scores[FootLabel.LEFT], scores[FootLabel.RIGHT])
+        )
+        reason = "both_feet_descended_and_settled"
+    else:
+        eligible = []
+        if left_moved:
+            eligible.append(FootLabel.LEFT)
+        if right_moved:
+            eligible.append(FootLabel.RIGHT)
+        label = max(eligible, key=lambda side: scores[side])
+        other = FootLabel.RIGHT if label is FootLabel.LEFT else FootLabel.LEFT
+        separation = max(0.0, scores[label] - scores[other])
+        confidence = min(1.0, scores[label] + min(0.12, separation * 0.25))
+        reason = f"{label.value}_foot_descended_and_settled"
+
+    if confidence < cfg.min_confidence:
+        return VisionDecision(
+            event_id=event_id,
+            label=FootLabel.UNKNOWN,
+            confidence=confidence,
+            reason="confidence_below_threshold",
+            event_time_s=event_time_s,
+            candidate_label=label,
+        )
+    return VisionDecision(event_id, label, confidence, reason, event_time_s)
+
+
 def _label_from_difference(difference: float) -> FootLabel:
     if abs(difference) <= _BOTH_MARGIN:
         return FootLabel.BOTH
@@ -230,3 +329,33 @@ def _dominant_label(labels: Iterable[FootLabel]) -> tuple[FootLabel, float]:
 
 def _value_range(values: Sequence[float]) -> float:
     return max(values) - min(values) if values else 0.0
+
+
+def _side_landmarks(
+    sample: FootPoseSample,
+    side: FootLabel,
+) -> tuple[Landmark, Landmark, Landmark, Landmark]:
+    if side is FootLabel.LEFT:
+        return (
+            sample.left_hip,
+            sample.left_ankle,
+            sample.left_heel,
+            sample.left_foot_index,
+        )
+    if side is FootLabel.RIGHT:
+        return (
+            sample.right_hip,
+            sample.right_ankle,
+            sample.right_heel,
+            sample.right_foot_index,
+        )
+    raise ValueError("side must be left or right")
+
+
+def _landing_quality(sample: FootPoseSample, side: FootLabel) -> float:
+    return min(point.quality for point in _side_landmarks(sample, side))
+
+
+def _leg_extension(sample: FootPoseSample, side: FootLabel) -> float:
+    hip = _side_landmarks(sample, side)[0]
+    return sample.foot_y(side) - hip.y

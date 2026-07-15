@@ -57,14 +57,17 @@ class FootVisionService:
         model_path: str | Path,
         *,
         adapter_factory: Callable[[str | Path], object] = MediaPipePoseAdapter,
+        classifier: Callable = classify_event,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.config = config
         self.model_path = Path(model_path)
         self.decision_ready = EventHook()
+        self.pose_ready = EventHook()
         self.status_changed = EventHook()
 
         self._adapter_factory = adapter_factory
+        self._classifier = classifier
         self._clock = clock
         self._frames: deque[tuple[object, float]] = deque(maxlen=config.max_frames)
         self._events: deque[TouchEvent] = deque()
@@ -161,6 +164,12 @@ class FootVisionService:
             else:
                 self.status_changed.emit("ready")
 
+            def infer_pose(frame, timestamp_ms):
+                pose = adapter.infer_bgr(frame, timestamp_ms)
+                if pose is not None:
+                    self.pose_ready.emit(pose)
+                return pose
+
             while not self._stop.is_set():
                 frames, events = self._take_inputs()
                 now_s = self._clock()
@@ -185,8 +194,8 @@ class FootVisionService:
                         )
                     try:
                         decisions = scheduler.process_ready(
-                            adapter.infer_bgr,
-                            classify_event,
+                            infer_pose,
+                            self._classifier,
                             now_s=now_s,
                         )
                     except Exception as exc:

@@ -61,3 +61,25 @@ threshold and 80 ms pose sampling to keep CPU load bounded; the core module's
 0.90 high-confidence fusion default is unchanged. The CSV records timestamps,
 label, candidate label, confidence, rejection reason, and end-to-end latency.
 Continuous visual state does not validate synchronization with the optical grid.
+
+## Windows real-event validation
+
+Run the sidecar validator by itself when both the Tiny SE camera and optical
+grid are connected. It reuses the project's `SessionController` touch events
+but does not write visual labels back to the engine or report:
+
+```powershell
+python tools\vision_event_validator.py `
+  --camera tinyse `
+  --mode treadmill-gait `
+  --model .\models\pose_landmarker_full.task `
+  --output .\vision-event-validation.csv
+```
+
+The live image overlays left/right hip, knee, ankle, heel, and foot-index
+landmarks. Each real grid touch preserves an event image on the right. Press
+`L`, `R`, `B`, or `U` to record manual left/right/both/unreviewable truth for
+the latest event; press `Q` to exit. Start with the optical area clear long
+enough for the project's gait tracker to arm, then begin stepping. Do not run
+this validator at the same time as the main application because both would
+attempt to own the optical device.

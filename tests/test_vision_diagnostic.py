@@ -97,6 +97,13 @@ class VisionDiagnosticContractTests(unittest.TestCase):
         self.assertIn("inference_interval_ms=80", source)
         self.assertIn("min_confidence=0.65", source)
 
+    def test_live_preview_draws_timestamp_aligned_pose_nodes(self):
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertIn("self._service.pose_ready.connect", source)
+        self.assertIn("draw_pose_overlay", source)
+        self.assertIn("analysis_frame_ready.connect(self._on_analysis_frame)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

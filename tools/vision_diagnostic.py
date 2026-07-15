@@ -68,9 +68,11 @@ def run(args: argparse.Namespace) -> int:
     from camera.logi_camera import CAMERA_INDEX, CameraCapture
     from camera.tinyse_camera import TinySeCameraCapture
     from vision import FootVisionService, VisionConfig
+    from vision.pose_overlay import draw_pose_overlay
 
     class _Bridge(QObject):
         decision = Signal(object)
+        pose = Signal(object)
         status = Signal(str)
 
     class DiagnosticWindow(QWidget):
@@ -82,6 +84,7 @@ def run(args: argparse.Namespace) -> int:
             self._closing = False
             self._capture = None
             self._camera_thread = None
+            self._latest_pose = None
 
             output_path = Path(args.output).expanduser().resolve()
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +120,7 @@ def run(args: argparse.Namespace) -> int:
 
             self._bridge = _Bridge(self)
             self._bridge.decision.connect(self._on_decision)
+            self._bridge.pose.connect(self._on_pose_sample)
             self._bridge.status.connect(self._on_service_status)
 
             self._service = FootVisionService(
@@ -127,6 +131,7 @@ def run(args: argparse.Namespace) -> int:
                 Path(args.model).expanduser(),
             )
             self._service.decision_ready.connect(self._bridge.decision.emit)
+            self._service.pose_ready.connect(self._bridge.pose.emit)
             self._service.status_changed.connect(self._bridge.status.emit)
             self._service.start()
 
@@ -154,7 +159,7 @@ def run(args: argparse.Namespace) -> int:
             thread = QThread(self)
             capture.moveToThread(thread)
             capture.analysis_frame_ready.connect(self._service.submit_frame)
-            capture.frame_ready.connect(self._on_preview_frame)
+            capture.analysis_frame_ready.connect(self._on_analysis_frame)
             capture.stats_updated.connect(self._on_camera_stats)
             capture.error.connect(self._on_camera_error)
             thread.started.connect(capture.start)
@@ -214,8 +219,16 @@ def run(args: argparse.Namespace) -> int:
             self._status.setText(f"相机错误：{message}")
 
         @Slot(object)
-        def _on_preview_frame(self, frame) -> None:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        def _on_pose_sample(self, sample) -> None:
+            self._latest_pose = sample
+
+        @Slot(object, float)
+        def _on_analysis_frame(self, frame, captured_at_s: float) -> None:
+            pose = self._latest_pose
+            if pose is not None and abs(captured_at_s - pose.timestamp_s) > 0.30:
+                pose = None
+            annotated = draw_pose_overlay(frame.copy(), pose)
+            rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             height, width = rgb.shape[:2]
             target = self._preview.size()
             scale = min(target.width() / width, target.height() / height)

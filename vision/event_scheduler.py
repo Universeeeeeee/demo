@@ -98,6 +98,7 @@ class EventWindowScheduler:
         *,
         now_s: float,
     ) -> list[VisionDecision]:
+        self._infer_new_frames(infer_pose)
         decisions = list(self._immediate)
         self._immediate.clear()
 
@@ -136,7 +137,6 @@ class EventWindowScheduler:
                     continue
                 break
 
-            self._infer_new_window_frames(start_s, end_s, infer_pose)
             start_ms = round(start_s * 1000.0)
             end_ms = round(end_s * 1000.0)
             samples = [
@@ -186,19 +186,9 @@ class EventWindowScheduler:
         self._events.clear()
         return decisions
 
-    def _infer_new_window_frames(
-        self,
-        start_s: float,
-        end_s: float,
-        infer_pose: InferPose,
-    ) -> None:
+    def _infer_new_frames(self, infer_pose: InferPose) -> None:
         last_ms = self._inference_cursor_ms
         for sample in self._frames:
-            if (
-                sample.captured_at_s < start_s - 1e-6
-                or sample.captured_at_s > end_s + 1e-6
-            ):
-                continue
             timestamp_ms = round(sample.captured_at_s * 1000.0)
             if last_ms is not None and timestamp_ms <= last_ms:
                 continue

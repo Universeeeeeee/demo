@@ -6,6 +6,7 @@ from vision.foot_reference import (
     Landmark,
     VisionConfig,
     classify_event,
+    classify_landing_event,
 )
 
 
@@ -19,17 +20,21 @@ def _sample(
     left_y: float,
     right_y: float,
     visibility: float = 0.99,
+    left_hip_y: float = 0.40,
+    right_hip_y: float = 0.40,
 ) -> FootPoseSample:
     left = _landmark(left_y, visibility)
     right = _landmark(right_y, visibility)
+    left_hip = _landmark(left_hip_y, visibility)
+    right_hip = _landmark(right_hip_y, visibility)
     return FootPoseSample(
         timestamp_s=timestamp_s,
-        left_hip=left,
+        left_hip=left_hip,
         left_knee=left,
         left_ankle=left,
         left_heel=left,
         left_foot_index=left,
-        right_hip=right,
+        right_hip=right_hip,
         right_knee=right,
         right_ankle=right,
         right_heel=right,
@@ -145,6 +150,122 @@ class FootReferenceTests(unittest.TestCase):
 
         self.assertIs(result.label, FootLabel.UNKNOWN)
         self.assertEqual(result.reason, "window_inconsistent")
+
+    def test_landing_classifier_chooses_descending_left_not_lower_stance_foot(self):
+        samples = [
+            _sample(0.82, left_y=0.58, right_y=0.84),
+            _sample(0.90, left_y=0.68, right_y=0.84),
+            _sample(1.00, left_y=0.82, right_y=0.84),
+            _sample(1.06, left_y=0.83, right_y=0.84),
+            _sample(1.10, left_y=0.83, right_y=0.84),
+        ]
+
+        result = classify_landing_event(
+            21,
+            1.0,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.LEFT)
+        self.assertEqual(result.reason, "left_foot_descended_and_settled")
+
+    def test_landing_classifier_chooses_descending_right(self):
+        samples = [
+            _sample(1.82, left_y=0.84, right_y=0.58),
+            _sample(1.90, left_y=0.84, right_y=0.68),
+            _sample(2.00, left_y=0.84, right_y=0.82),
+            _sample(2.06, left_y=0.84, right_y=0.83),
+            _sample(2.10, left_y=0.84, right_y=0.83),
+        ]
+
+        result = classify_landing_event(
+            22,
+            2.0,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.RIGHT)
+
+    def test_landing_classifier_supports_both_feet(self):
+        samples = [
+            _sample(2.82, left_y=0.58, right_y=0.59),
+            _sample(2.90, left_y=0.68, right_y=0.69),
+            _sample(3.00, left_y=0.82, right_y=0.83),
+            _sample(3.06, left_y=0.83, right_y=0.84),
+            _sample(3.10, left_y=0.83, right_y=0.84),
+        ]
+
+        result = classify_landing_event(
+            23,
+            3.0,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.BOTH)
+        self.assertEqual(result.reason, "both_feet_descended_and_settled")
+
+    def test_landing_classifier_rejects_two_stationary_visible_feet(self):
+        samples = [
+            _sample(3.82, left_y=0.83, right_y=0.84),
+            _sample(3.90, left_y=0.83, right_y=0.84),
+            _sample(4.00, left_y=0.83, right_y=0.84),
+            _sample(4.06, left_y=0.83, right_y=0.84),
+        ]
+
+        result = classify_landing_event(
+            24,
+            4.0,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.UNKNOWN)
+        self.assertEqual(result.reason, "no_landing_motion")
+
+    def test_landing_classifier_ignores_whole_body_vertical_translation(self):
+        samples = [
+            _sample(
+                4.82,
+                left_y=0.70,
+                right_y=0.72,
+                left_hip_y=0.30,
+                right_hip_y=0.32,
+            ),
+            _sample(
+                4.90,
+                left_y=0.78,
+                right_y=0.80,
+                left_hip_y=0.38,
+                right_hip_y=0.40,
+            ),
+            _sample(
+                5.00,
+                left_y=0.86,
+                right_y=0.88,
+                left_hip_y=0.46,
+                right_hip_y=0.48,
+            ),
+            _sample(
+                5.06,
+                left_y=0.86,
+                right_y=0.88,
+                left_hip_y=0.46,
+                right_hip_y=0.48,
+            ),
+        ]
+
+        result = classify_landing_event(
+            25,
+            5.0,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.UNKNOWN)
+        self.assertEqual(result.reason, "no_landing_motion")
 
 
 if __name__ == "__main__":
