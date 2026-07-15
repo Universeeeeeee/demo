@@ -83,9 +83,19 @@ class VisionDiagnosticContractTests(unittest.TestCase):
                 "label",
                 "confidence",
                 "reason",
+                "candidate_label",
                 "latency_ms",
             ),
         )
+
+    def test_live_defaults_reduce_cpu_load_and_use_reference_threshold(self):
+        module = importlib.import_module("tools.vision_diagnostic")
+        args = module.build_parser().parse_args(["--model", "pose.task"])
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertEqual(args.interval_ms, 250)
+        self.assertIn("inference_interval_ms=80", source)
+        self.assertIn("min_confidence=0.65", source)
 
 
 if __name__ == "__main__":

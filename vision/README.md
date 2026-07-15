@@ -56,6 +56,8 @@ python tools\vision_live.py `
 ```
 
 The independent window continuously evaluates rolling visual windows (default
-100 ms interval); press Q to exit. The CSV records timestamps, label,
-confidence, rejection reason, and end-to-end latency. Continuous visual state
-does not validate synchronization with the optical grid.
+250 ms interval); press Q to exit. The live window uses a 0.65 reference-only
+threshold and 80 ms pose sampling to keep CPU load bounded; the core module's
+0.90 high-confidence fusion default is unchanged. The CSV records timestamps,
+label, candidate label, confidence, rejection reason, and end-to-end latency.
+Continuous visual state does not validate synchronization with the optical grid.

@@ -166,6 +166,7 @@ class EventWindowScheduler:
                         reason=decision.reason,
                         event_time_s=decision.event_time_s,
                         decided_at_s=now_s,
+                        candidate_label=decision.candidate_label,
                     )
             decisions.append(decision)
             self._events.pop(0)

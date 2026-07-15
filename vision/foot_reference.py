@@ -120,6 +120,7 @@ class VisionDecision:
     reason: str
     event_time_s: float
     decided_at_s: float | None = None
+    candidate_label: FootLabel | None = None
 
 
 _BOTH_MARGIN = 0.04
@@ -197,7 +198,14 @@ def classify_event(
         reason = f"{label.value}_foot_lower_and_stable"
     confidence = min(1.0, quality * 0.6 + geometry * 0.3 + ratio * 0.1)
     if confidence < cfg.min_confidence:
-        return unknown_decision(event_id, event_time_s, "confidence_below_threshold")
+        return VisionDecision(
+            event_id=event_id,
+            label=FootLabel.UNKNOWN,
+            confidence=confidence,
+            reason="confidence_below_threshold",
+            event_time_s=event_time_s,
+            candidate_label=label,
+        )
     return VisionDecision(event_id, label, confidence, reason, event_time_s)
 
 

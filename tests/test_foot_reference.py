@@ -91,6 +91,36 @@ class FootReferenceTests(unittest.TestCase):
         self.assertIs(result.label, FootLabel.LEFT)
         self.assertGreaterEqual(result.confidence, 0.9)
 
+    def test_low_confidence_rejection_preserves_candidate_and_raw_score(self):
+        samples = [
+            _sample(2.20, left_y=0.82, right_y=0.72, visibility=0.70),
+            _sample(2.24, left_y=0.82, right_y=0.72, visibility=0.70),
+            _sample(2.28, left_y=0.82, right_y=0.72, visibility=0.70),
+        ]
+
+        result = classify_event(11, 2.25, samples)
+
+        self.assertIs(result.label, FootLabel.UNKNOWN)
+        self.assertIs(result.candidate_label, FootLabel.LEFT)
+        self.assertGreater(result.confidence, 0.0)
+        self.assertEqual(result.reason, "confidence_below_threshold")
+
+    def test_live_reference_threshold_accepts_moderate_left_candidate(self):
+        samples = [
+            _sample(2.20, left_y=0.82, right_y=0.72, visibility=0.70),
+            _sample(2.24, left_y=0.82, right_y=0.72, visibility=0.70),
+            _sample(2.28, left_y=0.82, right_y=0.72, visibility=0.70),
+        ]
+
+        result = classify_event(
+            12,
+            2.25,
+            samples,
+            VisionConfig(min_confidence=0.65),
+        )
+
+        self.assertIs(result.label, FootLabel.LEFT)
+
     def test_classifier_labels_two_level_stable_feet_as_both(self):
         samples = [
             _sample(3.20, left_y=0.90, right_y=0.89),

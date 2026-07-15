@@ -21,6 +21,7 @@ CSV_FIELDS = (
     "label",
     "confidence",
     "reason",
+    "candidate_label",
     "latency_ms",
 )
 
@@ -35,8 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--interval-ms",
         type=_positive_int,
-        default=100,
-        help="Rolling visual-state update interval (default: 100 ms)",
+        default=250,
+        help="Rolling visual-state update interval (default: 250 ms)",
     )
     return parser
 
@@ -119,7 +120,10 @@ def run(args: argparse.Namespace) -> int:
             self._bridge.status.connect(self._on_service_status)
 
             self._service = FootVisionService(
-                VisionConfig(),
+                VisionConfig(
+                    inference_interval_ms=80,
+                    min_confidence=0.65,
+                ),
                 Path(args.model).expanduser(),
             )
             self._service.decision_ready.connect(self._bridge.decision.emit)
@@ -170,8 +174,12 @@ def run(args: argparse.Namespace) -> int:
         def _on_decision(self, decision) -> None:
             decided_at_s = decision.decided_at_s or time.perf_counter()
             latency_ms = (decided_at_s - decision.event_time_s) * 1000.0
+            display_label = decision.label.value.upper()
+            candidate_label = decision.candidate_label
+            if decision.label.value == "unknown" and candidate_label is not None:
+                display_label += f"（候选 {candidate_label.value.upper()}）"
             self._result.setText(
-                f"事件 {decision.event_id}：{decision.label.value.upper()}  "
+                f"事件 {decision.event_id}：{display_label}  "
                 f"置信度 {decision.confidence:.3f}  延迟 {latency_ms:.1f} ms"
             )
             self._status.setText(f"原因：{decision.reason}")
@@ -183,6 +191,9 @@ def run(args: argparse.Namespace) -> int:
                     "label": decision.label.value,
                     "confidence": f"{decision.confidence:.6f}",
                     "reason": decision.reason,
+                    "candidate_label": (
+                        candidate_label.value if candidate_label is not None else ""
+                    ),
                     "latency_ms": f"{latency_ms:.3f}",
                 }
             )
