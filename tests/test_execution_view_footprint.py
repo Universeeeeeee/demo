@@ -8,11 +8,23 @@ from qtpy.QtWidgets import QApplication, QBoxLayout, QGridLayout
 from config.test_config import TestConfig
 from config.treadmill_config import TreadmillGaitConfig
 from ui.footprint_channel import FootprintChannelWidget
-from ui.views.execution_view import ExecutionView
+from ui.views.execution_view import ExecutionView, MetricCard
 
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def test_metric_card_keeps_value_visible_when_unit_is_shown(qtbot):
+    card = MetricCard("平均步速", "cm/s")
+    qtbot.addWidget(card)
+    card.resize(400, 130)
+    card.show()
+    QApplication.processEvents()
+
+    assert card.minimumHeight() >= card.minimumSizeHint().height()
+    assert card._value.height() >= card._value.sizeHint().height()
+    assert card._unit.height() >= card._unit.sizeHint().height()
 
 
 def test_execution_view_passes_treadmill_direction_to_footprint_channel():
@@ -184,6 +196,68 @@ def test_execution_view_shows_current_and_completed_gait_cycles(qtbot):
     })
 
     assert view._completed_cycle_table.rowCount() == 1
+
+
+def test_completed_gait_cycles_show_newest_first_and_return_to_top(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.show()
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+
+    cycles = [
+        {
+            "index": index,
+            "side": "left" if index % 2 == 0 else "right",
+            "gait_cycle_s": 1.0,
+            "stance_phase_s": 0.6,
+            "swing_phase_s": 0.4,
+            "total_double_support_s": 0.2,
+        }
+        for index in range(12)
+    ]
+    view._render_gait_cycle_state({
+        "support_state": "腾空",
+        "completed_cycle_count": 12,
+        "completed_cycle_start_index": 0,
+        "current_cycles": {},
+        "completed_cycles": cycles,
+    })
+
+    table = view._completed_cycle_table
+    assert table.item(0, 0).text() == "12"
+    assert table.item(11, 0).text() == "1"
+
+    table.scrollToBottom()
+    QApplication.processEvents()
+    assert table.verticalScrollBar().value() == table.verticalScrollBar().maximum()
+
+    view._render_gait_cycle_state({
+        "support_state": "左脚单支撑",
+        "completed_cycle_count": 13,
+        "completed_cycle_start_index": 12,
+        "current_cycles": {},
+        "completed_cycles": [{
+            "index": 12,
+            "side": "left",
+            "gait_cycle_s": 1.1,
+            "stance_phase_s": 0.7,
+            "swing_phase_s": 0.4,
+            "total_double_support_s": 0.2,
+        }],
+    })
+    QApplication.processEvents()
+
+    assert table.rowCount() == 13
+    assert table.item(0, 0).text() == "13"
+    assert table.item(1, 0).text() == "12"
+    assert table.verticalScrollBar().value() == table.verticalScrollBar().minimum()
 
 
 def test_execution_view_does_not_enable_cycle_panel_for_ground_gait(qtbot):

@@ -65,7 +65,7 @@ class MetricCard(QFrame):
             "  background-color: rgba(40, 40, 45, 0.85);"
             "  border: 1px solid rgba(80, 80, 85, 0.6);"
             "  border-radius: 10px;"
-            "  padding: 8px;"
+            "  padding: 0;"
             "}"
         )
 
@@ -97,7 +97,7 @@ class MetricCard(QFrame):
             layout.addWidget(self._unit)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(max(120, self.minimumSizeHint().height() + 4))
 
     def set_value(self, text: str):
         self._value.setText(text)
@@ -629,11 +629,11 @@ class ExecutionView(QWidget):
             elif current_rows < start_row:
                 return
 
-        self._completed_cycle_table.setRowCount(start_row + len(cycles))
         for offset, cycle in enumerate(cycles):
-            row = start_row + offset
+            self._completed_cycle_table.insertRow(0)
+            cycle_index = cycle.get("index", start_row + offset)
             values = [
-                str(cycle.get("index", row) + 1),
+                str(cycle_index + 1),
                 side_labels.get(cycle.get("side"), "未知脚"),
                 _format_cycle_value(cycle.get("gait_cycle_s")),
                 _format_cycle_value(cycle.get("stance_phase_s")),
@@ -643,7 +643,9 @@ class ExecutionView(QWidget):
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignCenter)
-                self._completed_cycle_table.setItem(row, column, item)
+                self._completed_cycle_table.setItem(0, column, item)
+        if cycles:
+            self._completed_cycle_table.scrollToTop()
 
     def on_footprint_visual_frame(self, frame: dict):
         self._latest_footprint_frame = frame
