@@ -5,7 +5,7 @@ numpy
 pyqtgraph
 opencv-python
 pydantic
-pydantic-ai
+pydantic-ai-slim[openai]
 python-dotenv
 pytest
 requests
