@@ -45,6 +45,8 @@ class CameraAnalysisFrameContractTests(unittest.TestCase):
                 }
                 self.assertIn("frame_ready", assignments)
                 self.assertIn("analysis_frame_ready", assignments)
+                if class_name == "TinySeCameraCapture":
+                    self.assertIn("analysis_frame_timed_ready", assignments)
 
     def test_logitech_emits_unmirrored_analysis_frame_before_flip(self):
         source = _method_source(
@@ -70,7 +72,9 @@ class CameraAnalysisFrameContractTests(unittest.TestCase):
 
         self.assertLess(decode_position, analysis_position)
         self.assertLess(analysis_position, flip_position)
-        self.assertIn("captured_at_s = time.perf_counter()", source)
+        self.assertIn("callback_time_s: float", source)
+        self.assertIn("decoded_at_s = time.perf_counter()", source)
+        self.assertIn("analysis_frame_timed_ready.emit", source)
 
 
 if __name__ == "__main__":

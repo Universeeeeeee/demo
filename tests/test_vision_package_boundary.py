@@ -16,12 +16,16 @@ class VisionPackageBoundaryTests(unittest.TestCase):
         self.assertEqual(
             set(vision.__all__),
             {
+                "CameraClockSynchronizer",
+                "ClockSyncSnapshot",
+                "ClockSyncStatus",
                 "FootLabel",
                 "FootVisionService",
                 "VisionConfig",
                 "VisionDecision",
                 "VisionInferenceError",
                 "VisionUnavailableError",
+                "VisionWindowDiagnostics",
             },
         )
 

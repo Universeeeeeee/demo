@@ -86,6 +86,7 @@ class VisionServiceTests(unittest.TestCase):
             self.config,
             "fake.task",
             adapter_factory=_FakeAdapter,
+            clock=lambda: 0.300,
         )
         ready = threading.Event()
         decisions = []

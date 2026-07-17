@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import deque
+from dataclasses import replace
 from typing import Callable, Iterable
 
 from .foot_reference import (
@@ -12,6 +13,7 @@ from .foot_reference import (
     TouchEvent,
     VisionConfig,
     VisionDecision,
+    VisionWindowDiagnostics,
     unknown_decision,
 )
 
@@ -45,10 +47,15 @@ class EventWindowScheduler:
     def inference_cursor_ms(self) -> int | None:
         return self._inference_cursor_ms
 
+    @property
+    def inference_attempt_count(self) -> int:
+        return len(self._inference_attempts)
+
     def reset(self) -> None:
         self._frames: list[FrameSample] = []
         self._events: list[TouchEvent] = []
         self._pose_cache: dict[int, FootPoseSample] = {}
+        self._inference_attempts: dict[int, bool] = {}
         self._inference_cursor_ms: int | None = None
         self._immediate: deque[VisionDecision] = deque()
 
@@ -97,6 +104,7 @@ class EventWindowScheduler:
         classify_event: ClassifyEvent,
         *,
         now_s: float,
+        decision_clock: Callable[[], float] | None = None,
     ) -> list[VisionDecision]:
         self._infer_new_frames(infer_pose)
         decisions = list(self._immediate)
@@ -106,6 +114,11 @@ class EventWindowScheduler:
             event = self._events[0]
             start_s = event.event_time_s - self.config.pre_event_ms / 1000.0
             end_s = event.event_time_s + self.config.post_event_ms / 1000.0
+            diagnostics = self._window_diagnostics(event.event_time_s, start_s, end_s)
+            decision_time_s = self._decision_time(now_s, decision_clock)
+            deadline_s = (
+                event.event_time_s + self.config.decision_timeout_ms / 1000.0
+            )
 
             if self._frames and self._frames[0].captured_at_s > start_s + 1e-6:
                 decisions.append(
@@ -113,7 +126,21 @@ class EventWindowScheduler:
                         event.event_id,
                         event.event_time_s,
                         "frame_window_expired",
-                        decided_at_s=now_s,
+                        decided_at_s=decision_time_s,
+                        diagnostics=diagnostics,
+                    )
+                )
+                self._events.pop(0)
+                continue
+
+            if decision_time_s > deadline_s:
+                decisions.append(
+                    unknown_decision(
+                        event.event_id,
+                        event.event_time_s,
+                        "decision_timeout",
+                        decided_at_s=decision_time_s,
+                        diagnostics=diagnostics,
                     )
                 )
                 self._events.pop(0)
@@ -121,20 +148,6 @@ class EventWindowScheduler:
 
             latest_frame_s = self._frames[-1].captured_at_s if self._frames else None
             if latest_frame_s is None or latest_frame_s < end_s - 1e-6:
-                deadline_s = (
-                    event.event_time_s + self.config.decision_timeout_ms / 1000.0
-                )
-                if now_s > deadline_s:
-                    decisions.append(
-                        unknown_decision(
-                            event.event_id,
-                            event.event_time_s,
-                            "decision_timeout",
-                            decided_at_s=now_s,
-                        )
-                    )
-                    self._events.pop(0)
-                    continue
                 break
 
             start_ms = round(start_s * 1000.0)
@@ -149,7 +162,8 @@ class EventWindowScheduler:
                     event.event_id,
                     event.event_time_s,
                     "pose_window_unavailable",
-                    decided_at_s=now_s,
+                    decided_at_s=decision_time_s,
+                    diagnostics=diagnostics,
                 )
             else:
                 decision = classify_event(
@@ -158,16 +172,10 @@ class EventWindowScheduler:
                     samples,
                     self.config,
                 )
+                updates = {"diagnostics": diagnostics}
                 if decision.decided_at_s is None:
-                    decision = VisionDecision(
-                        event_id=decision.event_id,
-                        label=decision.label,
-                        confidence=decision.confidence,
-                        reason=decision.reason,
-                        event_time_s=decision.event_time_s,
-                        decided_at_s=now_s,
-                        candidate_label=decision.candidate_label,
-                    )
+                    updates["decided_at_s"] = decision_time_s
+                decision = replace(decision, **updates)
             decisions.append(decision)
             self._events.pop(0)
 
@@ -200,8 +208,54 @@ class EventWindowScheduler:
             pose = infer_pose(sample.frame, timestamp_ms)
             self._inference_cursor_ms = timestamp_ms
             last_ms = timestamp_ms
+            self._inference_attempts[timestamp_ms] = pose is not None
             if pose is not None:
                 self._pose_cache[timestamp_ms] = pose
+
+    @staticmethod
+    def _decision_time(
+        now_s: float,
+        decision_clock: Callable[[], float] | None,
+    ) -> float:
+        return decision_clock() if decision_clock is not None else now_s
+
+    def _window_diagnostics(
+        self,
+        event_time_s: float,
+        start_s: float,
+        end_s: float,
+    ) -> VisionWindowDiagnostics:
+        start_ms = round(start_s * 1000.0)
+        end_ms = round(end_s * 1000.0)
+        attempt_timestamps = [
+            timestamp_ms
+            for timestamp_ms in sorted(self._inference_attempts)
+            if start_ms <= timestamp_ms <= end_ms
+        ]
+        pose_samples = [
+            sample
+            for timestamp_ms, sample in sorted(self._pose_cache.items())
+            if start_ms <= timestamp_ms <= end_ms
+        ]
+        pose_timestamps = [sample.timestamp_s for sample in pose_samples]
+        gaps_ms = [
+            (current - previous) * 1000.0
+            for previous, current in zip(pose_timestamps, pose_timestamps[1:])
+        ]
+        return VisionWindowDiagnostics(
+            frame_count=sum(
+                start_s <= sample.captured_at_s <= end_s for sample in self._frames
+            ),
+            inference_attempts=len(attempt_timestamps),
+            pose_total=len(pose_samples),
+            pose_before=sum(
+                sample.timestamp_s <= event_time_s for sample in pose_samples
+            ),
+            pose_after=sum(
+                sample.timestamp_s >= event_time_s for sample in pose_samples
+            ),
+            max_pose_gap_ms=max(gaps_ms) if gaps_ms else None,
+        )
 
     def _prune_frames(self) -> None:
         if not self._frames:
@@ -214,5 +268,10 @@ class EventWindowScheduler:
         self._pose_cache = {
             timestamp_ms: sample
             for timestamp_ms, sample in self._pose_cache.items()
+            if timestamp_ms >= cutoff_ms
+        }
+        self._inference_attempts = {
+            timestamp_ms: succeeded
+            for timestamp_ms, succeeded in self._inference_attempts.items()
             if timestamp_ms >= cutoff_ms
         }

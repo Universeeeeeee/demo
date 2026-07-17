@@ -46,7 +46,7 @@ class TinySeRecordingStats(ctypes.Structure):
     ]
 
 
-FrameCallback = ctypes.WINFUNCTYPE(
+FrameCallback = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(
     None,
     ctypes.POINTER(ctypes.c_uint8),
     ctypes.c_int32,
@@ -54,6 +54,23 @@ FrameCallback = ctypes.WINFUNCTYPE(
     ctypes.c_double,
     ctypes.c_void_p,
 )
+
+
+def _deliver_frame(
+    data,
+    length: int,
+    frame_index: int,
+    sample_time_s: float,
+    *,
+    on_frame: Callable[[bytes, int, float], None] | None,
+    on_timed_frame: Callable[[bytes, int, float, float], None] | None,
+) -> None:
+    callback_time_s = time.perf_counter()
+    copied = ctypes.string_at(data, length)
+    if on_timed_frame is not None:
+        on_timed_frame(copied, int(frame_index), float(sample_time_s), callback_time_s)
+    if on_frame is not None:
+        on_frame(copied, int(frame_index), float(sample_time_s))
 
 
 def _fourcc_text(value: int) -> str:
@@ -72,6 +89,7 @@ class TinySeDShowCapture:
         fps: int = 100,
         dll_path: str | Path = DEFAULT_DLL,
         on_frame: Callable[[bytes, int, float], None] | None = None,
+        on_timed_frame: Callable[[bytes, int, float, float], None] | None = None,
     ) -> None:
         self.dll_path = Path(dll_path)
         if not self.dll_path.exists():
@@ -82,12 +100,15 @@ class TinySeDShowCapture:
         self._callback_ref = None
         self._record_paths: tuple[Path, Path] | None = None
         callback_arg = FrameCallback()
-        if on_frame is not None:
+        if on_frame is not None or on_timed_frame is not None:
             self._callback_ref = FrameCallback(
-                lambda data, length, frame_index, sample_time, user: on_frame(
-                    ctypes.string_at(data, length),
-                    int(frame_index),
-                    float(sample_time),
+                lambda data, length, frame_index, sample_time, user: _deliver_frame(
+                    data,
+                    length,
+                    frame_index,
+                    sample_time,
+                    on_frame=on_frame,
+                    on_timed_frame=on_timed_frame,
                 )
             )
             callback_arg = self._callback_ref

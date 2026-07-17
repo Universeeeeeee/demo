@@ -113,6 +113,16 @@ class TouchEvent:
 
 
 @dataclass(frozen=True)
+class VisionWindowDiagnostics:
+    frame_count: int = 0
+    inference_attempts: int = 0
+    pose_total: int = 0
+    pose_before: int = 0
+    pose_after: int = 0
+    max_pose_gap_ms: float | None = None
+
+
+@dataclass(frozen=True)
 class VisionDecision:
     event_id: int
     label: FootLabel
@@ -121,6 +131,7 @@ class VisionDecision:
     event_time_s: float
     decided_at_s: float | None = None
     candidate_label: FootLabel | None = None
+    diagnostics: VisionWindowDiagnostics | None = None
 
 
 _BOTH_MARGIN = 0.04
@@ -139,6 +150,7 @@ def unknown_decision(
     reason: str,
     *,
     decided_at_s: float | None = None,
+    diagnostics: VisionWindowDiagnostics | None = None,
 ) -> VisionDecision:
     return VisionDecision(
         event_id=event_id,
@@ -147,6 +159,7 @@ def unknown_decision(
         reason=reason,
         event_time_s=event_time_s,
         decided_at_s=decided_at_s,
+        diagnostics=diagnostics,
     )
 
 

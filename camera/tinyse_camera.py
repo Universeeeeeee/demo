@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 _module_dir = Path(__file__).resolve().parent
@@ -75,6 +76,16 @@ TARGET_FPS = 100
 PREVIEW_FPS = 30
 PREVIEW_WIDTH = 960
 PREVIEW_HEIGHT = 540
+
+
+@dataclass(frozen=True)
+class TinySeFrameTiming:
+    """DirectShow sample metadata plus host callback and decode times."""
+
+    frame_index: int
+    sample_time_s: float
+    callback_time_s: float
+    decoded_at_s: float
 
 
 def mjpg_to_avi(
@@ -285,6 +296,7 @@ class TinySeCameraControl:
 class TinySeCameraCapture(QObject):
     frame_ready = Signal(np.ndarray)
     analysis_frame_ready = Signal(object, float)
+    analysis_frame_timed_ready = Signal(object, object)
     stats_updated = Signal(float, float)
     recording_finished = Signal(str)
     error = Signal(str)
@@ -337,7 +349,7 @@ class TinySeCameraCapture(QObject):
                 width=self._width,
                 height=self._height,
                 fps=self._fps,
-                on_frame=self._on_mjpg_frame,
+                on_timed_frame=self._on_mjpg_frame,
             )
             _log_timing(f"dshow.create={time.perf_counter() - start:.3f}s")
             return True
@@ -476,21 +488,33 @@ class TinySeCameraCapture(QObject):
         if enabled:
             self._last_preview_time = 0.0
 
-    def _on_mjpg_frame(self, data: bytes, _frame_index: int, _sample_time: float) -> None:
+    def _on_mjpg_frame(
+        self,
+        data: bytes,
+        frame_index: int,
+        sample_time: float,
+        callback_time_s: float,
+    ) -> None:
         if not self._preview_enabled:
             return
 
-        now = time.perf_counter()
-        if now - self._last_preview_time < self._preview_interval:
+        if callback_time_s - self._last_preview_time < self._preview_interval:
             return
-        self._last_preview_time = now
+        self._last_preview_time = callback_time_s
 
         encoded = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if frame is None:
             return
-        captured_at_s = time.perf_counter()
-        self.analysis_frame_ready.emit(frame, captured_at_s)
+        decoded_at_s = time.perf_counter()
+        timing = TinySeFrameTiming(
+            frame_index=frame_index,
+            sample_time_s=sample_time,
+            callback_time_s=callback_time_s,
+            decoded_at_s=decoded_at_s,
+        )
+        self.analysis_frame_timed_ready.emit(frame, timing)
+        self.analysis_frame_ready.emit(frame, decoded_at_s)
         if self._mirror:
             frame = cv2.flip(frame, 1)
         self.frame_ready.emit(frame)

@@ -197,6 +197,7 @@ class FootVisionService:
                             infer_pose,
                             self._classifier,
                             now_s=now_s,
+                            decision_clock=self._clock,
                         )
                     except Exception as exc:
                         unavailable = True

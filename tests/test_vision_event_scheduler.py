@@ -37,11 +37,14 @@ def _frames(start_ms: int, end_ms: int, step_ms: int) -> list[FrameSample]:
 
 
 class _Infer:
-    def __init__(self):
+    def __init__(self, missing=()):
         self.timestamps: list[int] = []
+        self.missing = set(missing)
 
     def __call__(self, frame, timestamp_ms: int):
         self.timestamps.append(timestamp_ms)
+        if timestamp_ms in self.missing:
+            return None
         return _pose(timestamp_ms / 1000.0)
 
 
@@ -155,6 +158,101 @@ class EventWindowSchedulerTests(unittest.TestCase):
         self.assertEqual(decisions, [])
         self.assertGreater(scheduler.pose_cache_count, 0)
         self.assertEqual(infer.timestamps, sorted(set(infer.timestamps)))
+
+    def test_decision_reports_attempt_and_pose_counts_for_its_window(self):
+        scheduler = EventWindowScheduler(
+            VisionConfig(
+                pre_event_ms=100,
+                post_event_ms=100,
+                inference_interval_ms=50,
+                decision_timeout_ms=300,
+                frame_buffer_ms=500,
+            )
+        )
+        scheduler.add_frames(_frames(900, 1100, 50))
+        scheduler.add_event(10, 1.000, submitted_at_s=1.000)
+
+        decisions = scheduler.process_ready(
+            _Infer(missing=(950, 1050)),
+            _classify,
+            now_s=1.100,
+        )
+
+        diagnostics = decisions[0].diagnostics
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual(diagnostics.frame_count, 5)
+        self.assertEqual(diagnostics.inference_attempts, 5)
+        self.assertEqual(diagnostics.pose_total, 3)
+        self.assertEqual(diagnostics.pose_before, 2)
+        self.assertEqual(diagnostics.pose_after, 2)
+        self.assertAlmostEqual(diagnostics.max_pose_gap_ms, 100.0)
+
+    def test_pose_unavailable_decision_still_has_window_diagnostics(self):
+        scheduler = EventWindowScheduler(
+            VisionConfig(
+                pre_event_ms=100,
+                post_event_ms=100,
+                inference_interval_ms=50,
+                decision_timeout_ms=300,
+                frame_buffer_ms=500,
+            )
+        )
+        scheduler.add_frames(_frames(900, 1100, 50))
+        scheduler.add_event(11, 1.000, submitted_at_s=1.000)
+
+        decisions = scheduler.process_ready(
+            _Infer(missing=(900, 950, 1000, 1050, 1100)),
+            _classify,
+            now_s=1.100,
+        )
+
+        self.assertEqual(decisions[0].reason, "pose_window_unavailable")
+        diagnostics = decisions[0].diagnostics
+        self.assertEqual(diagnostics.inference_attempts, 5)
+        self.assertEqual(diagnostics.pose_total, 0)
+        self.assertEqual(diagnostics.pose_before, 0)
+        self.assertEqual(diagnostics.pose_after, 0)
+        self.assertIsNone(diagnostics.max_pose_gap_ms)
+
+    def test_reset_clears_inference_attempt_cache(self):
+        scheduler = EventWindowScheduler(self.config)
+        scheduler.add_frames(_frames(0, 200, 20))
+        scheduler.process_ready(_Infer(), _classify, now_s=0.200)
+        self.assertGreater(scheduler.inference_attempt_count, 0)
+
+        scheduler.reset()
+
+        self.assertEqual(scheduler.inference_attempt_count, 0)
+
+    def test_decision_clock_captures_time_after_inference(self):
+        scheduler = EventWindowScheduler(self.config)
+        scheduler.add_frames(_frames(0, 300, 20))
+        scheduler.add_event(12, 0.150, submitted_at_s=0.150)
+
+        decisions = scheduler.process_ready(
+            _Infer(),
+            _classify,
+            now_s=0.210,
+            decision_clock=lambda: 0.245,
+        )
+
+        self.assertEqual(decisions[0].decided_at_s, 0.245)
+
+    def test_inference_finishing_after_deadline_is_rejected(self):
+        scheduler = EventWindowScheduler(self.config)
+        scheduler.add_frames(_frames(0, 300, 20))
+        scheduler.add_event(13, 0.150, submitted_at_s=0.150)
+
+        decisions = scheduler.process_ready(
+            _Infer(),
+            _classify,
+            now_s=0.210,
+            decision_clock=lambda: 0.351,
+        )
+
+        self.assertEqual(decisions[0].label, FootLabel.UNKNOWN)
+        self.assertEqual(decisions[0].reason, "decision_timeout")
+        self.assertEqual(decisions[0].decided_at_s, 0.351)
 
 
 if __name__ == "__main__":
