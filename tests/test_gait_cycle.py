@@ -191,3 +191,36 @@ def test_initial_and_final_boundary_partials_are_kept_outside_cycles():
         (0.0, 0.2, "起始边界不完整"),
         (0.2, 0.9, "摆动相"),
     ]
+
+
+def test_contact_exclusion_reason_and_quality_flags_propagate_to_cycle():
+    builder = GaitCycleBuilder()
+
+    builder.record_touch(0.0, "left")
+    builder.record_lift(
+        0.4,
+        "left",
+        is_included_in_statistics=False,
+        statistics_exclusion_reason="Contact time below minimum threshold",
+        quality_flags=("gap_below_minimum",),
+    )
+    cycle = builder.record_touch(0.8, "left")
+
+    assert cycle is not None
+    assert cycle.is_included_in_statistics is False
+    assert (
+        cycle.statistics_exclusion_reason
+        == "Contact time below minimum threshold"
+    )
+    assert cycle.quality_flags == ("gap_below_minimum",)
+
+
+def test_repeated_touch_without_lift_has_explicit_cycle_exclusion_reason():
+    builder = GaitCycleBuilder()
+
+    builder.record_touch(0.0, "left")
+    cycle = builder.record_touch(0.8, "left")
+
+    assert cycle is not None
+    assert cycle.is_included_in_statistics is False
+    assert cycle.statistics_exclusion_reason == "Touch was replaced before lift"

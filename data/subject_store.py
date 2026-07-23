@@ -542,7 +542,7 @@ def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict
 
     return {
         "report_type": report_type,
-        "report_schema_version": 2,
+        "report_schema_version": 3,
         "finish_reason": report.finish_reason,
         "touch_count": report.touch_count,
         "lift_count": report.lift_count,

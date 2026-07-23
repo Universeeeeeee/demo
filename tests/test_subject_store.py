@@ -18,6 +18,7 @@ from config.treadmill_report import (
     GaitCycleRecord,
     GaitEventRecord,
     TreadmillGaitReport,
+    TreadmillStepResult,
     summarize,
 )
 from data.subject_store import SubjectProfile, SubjectStore
@@ -248,7 +249,18 @@ class SubjectStoreTest(unittest.TestCase):
             lift_count=0,
             resolved_starting_foot="unknown",
             starting_foot_source="unknown",
-            per_step_results=(),
+            per_step_results=(
+                TreadmillStepResult(
+                    index=0,
+                    side="left",
+                    row_status="valid",
+                    is_event_valid=True,
+                    is_included_in_statistics=True,
+                    correction_source="none",
+                    gap_between_feet_cm=8.5,
+                    quality_flags=("gap_below_minimum",),
+                ),
+            ),
             metric_summaries={"contact_time_s": summarize(())},
             report_config_snapshot=config.to_dict(),
             raw_gait_events=(GaitEventRecord(0, 0.0, "left", "touch"),),
@@ -273,6 +285,10 @@ class SubjectStoreTest(unittest.TestCase):
                     pre_swing_s=0.1,
                     pre_swing_percent=10.0,
                     total_flight_time_s=0.0,
+                    statistics_exclusion_reason=(
+                        "Contact time below minimum threshold"
+                    ),
+                    quality_flags=("running_overlap_above_tolerance",),
                 ),
             ),
             boundary_partials=(
@@ -294,10 +310,26 @@ class SubjectStoreTest(unittest.TestCase):
 
         self.assertEqual(session.report_summary["report_type"], "treadmill_gait")
         self.assertEqual(session.report_summary["valid_cycle_count"], 1)
-        self.assertEqual(session.report_detail["report_schema_version"], 2)
+        self.assertEqual(session.report_detail["report_schema_version"], 3)
         self.assertEqual(session.report_detail["report_config_snapshot"]["treadmill_speed"], 5.0)
         self.assertEqual(session.report_detail["raw_gait_events"][0]["side"], "left")
         self.assertEqual(session.report_detail["gait_cycles"][0]["gait_cycle_s"], 1.0)
+        self.assertEqual(
+            session.report_detail["gait_cycles"][0]["statistics_exclusion_reason"],
+            "Contact time below minimum threshold",
+        )
+        self.assertEqual(
+            session.report_detail["gait_cycles"][0]["quality_flags"],
+            ["running_overlap_above_tolerance"],
+        )
+        self.assertEqual(
+            session.report_detail["per_step_results"][0]["gap_between_feet_cm"],
+            8.5,
+        )
+        self.assertEqual(
+            session.report_detail["per_step_results"][0]["quality_flags"],
+            ["gap_below_minimum"],
+        )
         self.assertEqual(session.report_detail["boundary_partials"][0]["phase"], "摆动相")
 
 

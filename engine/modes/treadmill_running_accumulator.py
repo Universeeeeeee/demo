@@ -2,8 +2,8 @@
 treadmill_running_accumulator.py — running-specific treadmill row accumulator
 
 Running rows are built around contact and airborne phases.  A short overlap is
-allowed because low-speed running can briefly include double contact, but longer
-overlap is excluded from statistics.
+allowed because low-speed running can briefly include double contact.  Longer
+overlap and a small gap between feet are retained as quality diagnostics.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
         self._active: dict[FootSide, _PartialRow] = {}
         self._completed_intervals: list[tuple[FootSide, float, float]] = []
         self._last_lift_time_s: float | None = None
-        self._last_touch_reference_cm: float | None = None
+        self._last_touch_toe_cm: float | None = None
 
     def record_touch(
         self, time_s: float, side: str, heel_cm: float, toe_cm: float
@@ -58,8 +58,23 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
 
         reference_cm = step_reference_cm(self._config, heel_cm, toe_cm)
         gap_between_feet_cm: float | None = None
-        if self._last_touch_reference_cm is not None and reference_cm is not None:
-            gap_between_feet_cm = abs(reference_cm - self._last_touch_reference_cm)
+        if (
+            self._last_touch_toe_cm is not None
+            and step_time_s is not None
+            and step_time_s > 0
+        ):
+            belt_distance_cm = (
+                belt_speed_m_s(self._config) * step_time_s * 100.0
+            )
+            if self._config.direction == "Opposite side":
+                raw_gap_cm = (
+                    belt_distance_cm + self._last_touch_toe_cm - heel_cm
+                )
+            else:
+                raw_gap_cm = (
+                    belt_distance_cm + heel_cm - self._last_touch_toe_cm
+                )
+            gap_between_feet_cm = max(raw_gap_cm, 0.0)
 
         partial = _PartialRow(
             side=foot_side,
@@ -74,7 +89,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
         )
         self._active[foot_side] = partial
         self._last_touch_time_s = time_s
-        self._last_touch_reference_cm = reference_cm
+        self._last_touch_toe_cm = toe_cm
 
     def record_lift(self, time_s: float, side: str) -> None:
         """Record a foot-up event and finalize that foot's running row."""
@@ -102,6 +117,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
         correction_source: CorrectionSource = "none"
         event_invalid_reason: str | None = None
         statistics_exclusion_reason: str | None = None
+        quality_flags: list[str] = []
 
         if row_status == "no_step":
             is_event_valid = False
@@ -133,25 +149,15 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
                 statistics_exclusion_reason = "Flight time outside acceptable range"
 
         overlap_s = self._prior_overlap_duration(partial, time_s)
-        if (
-            row_status == "valid"
-            and overlap_s > RUNNING_OVERLAP_TOLERANCE_S
-        ):
-            is_event_valid = True
-            is_included_in_statistics = False
-            correction_source = "threshold_filter"
-            statistics_exclusion_reason = "Running overlap above tolerance"
+        if row_status == "valid" and overlap_s > RUNNING_OVERLAP_TOLERANCE_S:
+            quality_flags.append("running_overlap_above_tolerance")
 
         if (
             row_status == "valid"
-            and is_included_in_statistics
             and partial.gap_between_feet_cm is not None
             and partial.gap_between_feet_cm < self._config.min_gap_between_feet
         ):
-            is_event_valid = True
-            is_included_in_statistics = False
-            correction_source = "threshold_filter"
-            statistics_exclusion_reason = "Gap between feet below minimum threshold"
+            quality_flags.append("gap_below_minimum")
 
         speed_m_s: float | None = None
         if row_status != "no_step":
@@ -201,6 +207,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
             correction_source=correction_source,
             event_invalid_reason=event_invalid_reason,
             statistics_exclusion_reason=statistics_exclusion_reason,
+            quality_flags=tuple(quality_flags),
             time_s=time_s,
             distance_cm=distance_cm,
             contact_time_s=contact_time_s,
@@ -208,6 +215,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
             step_time_s=partial.step_time_s,
             step_length_cm=partial.step_length_cm,
             step_reference_cm=partial.step_reference_cm,
+            gap_between_feet_cm=partial.gap_between_feet_cm,
             stride_length_cm=stride_length_cm,
             speed_m_s=speed_m_s,
             cadence_steps_per_s=cadence_steps_per_s,

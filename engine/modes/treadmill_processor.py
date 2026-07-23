@@ -424,12 +424,19 @@ class TreadmillProcessor:
             row_count = len(self._accumulator.rows)
             self._accumulator.record_lift(time_s=event_time, side=side)
             included = None
+            statistics_exclusion_reason = None
+            quality_flags: tuple[str, ...] = ()
             if len(self._accumulator.rows) > row_count:
-                included = self._accumulator.rows[-1].is_included_in_statistics
+                row = self._accumulator.rows[-1]
+                included = row.is_included_in_statistics
+                statistics_exclusion_reason = row.statistics_exclusion_reason
+                quality_flags = row.quality_flags
             self._cycle_builder.record_lift(
                 event_time,
                 side,
                 is_included_in_statistics=included,
+                statistics_exclusion_reason=statistics_exclusion_reason,
+                quality_flags=quality_flags,
             )
 
     def _resolve_event_side(self, ev: GaitStepEvent) -> str:
@@ -469,27 +476,44 @@ class TreadmillProcessor:
     def _cycles_with_row_inclusion(
         self, rows: tuple[TreadmillStepResult, ...]
     ) -> tuple[GaitCycleRecord, ...]:
-        row_inclusion = {}
+        row_metadata = {}
         for row in rows:
             if row.time_s is None or row.contact_time_s is None:
                 continue
             touch_time_s = row.time_s - row.contact_time_s
-            row_inclusion[(row.side, round(touch_time_s, 9))] = (
-                row.is_included_in_statistics
+            row_metadata[(row.side, round(touch_time_s, 9))] = (
+                row.is_included_in_statistics,
+                row.statistics_exclusion_reason,
+                row.quality_flags,
             )
 
-        return tuple(
-            replace(
-                cycle,
-                is_included_in_statistics=(
-                    cycle.is_included_in_statistics
-                    and row_inclusion.get(
-                        (cycle.side, round(cycle.start_time_s, 9)), True
-                    )
-                ),
+        enriched_cycles = []
+        for cycle in self._cycle_builder.completed_cycles:
+            metadata = row_metadata.get(
+                (cycle.side, round(cycle.start_time_s, 9))
             )
-            for cycle in self._cycle_builder.completed_cycles
-        )
+            if metadata is None:
+                enriched_cycles.append(cycle)
+                continue
+            row_included, row_reason, row_quality_flags = metadata
+            enriched_cycles.append(
+                replace(
+                    cycle,
+                    is_included_in_statistics=(
+                        cycle.is_included_in_statistics and row_included
+                    ),
+                    statistics_exclusion_reason=(
+                        cycle.statistics_exclusion_reason
+                        or (row_reason if not row_included else None)
+                    ),
+                    quality_flags=tuple(
+                        dict.fromkeys(
+                            (*cycle.quality_flags, *row_quality_flags)
+                        )
+                    ),
+                )
+            )
+        return tuple(enriched_cycles)
 
     def _build_cycle_summaries(
         self, source_cycles: tuple[GaitCycleRecord, ...] | None = None

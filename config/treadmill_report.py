@@ -116,6 +116,8 @@ class GaitCycleRecord:
     pre_swing_percent: float | None
     total_flight_time_s: float | None
     is_included_in_statistics: bool = True
+    statistics_exclusion_reason: str | None = None
+    quality_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,8 @@ class TreadmillStepResult:
     foot_flat_s: float | None = None
     propulsive_phase_s: float | None = None
     imbalance_percent: float | None = None
+    gap_between_feet_cm: float | None = None
+    quality_flags: tuple[str, ...] = ()
 
 
 # ---- 报告基类 ----

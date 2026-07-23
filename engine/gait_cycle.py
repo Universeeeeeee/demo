@@ -30,6 +30,8 @@ class GaitCycleBuilder:
         self._last_touch: dict[FootSide, float] = {}
         self._last_lift_after_touch: dict[FootSide, float] = {}
         self._last_contact_included: dict[FootSide, bool] = {}
+        self._last_contact_exclusion_reason: dict[FootSide, str] = {}
+        self._last_contact_quality_flags: dict[FootSide, tuple[str, ...]] = {}
         self._contact_intervals: list[_ContactInterval] = []
         self._initial_boundary_partials: list[GaitBoundaryPartial] = []
         self._observed_sides: set[FootSide] = set()
@@ -50,6 +52,11 @@ class GaitCycleBuilder:
         previous_touch = self._last_touch.get(side)
         if previous_touch is not None and time_s <= previous_touch:
             return None
+        if side in self._active_touch:
+            self._last_contact_included[side] = False
+            self._last_contact_exclusion_reason[side] = (
+                "Touch was replaced before lift"
+            )
         completed = (
             self._close_cycle(time_s, side)
             if side in ("left", "right")
@@ -59,6 +66,8 @@ class GaitCycleBuilder:
         self._active_touch[side] = time_s
         self._last_lift_after_touch.pop(side, None)
         self._last_contact_included.pop(side, None)
+        self._last_contact_exclusion_reason.pop(side, None)
+        self._last_contact_quality_flags.pop(side, None)
         return completed
 
     def record_lift(
@@ -66,6 +75,8 @@ class GaitCycleBuilder:
         time_s: float,
         side: FootSide,
         is_included_in_statistics: bool | None = None,
+        statistics_exclusion_reason: str | None = None,
+        quality_flags: tuple[str, ...] = (),
     ) -> None:
         self._append_event(time_s, side, "lift")
         self._record_initial_boundary(time_s, side)
@@ -75,6 +86,12 @@ class GaitCycleBuilder:
         self._last_lift_after_touch[side] = time_s
         if is_included_in_statistics is not None:
             self._last_contact_included[side] = is_included_in_statistics
+        if statistics_exclusion_reason is not None:
+            self._last_contact_exclusion_reason[side] = (
+                statistics_exclusion_reason
+            )
+        if quality_flags:
+            self._last_contact_quality_flags[side] = quality_flags
         self._contact_intervals.append(_ContactInterval(side, start_s, time_s))
 
     def make_live_snapshot(
@@ -222,6 +239,15 @@ class GaitCycleBuilder:
         )
         percent = lambda value: value / cycle_s * 100.0 if value is not None else None
 
+        is_included_in_statistics = self._last_contact_included.get(
+            side, stance_s is not None
+        )
+        statistics_exclusion_reason = self._last_contact_exclusion_reason.get(
+            side
+        )
+        if not is_included_in_statistics and statistics_exclusion_reason is None:
+            statistics_exclusion_reason = "Missing same-side lift event"
+
         cycle = GaitCycleRecord(
             index=len(self._completed_cycles),
             side=side,
@@ -242,9 +268,9 @@ class GaitCycleBuilder:
             pre_swing_s=pre_swing_s,
             pre_swing_percent=percent(pre_swing_s),
             total_flight_time_s=total_flight_time_s,
-            is_included_in_statistics=self._last_contact_included.get(
-                side, stance_s is not None
-            ),
+            is_included_in_statistics=is_included_in_statistics,
+            statistics_exclusion_reason=statistics_exclusion_reason,
+            quality_flags=self._last_contact_quality_flags.get(side, ()),
         )
         self._completed_cycles.append(cycle)
         return cycle

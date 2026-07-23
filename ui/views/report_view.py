@@ -14,6 +14,7 @@ report_view.py — 测试报告页
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import time
 from typing import Optional
@@ -132,14 +133,7 @@ class CyclePhaseBar(QWidget):
         super().__init__(parent)
         self._cycle = cycle
         self.setMinimumHeight(24)
-        if all(
-            value is not None
-            for value in (
-                cycle.load_response_s,
-                cycle.single_support_s,
-                cycle.pre_swing_s,
-            )
-        ):
+        if self._detailed_stance_is_complete():
             tooltip = "负荷反应期、单支撑、摆动前期和摆动相按实际时长绘制"
         else:
             tooltip = "子阶段无法可靠拆分，按支撑相和摆动相绘制"
@@ -161,12 +155,7 @@ class CyclePhaseBar(QWidget):
             x += width
 
     def _segments(self):
-        detailed = (
-            self._cycle.load_response_s,
-            self._cycle.single_support_s,
-            self._cycle.pre_swing_s,
-        )
-        if all(value is not None for value in detailed):
+        if self._detailed_stance_is_complete():
             return [
                 ("负荷反应期", self._cycle.load_response_s),
                 ("单支撑", self._cycle.single_support_s),
@@ -177,6 +166,24 @@ class CyclePhaseBar(QWidget):
             ("支撑相", self._cycle.stance_phase_s),
             ("摆动相", self._cycle.swing_phase_s),
         ]
+
+    def _detailed_stance_is_complete(self) -> bool:
+        detailed = (
+            self._cycle.load_response_s,
+            self._cycle.single_support_s,
+            self._cycle.pre_swing_s,
+        )
+        if (
+            self._cycle.stance_phase_s is None
+            or any(value is None or value < 0 for value in detailed)
+        ):
+            return False
+        return math.isclose(
+            sum(detailed),
+            self._cycle.stance_phase_s,
+            rel_tol=1e-6,
+            abs_tol=1e-9,
+        )
 
 
 # ======================================================================
@@ -522,9 +529,9 @@ class ReportView(QWidget):
     def _build_cycle_timeline(self, cycles: tuple[GaitCycleRecord, ...]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 
-        table = QTableWidget(len(cycles), 5)
+        table = QTableWidget(len(cycles), 6)
         table.setHorizontalHeaderLabels([
-            "序号", "脚", "周期阶段图", "周期 (s)", "纳入统计",
+            "序号", "脚", "周期阶段图", "周期 (s)", "纳入统计", "统计说明",
         ])
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
@@ -545,12 +552,22 @@ class ReportView(QWidget):
             )
             included_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 4, included_item)
+            note_item = QTableWidgetItem(
+                _statistics_note(
+                    cycle.is_included_in_statistics,
+                    cycle.statistics_exclusion_reason,
+                    cycle.quality_flags,
+                )
+            )
+            note_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 5, note_item)
         header = table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         table.setMinimumHeight(min(max(len(cycles) * 30 + 52, 120), 420))
         self._cycle_timeline_table = table
         self._add_detail_widget(table)
@@ -563,7 +580,7 @@ class ReportView(QWidget):
             "摆动相(s)", "摆动相(%)", "步时间(s)", "单支撑(s)",
             "单支撑(%)", "总双支撑(s)", "总双支撑(%)",
             "负荷反应期(s)", "负荷反应期(%)", "摆动前期(s)",
-            "摆动前期(%)", "腾空时间(s)", "纳入统计",
+            "摆动前期(%)", "腾空时间(s)", "纳入统计", "统计说明",
         ]
         table = QTableWidget(len(cycles), len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -590,6 +607,11 @@ class ReportView(QWidget):
                 _fmt(cycle.pre_swing_percent),
                 _fmt(cycle.total_flight_time_s),
                 "是" if cycle.is_included_in_statistics else "否",
+                _statistics_note(
+                    cycle.is_included_in_statistics,
+                    cycle.statistics_exclusion_reason,
+                    cycle.quality_flags,
+                ),
             ]
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text or "N/A")
@@ -662,7 +684,8 @@ class ReportView(QWidget):
 
         columns = [
             "#", "脚", "状态", "有效", "纳入统计",
-            "触地时间(s)", "离地时间(s)", "步长(cm)", "参考点(cm)", "步速(m/s)",
+            "触地时间(s)", "离地时间(s)", "步长(cm)", "参考点(cm)",
+            "两脚间距(cm)", "步速(m/s)", "统计说明",
         ]
         table = QTableWidget(len(steps), len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -688,10 +711,16 @@ class ReportView(QWidget):
                 _fmt(step.flight_time_s),
                 _fmt(step.step_length_cm),
                 _fmt(step.step_reference_cm),
+                _fmt(step.gap_between_feet_cm),
                 _fmt(step.speed_m_s),
+                _statistics_note(
+                    step.is_included_in_statistics,
+                    step.statistics_exclusion_reason,
+                    step.quality_flags,
+                ),
             ]
             for col_idx, text in enumerate(items):
-                item = QTableWidgetItem(text)
+                item = QTableWidgetItem(text or "N/A")
                 item.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row_idx, col_idx, item)
 
@@ -703,6 +732,7 @@ class ReportView(QWidget):
         table.setMinimumHeight(max(len(steps) * 28 + 52, 120))
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
+        self._treadmill_step_table = table
         self._add_detail_widget(table)
 
     def _build_treadmill_metric_summary(self, summaries: dict[str, "MetricSummary"]):
@@ -976,10 +1006,12 @@ TREADMILL_EXPORT_COLUMNS = [
     "flight_time_s",
     "step_time_s",
     "step_length_cm",
+    "gap_between_feet_cm",
     "distance_cm",
     "speed_m_s",
     "correction_source",
     "statistics_exclusion_reason",
+    "quality_flags",
     "step_reference_cm",
 ]
 
@@ -991,6 +1023,7 @@ GAIT_CYCLE_EXPORT_FIELDS = [
     "total_double_support_percent", "load_response_s",
     "load_response_percent", "pre_swing_s", "pre_swing_percent",
     "total_flight_time_s", "is_included_in_statistics",
+    "statistics_exclusion_reason", "quality_flags",
 ]
 
 GAIT_CYCLE_EXPORT_HEADERS = [
@@ -999,6 +1032,7 @@ GAIT_CYCLE_EXPORT_HEADERS = [
     "步时间(s)", "单支撑(s)", "单支撑(%)", "总双支撑(s)",
     "总双支撑(%)", "负荷反应期(s)", "负荷反应期(%)",
     "摆动前期(s)", "摆动前期(%)", "腾空时间(s)", "纳入统计",
+    "未纳入原因", "质量提示",
 ]
 
 GAIT_CYCLE_METRIC_LABELS = {
@@ -1063,6 +1097,49 @@ def _excel_cycle_value(value):
     return "N/A" if value is None else value
 
 
+_STATISTICS_REASON_LABELS = {
+    "Touch was replaced before lift": "重复触地前未检测到正常离地",
+    "Missing same-side lift event": "缺少同侧离地事件",
+    "Contact time below minimum threshold": "触地时间低于最小阈值",
+    "Flight time outside acceptable range": "腾空时间不在允许范围",
+    "Step length below minimum threshold": "步长低于最小阈值",
+    "Excluded by automatic_data_filter": "被自动数据过滤排除",
+}
+
+_QUALITY_FLAG_LABELS = {
+    "gap_below_minimum": "两脚间距低于最小阈值",
+    "running_overlap_above_tolerance": "跑步时双脚重叠超过容差",
+}
+
+
+def _statistics_note(
+    is_included: bool,
+    exclusion_reason: str | None,
+    quality_flags: tuple[str, ...],
+) -> str:
+    parts = []
+    if not is_included:
+        parts.append(
+            f"未纳入：{_statistics_reason_label(exclusion_reason)}"
+        )
+    if quality_flags:
+        parts.append(f"质量提示：{_quality_flags_text(quality_flags)}")
+    return "；".join(parts) or "—"
+
+
+def _statistics_reason_label(reason: str | None) -> str:
+    if reason is None:
+        return "原因未知"
+    return _STATISTICS_REASON_LABELS.get(reason, reason)
+
+
+def _quality_flags_text(quality_flags: tuple[str, ...]) -> str:
+    return "、".join(
+        _QUALITY_FLAG_LABELS.get(flag, flag)
+        for flag in quality_flags
+    )
+
+
 def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport) -> list[list[object]]:
     """Extract key columns from per_step_results for Excel export and testing."""
     rows = []
@@ -1074,15 +1151,21 @@ def _treadmill_metric_rows(report: TreadmillGaitReport | TreadmillRunningReport)
                 step.row_status,
                 step.is_event_valid,
                 step.is_included_in_statistics,
-                step.contact_time_s,
-                step.flight_time_s,
-                step.step_time_s,
-                step.step_length_cm,
-                step.distance_cm,
-                step.speed_m_s,
+                _excel_cycle_value(step.contact_time_s),
+                _excel_cycle_value(step.flight_time_s),
+                _excel_cycle_value(step.step_time_s),
+                _excel_cycle_value(step.step_length_cm),
+                _excel_cycle_value(step.gap_between_feet_cm),
+                _excel_cycle_value(step.distance_cm),
+                _excel_cycle_value(step.speed_m_s),
                 step.correction_source,
-                step.statistics_exclusion_reason,
-                step.step_reference_cm,
+                (
+                    _statistics_reason_label(step.statistics_exclusion_reason)
+                    if step.statistics_exclusion_reason is not None
+                    else "N/A"
+                ),
+                _quality_flags_text(step.quality_flags) or "N/A",
+                _excel_cycle_value(step.step_reference_cm),
             ]
         )
     return rows
@@ -1097,6 +1180,22 @@ def _gait_cycle_rows(report: TreadmillGaitReport | TreadmillRunningReport) -> li
         ]
         row[0] = cycle.index + 1
         row[1] = _side_label(cycle.side)
-        row[-1] = "是" if cycle.is_included_in_statistics else "否"
+        included_index = GAIT_CYCLE_EXPORT_FIELDS.index(
+            "is_included_in_statistics"
+        )
+        exclusion_reason_index = GAIT_CYCLE_EXPORT_FIELDS.index(
+            "statistics_exclusion_reason"
+        )
+        quality_flags_index = GAIT_CYCLE_EXPORT_FIELDS.index("quality_flags")
+        row[included_index] = (
+            "是" if cycle.is_included_in_statistics else "否"
+        )
+        if cycle.statistics_exclusion_reason is not None:
+            row[exclusion_reason_index] = _statistics_reason_label(
+                cycle.statistics_exclusion_reason
+            )
+        row[quality_flags_index] = (
+            _quality_flags_text(cycle.quality_flags) or "N/A"
+        )
         rows.append(row)
     return rows

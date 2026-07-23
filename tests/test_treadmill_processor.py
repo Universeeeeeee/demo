@@ -187,7 +187,108 @@ def test_invalid_contact_excludes_its_completed_cycle_from_statistics():
     report = processor.build_report("manual", (), ())
 
     assert report.gait_cycles[0].is_included_in_statistics is False
+    assert (
+        report.gait_cycles[0].statistics_exclusion_reason
+        == "Contact time below minimum threshold"
+    )
     assert report.cycle_metric_summaries["gait_cycle_s"].count == 0
+
+
+def test_repeated_touch_without_lift_keeps_cycle_with_explicit_reason():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    first = ContactState(
+        contact_id=1,
+        foot_label="A",
+        touch_time=0.0,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+    second = ContactState(
+        contact_id=2,
+        foot_label="A",
+        touch_time=0.8,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+    processor._handle_step_event(GaitStepEvent("touch", first), 0.0)
+    processor._handle_step_event(GaitStepEvent("touch", second), 0.8)
+
+    report = processor.build_report("manual", (), ())
+
+    assert len(report.gait_cycles) == 1
+    cycle = report.gait_cycles[0]
+    assert cycle.gait_cycle_s == pytest.approx(0.8)
+    assert cycle.is_included_in_statistics is False
+    assert (
+        cycle.statistics_exclusion_reason
+        == "Touch was replaced before lift"
+    )
+
+
+def test_report_propagates_post_filter_exclusion_reason_to_cycle():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+        automatic_data_filter=60,
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    processor._cycle_builder.record_touch(0.0, "left")
+    processor._cycle_builder.record_lift(0.4, "left")
+    processor._cycle_builder.record_touch(1.0, "left")
+    processor._accumulator._rows.extend([
+        TreadmillStepResult(
+            index=0,
+            side="left",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            time_s=0.4,
+            contact_time_s=0.4,
+            step_length_cm=120.0,
+        ),
+        TreadmillStepResult(
+            index=1,
+            side="right",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            time_s=0.9,
+            contact_time_s=0.4,
+            step_length_cm=50.0,
+        ),
+        TreadmillStepResult(
+            index=2,
+            side="left",
+            row_status="valid",
+            is_event_valid=True,
+            is_included_in_statistics=True,
+            correction_source="none",
+            time_s=1.4,
+            contact_time_s=0.4,
+            step_length_cm=50.0,
+        ),
+    ])
+
+    report = processor.build_report("manual", (), ())
+
+    cycle = report.gait_cycles[0]
+    assert cycle.is_included_in_statistics is False
+    assert (
+        cycle.statistics_exclusion_reason
+        == "Excluded by automatic_data_filter"
+    )
 
 
 def test_processor_live_snapshot_returns_completed_cycles_incrementally():
@@ -720,7 +821,7 @@ def test_running_accumulator_allows_short_overlap():
     assert acc.rows[1].statistics_exclusion_reason is None
 
 
-def test_running_accumulator_excludes_long_overlap():
+def test_running_accumulator_keeps_long_overlap_as_quality_flag():
     config = TreadmillRunningConfig(
         stop_type="Software command",
         test_length=None,
@@ -737,18 +838,44 @@ def test_running_accumulator_excludes_long_overlap():
     acc.record_lift(0.50, "right")
 
     assert acc.rows[1].is_event_valid is True
-    assert acc.rows[1].is_included_in_statistics is False
-    assert acc.rows[1].correction_source == "threshold_filter"
-    assert acc.rows[1].statistics_exclusion_reason == "Running overlap above tolerance"
+    assert acc.rows[1].is_included_in_statistics is True
+    assert acc.rows[1].correction_source == "none"
+    assert acc.rows[1].statistics_exclusion_reason is None
+    assert acc.rows[1].quality_flags == ("running_overlap_above_tolerance",)
 
 
-def test_running_accumulator_filters_gap_between_feet_below_minimum():
+def test_running_accumulator_can_record_overlap_and_gap_quality_flags_together():
     config = TreadmillRunningConfig(
         stop_type="Software command",
         test_length=None,
         treadmill_speed=7.2,
         direction="Interface side",
         min_gap_between_feet=20.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+    overlap = RUNNING_OVERLAP_TOLERANCE_S + 0.02
+
+    acc.record_touch(0.0, "left", 10.0, 35.0)
+    acc.record_touch(0.25 - overlap, "right", 15.0, 40.0)
+    acc.record_lift(0.25, "left")
+    acc.record_lift(0.50, "right")
+
+    row = acc.rows[1]
+    assert row.gap_between_feet_cm == pytest.approx(16.0)
+    assert row.is_included_in_statistics is True
+    assert row.quality_flags == (
+        "running_overlap_above_tolerance",
+        "gap_below_minimum",
+    )
+
+
+def test_running_accumulator_keeps_small_gap_as_quality_flag():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=80.0,
         step_length_calculation="Tip-to-Tip",
     )
     acc = TreadmillRunningAccumulator(config)
@@ -760,10 +887,242 @@ def test_running_accumulator_filters_gap_between_feet_below_minimum():
 
     row = acc.rows[1]
     assert row.step_reference_cm == 45.0
+    assert row.gap_between_feet_cm == pytest.approx(70.0)
     assert row.is_event_valid is True
-    assert row.is_included_in_statistics is False
-    assert row.correction_source == "threshold_filter"
-    assert row.statistics_exclusion_reason == "Gap between feet below minimum threshold"
+    assert row.is_included_in_statistics is True
+    assert row.correction_source == "none"
+    assert row.statistics_exclusion_reason is None
+    assert row.quality_flags == ("gap_below_minimum",)
+
+
+@pytest.mark.parametrize(
+    (
+        "direction",
+        "previous_heel",
+        "previous_toe",
+        "current_heel",
+        "current_toe",
+        "expected_gap_cm",
+    ),
+    [
+        ("Interface side", 10.0, 35.0, 15.0, 40.0, 70.0),
+        ("Opposite side", 50.0, 35.0, 30.0, 15.0, 95.0),
+    ],
+)
+def test_running_gap_uses_previous_toe_current_heel_and_belt_compensation(
+    direction,
+    previous_heel,
+    previous_toe,
+    current_heel,
+    current_toe,
+    expected_gap_cm,
+):
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction=direction,
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+
+    acc.record_touch(0.0, "left", previous_heel, previous_toe)
+    acc.record_lift(0.25, "left")
+    acc.record_touch(0.45, "right", current_heel, current_toe)
+    acc.record_lift(0.70, "right")
+
+    assert acc.rows[0].gap_between_feet_cm is None
+    assert acc.rows[1].gap_between_feet_cm == pytest.approx(expected_gap_cm)
+
+
+def test_running_gap_clamps_negative_signed_distance_to_zero():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        min_gap_between_feet=1.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+
+    acc.record_touch(0.0, "left", 10.0, 100.0)
+    acc.record_lift(0.05, "left")
+    acc.record_touch(0.10, "right", 20.0, 30.0)
+    acc.record_lift(0.15, "right")
+
+    assert acc.rows[1].gap_between_feet_cm == pytest.approx(0.0)
+
+
+def test_running_gap_does_not_depend_on_step_length_reference():
+    rows = []
+    for step_length_calculation in ("Tip-to-Tip", "Heel-to-Heel"):
+        config = TreadmillRunningConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=7.2,
+            direction="Interface side",
+            min_gap_between_feet=1.0,
+            step_length_calculation=step_length_calculation,
+        )
+        acc = TreadmillRunningAccumulator(config)
+        acc.record_touch(0.0, "left", 10.0, 35.0)
+        acc.record_lift(0.25, "left")
+        acc.record_touch(0.45, "right", 15.0, 45.0)
+        acc.record_lift(0.70, "right")
+        rows.append(acc.rows[1])
+
+    assert rows[0].step_reference_cm != rows[1].step_reference_cm
+    assert rows[0].gap_between_feet_cm == pytest.approx(70.0)
+    assert rows[1].gap_between_feet_cm == pytest.approx(70.0)
+
+
+def test_running_normal_sequence_does_not_exclude_every_row_after_first():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=10.0,
+    )
+    acc = TreadmillRunningAccumulator(config)
+
+    for index in range(6):
+        touch_s = index * 0.4
+        side = "left" if index % 2 == 0 else "right"
+        acc.record_touch(touch_s, side, 10.0, 40.0)
+        acc.record_lift(touch_s + 0.25, side)
+
+    assert all(row.is_included_in_statistics for row in acc.rows)
+    assert all(row.statistics_exclusion_reason is None for row in acc.rows)
+
+
+def test_running_processor_report_includes_all_complete_normal_cycles():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=10.0,
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    for index in range(5):
+        side_label = "A" if index % 2 == 0 else "B"
+        touch_s = index * 0.4
+        contact = ContactState(
+            contact_id=index,
+            foot_label=side_label,
+            touch_time=touch_s,
+            lift_time=touch_s + 0.25,
+            centroid_at_touch=40.0,
+            latest_centroid=40.0,
+        )
+        processor._handle_step_event(GaitStepEvent("touch", contact), touch_s)
+        processor._handle_step_event(
+            GaitStepEvent("lift", contact), touch_s + 0.25
+        )
+
+    report = processor.build_report("manual", (), ())
+
+    assert len(report.gait_cycles) == 3
+    assert all(cycle.is_included_in_statistics for cycle in report.gait_cycles)
+    assert report.cycle_metric_summaries["gait_cycle_s"].count == 3
+
+
+def test_running_processor_propagates_step_quality_flags_to_cycle():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_gap_between_feet=20.0,
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    events = [
+        ("touch", 1, "A", 0.00, None),
+        ("touch", 2, "B", 0.18, None),
+        ("lift", 1, "A", 0.25, 0.25),
+        ("lift", 2, "B", 0.50, 0.50),
+        ("touch", 3, "A", 0.60, None),
+        ("touch", 4, "B", 0.80, None),
+    ]
+    for kind, contact_id, label, time_s, lift_time in events:
+        contact = ContactState(
+            contact_id=contact_id,
+            foot_label=label,
+            touch_time=time_s if kind == "touch" else None,
+            lift_time=lift_time,
+            centroid_at_touch=40.0,
+            latest_centroid=40.0,
+        )
+        processor._handle_step_event(GaitStepEvent(kind, contact), time_s)
+
+    report = processor.build_report("manual", (), ())
+    right_cycle = next(
+        cycle for cycle in report.gait_cycles if cycle.side == "right"
+    )
+
+    assert right_cycle.is_included_in_statistics is True
+    assert right_cycle.statistics_exclusion_reason is None
+    assert right_cycle.quality_flags == (
+        "running_overlap_above_tolerance",
+        "gap_below_minimum",
+    )
+
+
+@pytest.mark.parametrize(
+    ("contact_time_s", "expected_included", "expected_reason"),
+    [
+        (0.030, False, "Contact time below minimum threshold"),
+        (0.061, True, None),
+    ],
+)
+def test_running_processor_keeps_short_complete_cycle_with_threshold_diagnosis(
+    contact_time_s,
+    expected_included,
+    expected_reason,
+):
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=7.2,
+        direction="Interface side",
+        min_contact_time=60,
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    first = ContactState(
+        contact_id=1,
+        foot_label="A",
+        touch_time=0.0,
+        lift_time=contact_time_s,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+    second = ContactState(
+        contact_id=2,
+        foot_label="A",
+        touch_time=0.067,
+        centroid_at_touch=40.0,
+        latest_centroid=40.0,
+    )
+    processor._handle_step_event(GaitStepEvent("touch", first), 0.0)
+    processor._handle_step_event(
+        GaitStepEvent("lift", first), contact_time_s
+    )
+    processor._handle_step_event(GaitStepEvent("touch", second), 0.067)
+
+    report = processor.build_report("manual", (), ())
+
+    assert len(report.gait_cycles) == 1
+    cycle = report.gait_cycles[0]
+    assert cycle.gait_cycle_s == pytest.approx(0.067)
+    assert cycle.is_included_in_statistics is expected_included
+    assert cycle.statistics_exclusion_reason == expected_reason
 
 
 def test_treadmill_processor_records_fixed_cadence_visual_timeline():
