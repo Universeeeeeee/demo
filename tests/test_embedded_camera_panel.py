@@ -84,6 +84,9 @@ def test_tinyse_default_settings_are_forwarded_to_control(qtbot):
         def __getattr__(self, name):
             return lambda value: self.calls.append((name, value))
 
+        def set_ai_off(self):
+            self.calls.append(("set_ai_off",))
+
     control = Control()
     panel._apply_control_settings(control)
 
@@ -93,5 +96,5 @@ def test_tinyse_default_settings_are_forwarded_to_control(qtbot):
         ("set_exposure_compensation", 0),
         ("set_anti_flicker", 0),
         ("set_wdr", 0),
-        ("set_ai_mode", 4),
+        ("set_ai_off",),
     ]

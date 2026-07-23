@@ -651,8 +651,7 @@ class TinySeCameraWidget(QWidget):
         ctl.set_exposure_compensation(int(self._cmb_exp.currentData() or 0))
         ctl.set_anti_flicker(int(self._cmb_flicker.currentData() or 0))
         ctl.set_wdr(int(self._cmb_wdr.currentData() or 0))
-        ai_sub = int(self._cmb_ai.currentData() or 0)
-        ctl.set_ai_mode(ai_sub)
+        ctl.set_ai_off()
         _log_timing(f"control.apply={time.perf_counter() - start:.3f}s")
 
     def _ensure_control(self, apply_settings: bool = True) -> bool:

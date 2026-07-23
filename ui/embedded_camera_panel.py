@@ -343,7 +343,7 @@ class EmbeddedCameraPanel(QFrame):
         control.set_exposure_compensation(int(self._cmb_exp.currentData() or 0))
         control.set_anti_flicker(int(self._cmb_flicker.currentData() or 0))
         control.set_wdr(int(self._cmb_wdr.currentData() or 0))
-        control.set_ai_mode(int(self._cmb_ai.currentData() or 0))
+        control.set_ai_off()
 
     def _ensure_control(self, apply_settings: bool = True) -> bool:
         if self._control is not None:

@@ -227,6 +227,7 @@ class _FakeControl:
         self.ret = ret
         self.ai_modes: list[int] = []
         self.ai_off_calls = 0
+        self.calls: list[tuple[str, object]] = []
 
     def set_ai_mode(self, mode: int) -> int:
         self.ai_modes.append(mode)
@@ -234,6 +235,26 @@ class _FakeControl:
 
     def set_ai_off(self) -> int:
         self.ai_off_calls += 1
+        return self.ret
+
+    def set_fov(self, value: int) -> int:
+        self.calls.append(("set_fov", value))
+        return self.ret
+
+    def set_auto_focus(self, value: bool) -> int:
+        self.calls.append(("set_auto_focus", value))
+        return self.ret
+
+    def set_exposure_compensation(self, value: int) -> int:
+        self.calls.append(("set_exposure_compensation", value))
+        return self.ret
+
+    def set_anti_flicker(self, value: int) -> int:
+        self.calls.append(("set_anti_flicker", value))
+        return self.ret
+
+    def set_wdr(self, value: int) -> int:
+        self.calls.append(("set_wdr", value))
         return self.ret
 
 
@@ -345,6 +366,28 @@ class TinySeCameraWidgetLifecycleTest(unittest.TestCase):
         self.assertEqual(ensure_calls, [False])
         self.assertEqual(control.ai_off_calls, 1)
         self.assertEqual(reports, [("关闭 AI 追踪", -3)])
+
+    def test_default_control_settings_turn_ai_tracking_off(self):
+        control = _FakeControl()
+        widget = SimpleNamespace(
+            _cmb_fov=_FakeCombo(0),
+            _chk_af=SimpleNamespace(isChecked=lambda: True),
+            _cmb_exp=_FakeCombo(0),
+            _cmb_flicker=_FakeCombo(0),
+            _cmb_wdr=_FakeCombo(0),
+        )
+
+        TinySeCameraWidget._apply_control_settings(widget, control)
+
+        self.assertEqual(control.calls, [
+            ("set_fov", 0),
+            ("set_auto_focus", True),
+            ("set_exposure_compensation", 0),
+            ("set_anti_flicker", 0),
+            ("set_wdr", 0),
+        ])
+        self.assertEqual(control.ai_modes, [])
+        self.assertEqual(control.ai_off_calls, 1)
 
     def test_control_close_does_not_shutdown_process_sdk_singleton(self):
         control = object.__new__(TinySeCameraControl)
