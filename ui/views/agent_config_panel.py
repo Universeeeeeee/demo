@@ -167,13 +167,16 @@ class AgentConfigPanel(QWidget):
         self._worker_status_timer = QTimer(self)
         self._worker_status_timer.setInterval(1000)
         self._worker_status_timer.timeout.connect(self._poll_llm_worker)
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._ensure_llm_worker_started)
         self._active_request_id = 0
 
         self._build_ui()
         self._connect_signals()
         self.set_subject_result(None)
         self._sync_mode_state()
-        QTimer.singleShot(0, self._ensure_llm_worker_started)
+        self._startup_timer.start(0)
 
     # ------------------------------------------------------------------
     # Public API
@@ -209,6 +212,17 @@ class AgentConfigPanel(QWidget):
     def current_test_type(self) -> str:
         """Return the test type currently selected in the assistant panel."""
         return self._test_type_combo.currentText()
+
+    def current_profile_snapshot(self) -> dict:
+        """Return the editable, session-scoped athlete values."""
+        profile = self._current_athlete_profile()
+        return {
+            "age": profile.age,
+            "weight_kg": float(profile.weight),
+            "height_cm": float(profile.height),
+            "level": profile.level,
+            "focus_side": profile.focus_side,
+        }
 
     # ------------------------------------------------------------------
     # UI

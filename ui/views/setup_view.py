@@ -15,12 +15,13 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QScrollArea, QFrame,
     QSizePolicy, QLineEdit, QComboBox, QDialog, QDialogButtonBox,
-    QMessageBox, QSpinBox, QStackedWidget, QMenu,
+    QLabel, QMessageBox, QPushButton, QSpinBox, QStackedWidget, QMenu,
 )
 
 from dayu_widgets.label import MLabel
 from dayu_widgets.push_button import MPushButton
 
+from config.config_validation import validate_runtime_config
 from config.test_config import AnyTestConfig
 from data.subject_store import SubjectProfile, SubjectSearchResult, SubjectStore
 from ui.views.agent_config_panel import AgentConfigPanel
@@ -32,55 +33,92 @@ log = logging.getLogger(__name__)
 
 SETUP_QSS = """
 QWidget#SetupViewRoot {
-  background-color: #171b24;
+  background-color: #0c1119;
   color: #e8edf5;
 }
 QFrame#TopSubjectBar,
 QFrame#ModeBar,
-QFrame#ConfigStatusBar {
-  background-color: rgba(32, 37, 48, 0.88);
-  border: 1px solid rgba(95, 105, 125, 0.30);
+QFrame#ConfigWorkArea,
+QFrame#ConfigSummaryCard {
+  background-color: #121923;
+  border: 1px solid #293442;
   border-radius: 8px;
 }
+QLabel#PageTitle {
+  color: #f5f7fb;
+  font-size: 20px;
+  font-weight: 700;
+}
+QLabel#PageSubtitle {
+  color: #8f9bad;
+  font-size: 11px;
+}
+QLabel#DeviceStatusChip {
+  color: #d4dae4;
+  background-color: #121923;
+  border: 1px solid #303b49;
+  border-radius: 7px;
+  padding: 7px 11px;
+  font-size: 11px;
+}
+QLabel#SummaryTitle {
+  color: #f2f5f9;
+  font-size: 15px;
+  font-weight: 700;
+}
+QLabel#SummaryState {
+  color: #ff9a3d;
+  font-size: 11px;
+  font-weight: 600;
+}
+QLabel#SummaryText {
+  color: #c7cfdb;
+  font-size: 11px;
+  line-height: 145%;
+}
+QLabel#SummaryHint {
+  color: #7f8a9a;
+  font-size: 10px;
+}
 QLineEdit, QComboBox {
-  min-height: 34px;
+  min-height: 32px;
   border-radius: 6px;
-  border: 1px solid rgba(105, 115, 135, 0.38);
-  background-color: rgba(43, 48, 60, 0.96);
+  border: 1px solid #354151;
+  background-color: #1a2230;
   color: #e7ebf2;
   padding: 0 10px;
 }
 QPushButton {
-  min-height: 34px;
+  min-height: 32px;
   border-radius: 6px;
-  border: 1px solid rgba(105, 115, 135, 0.32);
-  background-color: rgba(43, 48, 60, 0.94);
+  border: 1px solid #354151;
+  background-color: #1a2230;
   color: #d9dee8;
   padding: 0 16px;
 }
 QPushButton:hover {
-  background-color: rgba(58, 64, 79, 0.98);
+  background-color: #232d3c;
 }
 QPushButton#SubjectPrimaryButton,
 QPushButton#PrimaryStartButton,
 QPushButton#SegmentButton:checked {
-  background-color: #ff850f;
-  border-color: #ff850f;
+  background-color: #ff7a00;
+  border-color: #ff7a00;
   color: white;
 }
 QPushButton#PrimaryStartButton {
-  min-height: 64px;
-  font-size: 22pt;
+  min-height: 46px;
+  font-size: 14px;
   font-weight: 700;
-  border-radius: 8px;
+  border-radius: 7px;
 }
 QPushButton#PrimaryStartButton:disabled {
-  background-color: rgba(52, 57, 70, 0.88);
-  border-color: rgba(85, 92, 108, 0.42);
-  color: #8e96a6;
+  background-color: #242c37;
+  border-color: #303946;
+  color: #6f7a89;
 }
 QPushButton#SegmentButton {
-  min-width: 150px;
+  min-width: 112px;
   border: none;
   background-color: transparent;
   font-weight: 600;
@@ -109,6 +147,8 @@ class SessionSetup:
     config: AnyTestConfig
     subject_id: int | None = None
     subject: SubjectProfile | None = None
+    subject_snapshot: dict | None = None
+    config_source: str | None = None
 
 
 class SetupView(QWidget):
@@ -128,6 +168,7 @@ class SetupView(QWidget):
         self._action_history = None
         self._current_config: AnyTestConfig | None = None
         self._config_source: str | None = None
+        self._config_errors: list[str] = []
         self._config_mode_index = 0
         self._syncing_config_to_panel = False
         self._build_ui()
@@ -137,34 +178,39 @@ class SetupView(QWidget):
         self.setStyleSheet(SETUP_QSS)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 16, 22, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(24, 18, 24, 22)
+        layout.setSpacing(16)
 
-        # ===== 标题区 =====
-        title = MLabel("IronJump 步态分析系统")
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(
-            "font-size: 22pt; font-weight: 700; "
-            "color: #f0f3f8; padding: 4px 0 2px 0;"
-        )
-        layout.addWidget(title)
+        # ===== 页面标题 =====
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        title_column = QVBoxLayout()
+        title_column.setSpacing(3)
+        title = QLabel("测试")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel("配置测试参数并连接设备")
+        subtitle.setObjectName("PageSubtitle")
+        title_column.addWidget(title)
+        title_column.addWidget(subtitle)
+        header.addLayout(title_column)
+        header.addStretch(1)
+        self._device_status_label = QLabel("● 设备将在测试界面检查")
+        self._device_status_label.setObjectName("DeviceStatusChip")
+        header.addWidget(self._device_status_label)
+        layout.addLayout(header)
 
-        self._mode_status_chip = MLabel("")
-        self._mode_status_chip.setAlignment(Qt.AlignCenter)
-        self._mode_status_chip.setStyleSheet(
-            "font-size: 10pt; font-weight: 600; color: #dfe5ee; "
-            "background-color: rgba(42, 47, 59, 0.95); "
-            "border: 1px solid rgba(105, 115, 135, 0.38); "
-            "border-radius: 13px; padding: 5px 16px;"
-        )
-        chip_row = QHBoxLayout()
-        chip_row.addStretch()
-        chip_row.addWidget(self._mode_status_chip)
-        chip_row.addStretch()
-        layout.addLayout(chip_row)
+        workspace = QHBoxLayout()
+        workspace.setSpacing(16)
+
+        # ===== 左侧配置工作区 =====
+        config_area = QFrame()
+        config_area.setObjectName("ConfigWorkArea")
+        config_layout = QVBoxLayout(config_area)
+        config_layout.setContentsMargins(14, 14, 14, 14)
+        config_layout.setSpacing(10)
 
         if self._subject_store is not None:
-            layout.addWidget(self._create_subject_bar())
+            config_layout.addWidget(self._create_subject_bar())
 
         # ===== 配置方式 =====
         mode_bar = QFrame()
@@ -172,12 +218,12 @@ class SetupView(QWidget):
         mode_layout = QHBoxLayout(mode_bar)
         mode_layout.setContentsMargins(12, 6, 12, 6)
         mode_layout.setSpacing(8)
-        mode_label = MLabel("配置方式")
+        mode_label = QLabel("配置方式")
         mode_label.setStyleSheet("font-size: 11pt; font-weight: 700; color: #e7ebf2;")
         mode_layout.addWidget(mode_label)
 
-        self._btn_mode_agent = MPushButton("智能配置")
-        self._btn_mode_manual = MPushButton("手动配置")
+        self._btn_mode_agent = QPushButton("智能配置")
+        self._btn_mode_manual = QPushButton("手动配置")
         for button in (self._btn_mode_agent, self._btn_mode_manual):
             button.setObjectName("SegmentButton")
             button.setCheckable(True)
@@ -188,7 +234,10 @@ class SetupView(QWidget):
         mode_layout.addWidget(self._btn_mode_agent)
         mode_layout.addWidget(self._btn_mode_manual)
         mode_layout.addStretch()
-        layout.addWidget(mode_bar)
+        self._mode_status_chip = QLabel("")
+        self._mode_status_chip.setStyleSheet("color: #8f9bad; font-size: 10px;")
+        mode_layout.addWidget(self._mode_status_chip)
+        config_layout.addWidget(mode_bar)
 
         # ===== 配置工作区 =====
         self._config_stack = QStackedWidget()
@@ -201,30 +250,43 @@ class SetupView(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         self._config_stack.addWidget(scroll)
-        layout.addWidget(self._config_stack, 1)
+        config_layout.addWidget(self._config_stack, 1)
+        workspace.addWidget(config_area, 1)
 
-        # ===== 配置状态栏 =====
+        # ===== 右侧配置摘要 =====
         self._status_bar = QFrame()
-        self._status_bar.setObjectName("ConfigStatusBar")
-        status_layout = QHBoxLayout(self._status_bar)
-        status_layout.setContentsMargins(16, 9, 16, 9)
-        status_layout.setSpacing(10)
-        status_title = MLabel("当前配置")
-        status_title.setStyleSheet("font-size: 10pt; font-weight: 700; color: #ff9b2f;")
+        self._status_bar.setObjectName("ConfigSummaryCard")
+        self._status_bar.setMinimumWidth(286)
+        self._status_bar.setMaximumWidth(330)
+        status_layout = QVBoxLayout(self._status_bar)
+        status_layout.setContentsMargins(18, 18, 18, 18)
+        status_layout.setSpacing(12)
+        status_title = QLabel("当前配置")
+        status_title.setObjectName("SummaryTitle")
         status_layout.addWidget(status_title)
-        self._summary_label = MLabel("")
+        self._summary_state_label = QLabel("等待确认")
+        self._summary_state_label.setObjectName("SummaryState")
+        status_layout.addWidget(self._summary_state_label)
+        self._summary_label = QLabel("")
+        self._summary_label.setObjectName("SummaryText")
         self._summary_label.setWordWrap(True)
-        self._summary_label.setStyleSheet(
-            "font-size: 10.5pt; color: #cbd2df; background: transparent;"
+        self._summary_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        status_layout.addWidget(self._summary_label)
+        status_layout.addStretch(1)
+        summary_hint = QLabel(
+            "进入测试界面后会检查设备。设备就绪后仍需点击“开始采集”。"
         )
-        status_layout.addWidget(self._summary_label, 1)
-        layout.addWidget(self._status_bar)
+        summary_hint.setObjectName("SummaryHint")
+        summary_hint.setWordWrap(True)
+        status_layout.addWidget(summary_hint)
 
         # ===== 准备就绪按钮 =====
-        self.btn_ready = MPushButton("开始测试").primary()
+        self.btn_ready = QPushButton("进入测试准备")
         self.btn_ready.setObjectName("PrimaryStartButton")
         self.btn_ready.clicked.connect(self._on_ready_clicked)
-        layout.addWidget(self.btn_ready)
+        status_layout.addWidget(self.btn_ready)
+        workspace.addWidget(self._status_bar)
+        layout.addLayout(workspace, 1)
 
         # ===== 连接参数变更 → 更新摘要 =====
         self._agent_panel.config_confirmed.connect(self._on_agent_config_confirmed)
@@ -240,23 +302,24 @@ class SetupView(QWidget):
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(10)
 
-        label = MLabel("受试者")
-        label.setStyleSheet("font-size: 11pt; font-weight: 700; color: #eef2f8;")
+        label = QLabel("测试对象")
+        label.setMinimumWidth(64)
+        label.setStyleSheet("font-size: 12px; font-weight: 700; color: #eef2f8;")
 
         self._subject_search = QLineEdit()
         self._subject_search.setPlaceholderText("搜索姓名")
-        self._subject_search.setMinimumWidth(210)
+        self._subject_search.setMinimumWidth(160)
 
         self._subject_combo = QComboBox()
-        self._subject_combo.setMinimumWidth(360)
+        self._subject_combo.setMinimumWidth(260)
         self._subject_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         btn_new = MPushButton("新建")
         btn_new.setObjectName("SubjectPrimaryButton")
-        btn_new.setMinimumWidth(92)
+        btn_new.setMinimumWidth(80)
 
         btn_more = MPushButton("更多")
-        btn_more.setMinimumWidth(92)
+        btn_more.setMinimumWidth(80)
         menu = QMenu(btn_more)
         self._action_load_last_config = menu.addAction("加载上次参数")
         self._action_history = menu.addAction("历史记录")
@@ -284,7 +347,7 @@ class SetupView(QWidget):
         current_id = self._current_subject_id()
         self._subject_combo.blockSignals(True)
         self._subject_combo.clear()
-        self._subject_combo.addItem("不选择受试者", None)
+        self._subject_combo.addItem("临时测试（通用参数）", None)
 
         try:
             results = self._subject_store.search_subjects(query)
@@ -302,6 +365,31 @@ class SetupView(QWidget):
         self._subject_combo.setCurrentIndex(selected_index)
         self._subject_combo.blockSignals(False)
         self._sync_subject_to_agent()
+
+    def refresh_subjects(self) -> None:
+        query = self._subject_search.text() if self._subject_search is not None else ""
+        self._refresh_subject_results(query)
+
+    def current_subject_result(self) -> SubjectSearchResult | None:
+        return self._current_subject_result()
+
+    def select_subject(self, subject_id: int) -> bool:
+        if self._subject_store is None or self._subject_combo is None:
+            return False
+        try:
+            results = self._subject_store.search_subjects("")
+        except Exception:
+            log.exception("Failed to select subject")
+            return False
+        for result in results:
+            if result.subject.id != subject_id:
+                continue
+            if self._subject_search is not None:
+                self._subject_search.setText(result.subject.display_name)
+            self._add_or_select_subject(result)
+            self._sync_subject_to_agent()
+            return True
+        return False
 
     def _format_subject_result(self, result: SubjectSearchResult) -> str:
         labels = result.display_labels
@@ -479,6 +567,7 @@ class SetupView(QWidget):
     def _set_current_config(self, config: AnyTestConfig, source: str) -> None:
         self._current_config = config
         self._config_source = source
+        self._config_errors = validate_runtime_config(config)
         if source in {"last_session", "history"}:
             self._syncing_config_to_panel = True
             try:
@@ -492,6 +581,7 @@ class SetupView(QWidget):
         config = self._current_config
         if config is None:
             self._summary_label.setText("未确认，请生成建议配置或切换到手动配置。")
+            self._summary_state_label.setText("等待确认")
             if hasattr(self, "btn_ready"):
                 self.btn_ready.setEnabled(False)
             return
@@ -522,20 +612,44 @@ class SetupView(QWidget):
             parts.append(f"节拍器 {config.metronome_bpm} BPM")
 
         self._summary_label.setText("  ·  ".join(parts))
+        if self._config_errors:
+            self._summary_state_label.setText("配置需要修正")
+            self._summary_label.setText(
+                self._summary_label.text()
+                + "\n\n"
+                + "\n".join(f"• {error}" for error in self._config_errors)
+            )
+        else:
+            self._summary_state_label.setText("配置已确认")
         if hasattr(self, "btn_ready"):
-            self.btn_ready.setEnabled(True)
+            self.btn_ready.setEnabled(not self._config_errors)
 
     def _on_ready_clicked(self):
         """收集配置并发射信号。"""
         if self._current_config is None:
             QMessageBox.information(self, "准备就绪", "请先确认一份测试配置。")
             return
+        self._config_errors = validate_runtime_config(self._current_config)
+        if self._config_errors:
+            QMessageBox.warning(
+                self,
+                "配置需要修正",
+                "\n".join(self._config_errors),
+            )
+            self._update_summary()
+            return
         config = self._current_config
         result = self._current_subject_result()
+        snapshot = self._agent_panel.current_profile_snapshot()
+        snapshot["display_name"] = (
+            result.subject.display_name if result else "临时测试"
+        )
         self.ready_signal.emit(
             SessionSetup(
                 config=config,
                 subject_id=result.subject.id if result else None,
                 subject=result.subject if result else None,
+                subject_snapshot=snapshot,
+                config_source=self._config_source,
             )
         )

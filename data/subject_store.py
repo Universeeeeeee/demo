@@ -12,7 +12,15 @@ from typing import Any, Iterator
 
 from config.test_config import AnyTestConfig, TestConfig, config_from_dict
 from config.test_report import GaitTestReport, JumpTestReport, TestReport
-from config.treadmill_report import TreadmillGaitReport, TreadmillRunningReport
+from config.treadmill_report import (
+    GaitBoundaryPartial,
+    GaitCycleRecord,
+    GaitEventRecord,
+    MetricSummary,
+    TreadmillGaitReport,
+    TreadmillRunningReport,
+    TreadmillStepResult,
+)
 from path_utils import get_base_dir
 
 
@@ -48,7 +56,7 @@ class SubjectSearchResult:
 @dataclass(frozen=True)
 class SessionRecord:
     id: int
-    subject_id: int
+    subject_id: int | None
     started_at: str
     finished_at: str | None
     test_type: str
@@ -59,6 +67,8 @@ class SessionRecord:
     finish_reason: str | None = None
     report_summary_json: str | None = None
     report_detail_json: str | None = None
+    subject_snapshot_json: str | None = None
+    config_source: str | None = None
     export_path: str | None = None
 
     @property
@@ -76,6 +86,16 @@ class SessionRecord:
         if not self.report_detail_json:
             return {}
         return json.loads(self.report_detail_json)
+
+    @property
+    def subject_snapshot(self) -> dict[str, Any]:
+        if not self.subject_snapshot_json:
+            return {}
+        return json.loads(self.subject_snapshot_json)
+
+    @property
+    def report(self) -> TestReport:
+        return _report_from_detail(self.report_detail)
 
 
 def default_db_path() -> Path:
@@ -262,6 +282,19 @@ class SubjectStore:
             ).fetchall()
         return [_session_from_row(row) for row in rows]
 
+    def get_all_sessions(self, *, limit: int = 200) -> list[SessionRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM test_sessions
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
     def get_recent_history(
         self, subject_id: int, *, limit: int = 3
     ) -> list[dict[str, Any]]:
@@ -279,7 +312,7 @@ class SubjectStore:
 
     def record_session(
         self,
-        subject_id: int,
+        subject_id: int | None,
         config: AnyTestConfig,
         report: TestReport,
         *,
@@ -287,6 +320,8 @@ class SubjectStore:
         finished_at: str | None = None,
         height_cm: float | None = None,
         weight_kg: float | None = None,
+        subject_snapshot: dict[str, Any] | None = None,
+        config_source: str | None = None,
         export_path: str | None = None,
     ) -> int:
         summary = _report_summary(report)
@@ -298,9 +333,10 @@ class SubjectStore:
                 INSERT INTO test_sessions (
                     subject_id, started_at, finished_at, test_type, config_json,
                     height_cm, weight_kg, total_jumps, finish_reason,
-                    report_summary_json, report_detail_json, export_path
+                    report_summary_json, report_detail_json,
+                    subject_snapshot_json, config_source, export_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     subject_id,
@@ -313,14 +349,30 @@ class SubjectStore:
                     summary.get("total_jumps"),
                     finish_reason,
                     json.dumps(summary, ensure_ascii=False),
-                    json.dumps(_report_detail(report), ensure_ascii=False)
-                    if isinstance(report, (TreadmillGaitReport, TreadmillRunningReport))
+                    json.dumps(_report_detail(report), ensure_ascii=False),
+                    json.dumps(subject_snapshot, ensure_ascii=False)
+                    if subject_snapshot
                     else None,
+                    config_source,
                     export_path,
                 ),
             )
-            self._update_subject_measurements(conn, subject_id, height_cm, weight_kg)
+            if subject_id is not None:
+                self._update_subject_measurements(
+                    conn, subject_id, height_cm, weight_kg
+                )
             return int(cur.lastrowid)
+
+    def link_session_to_subject(self, session_id: int, subject_id: int) -> None:
+        if self.get_subject(subject_id) is None:
+            raise KeyError(f"Subject not found: {subject_id}")
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE test_sessions SET subject_id = ? WHERE id = ?",
+                (subject_id, session_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"Session not found: {session_id}")
 
     def update_subject_measurements(
         self,
@@ -378,7 +430,7 @@ class SubjectStore:
 
                 CREATE TABLE IF NOT EXISTS test_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    subject_id INTEGER REFERENCES subjects(id),
                     started_at TEXT NOT NULL DEFAULT (datetime('now')),
                     finished_at TEXT,
                     test_type TEXT NOT NULL DEFAULT 'Jump Test',
@@ -389,6 +441,9 @@ class SubjectStore:
                     finish_reason TEXT CHECK(finish_reason IN
                         ('jump_count_reached', 'time_up', 'manual', 'error')),
                     report_summary_json TEXT,
+                    report_detail_json TEXT,
+                    subject_snapshot_json TEXT,
+                    config_source TEXT,
                     export_path TEXT
                 );
 
@@ -405,6 +460,16 @@ class SubjectStore:
             _ensure_column(
                 conn, "test_sessions", "report_detail_json", "report_detail_json TEXT"
             )
+            _ensure_column(
+                conn,
+                "test_sessions",
+                "subject_snapshot_json",
+                "subject_snapshot_json TEXT",
+            )
+            _ensure_column(
+                conn, "test_sessions", "config_source", "config_source TEXT"
+            )
+            _migrate_test_sessions_subject_nullable(conn)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -495,13 +560,10 @@ def _subject_from_row(row: sqlite3.Row) -> SubjectProfile:
 
 
 def _session_from_row(row: sqlite3.Row) -> SessionRecord:
-    try:
-        report_detail_json = row["report_detail_json"]
-    except (IndexError, KeyError):
-        report_detail_json = None
+    subject_id = row["subject_id"]
     return SessionRecord(
         id=int(row["id"]),
-        subject_id=int(row["subject_id"]),
+        subject_id=int(subject_id) if subject_id is not None else None,
         started_at=row["started_at"],
         finished_at=row["finished_at"],
         test_type=row["test_type"],
@@ -511,7 +573,11 @@ def _session_from_row(row: sqlite3.Row) -> SessionRecord:
         total_jumps=row["total_jumps"],
         finish_reason=row["finish_reason"],
         report_summary_json=row["report_summary_json"],
-        report_detail_json=report_detail_json,
+        report_detail_json=_optional_row_value(row, "report_detail_json"),
+        subject_snapshot_json=_optional_row_value(
+            row, "subject_snapshot_json"
+        ),
+        config_source=_optional_row_value(row, "config_source"),
         export_path=row["export_path"],
     )
 
@@ -524,7 +590,7 @@ def _history_from_session(session: SessionRecord) -> dict[str, Any]:
     return {
         "date": session.started_at[:10],
         "test_type": session.test_type,
-        "number_of_jumps": config.number_of_jumps,
+        "number_of_jumps": getattr(config, "number_of_jumps", None),
         "min_contact_time": config.min_contact_time,
         "finish_reason": session.finish_reason,
         "total_jumps": session.total_jumps,
@@ -532,8 +598,27 @@ def _history_from_session(session: SessionRecord) -> dict[str, Any]:
     }
 
 
-def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict[str, Any]:
+def _report_detail(report: TestReport) -> dict[str, Any]:
     from dataclasses import asdict as _asdict
+
+    if isinstance(report, JumpTestReport):
+        detail = _asdict(report)
+        detail.pop("export_frames", None)
+        detail.pop("export_timestamps", None)
+        return {
+            "report_type": "jump",
+            "report_schema_version": 1,
+            **detail,
+        }
+    if isinstance(report, GaitTestReport):
+        detail = _asdict(report)
+        detail.pop("export_frames", None)
+        detail.pop("export_timestamps", None)
+        return {
+            "report_type": "gait",
+            "report_schema_version": 1,
+            **detail,
+        }
 
     if isinstance(report, TreadmillGaitReport):
         report_type = "treadmill_gait"
@@ -555,6 +640,7 @@ def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict
         "left_right_results": {k: _asdict(v) for k, v in report.left_right_results.items()},
         "asymmetry_metrics": report.asymmetry_metrics,
         "report_config_snapshot": report.report_config_snapshot,
+        "visual_timeline": report.visual_timeline,
         "raw_gait_events": [_asdict(event) for event in report.raw_gait_events],
         "gait_cycles": [_asdict(cycle) for cycle in report.gait_cycles],
         "boundary_partials": [_asdict(partial) for partial in report.boundary_partials],
@@ -570,10 +656,171 @@ def _report_detail(report: TreadmillGaitReport | TreadmillRunningReport) -> dict
     }
 
 
+def _report_from_detail(detail: dict[str, Any]) -> TestReport:
+    if not detail:
+        raise ValueError("Session does not contain a saved report")
+
+    report_type = detail.get("report_type")
+    values = {
+        key: value
+        for key, value in detail.items()
+        if key not in {"report_type", "report_schema_version"}
+    }
+
+    if report_type == "jump":
+        for key in (
+            "air_times",
+            "contact_times",
+            "cycle_times",
+            "jump_heights",
+            "cadences",
+        ):
+            if key in values:
+                values[key] = tuple(values[key])
+        return JumpTestReport(**values)
+
+    if report_type == "gait":
+        for key in (
+            "stride_lengths",
+            "velocities",
+            "foot_a_support_times",
+            "foot_b_support_times",
+            "visual_timeline",
+        ):
+            if key in values:
+                values[key] = tuple(values[key])
+        return GaitTestReport(**values)
+
+    if report_type not in {"treadmill_gait", "treadmill_running"}:
+        raise ValueError(f"Unsupported saved report type: {report_type}")
+
+    values["per_step_results"] = tuple(
+        TreadmillStepResult(
+            **{
+                **item,
+                "quality_flags": tuple(item.get("quality_flags", ())),
+            }
+        )
+        for item in values.get("per_step_results", ())
+    )
+    values["metric_summaries"] = _metric_summary_map(
+        values.get("metric_summaries", {})
+    )
+    values["left_right_results"] = _metric_summary_map(
+        values.get("left_right_results", {})
+    )
+    values["raw_gait_events"] = tuple(
+        GaitEventRecord(**item)
+        for item in values.get("raw_gait_events", ())
+    )
+    values["gait_cycles"] = tuple(
+        GaitCycleRecord(
+            **{
+                **item,
+                "quality_flags": tuple(item.get("quality_flags", ())),
+            }
+        )
+        for item in values.get("gait_cycles", ())
+    )
+    values["boundary_partials"] = tuple(
+        GaitBoundaryPartial(**item)
+        for item in values.get("boundary_partials", ())
+    )
+    values["cycle_metric_summaries"] = _metric_summary_map(
+        values.get("cycle_metric_summaries", {})
+    )
+    values["cycle_side_summaries"] = {
+        side: _metric_summary_map(summaries)
+        for side, summaries in values.get("cycle_side_summaries", {}).items()
+    }
+    values["visual_timeline"] = tuple(values.get("visual_timeline", ()))
+
+    report_class = (
+        TreadmillGaitReport
+        if report_type == "treadmill_gait"
+        else TreadmillRunningReport
+    )
+    return report_class(**values)
+
+
+def _metric_summary_map(values: dict[str, Any]) -> dict[str, MetricSummary]:
+    return {
+        key: value if isinstance(value, MetricSummary) else MetricSummary(**value)
+        for key, value in values.items()
+    }
+
+
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]: row
+        for row in conn.execute("PRAGMA table_info(test_sessions)")
+    }
+    subject_column = columns.get("subject_id")
+    if subject_column is None or not subject_column["notnull"]:
+        return
+
+    conn.execute("DROP TABLE IF EXISTS test_sessions_nullable")
+    conn.execute(
+        """
+        CREATE TABLE test_sessions_nullable (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_id INTEGER REFERENCES subjects(id),
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            finished_at TEXT,
+            test_type TEXT NOT NULL DEFAULT 'Jump Test',
+            config_json TEXT NOT NULL,
+            height_cm REAL,
+            weight_kg REAL,
+            total_jumps INTEGER,
+            finish_reason TEXT CHECK(finish_reason IN
+                ('jump_count_reached', 'time_up', 'manual', 'error')),
+            report_summary_json TEXT,
+            report_detail_json TEXT,
+            subject_snapshot_json TEXT,
+            config_source TEXT,
+            export_path TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO test_sessions_nullable (
+            id, subject_id, started_at, finished_at, test_type, config_json,
+            height_cm, weight_kg, total_jumps, finish_reason,
+            report_summary_json, report_detail_json, subject_snapshot_json,
+            config_source, export_path
+        )
+        SELECT
+            id, subject_id, started_at, finished_at, test_type, config_json,
+            height_cm, weight_kg, total_jumps, finish_reason,
+            report_summary_json, report_detail_json, subject_snapshot_json,
+            config_source, export_path
+        FROM test_sessions
+        """
+    )
+    conn.execute("DROP TABLE test_sessions")
+    conn.execute(
+        "ALTER TABLE test_sessions_nullable RENAME TO test_sessions"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_subject_started
+        ON test_sessions(subject_id, started_at DESC)
+        """
+    )
+
+
+def _optional_row_value(row: sqlite3.Row, key: str):
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
 
 
 def _report_summary(report: TestReport) -> dict[str, Any]:

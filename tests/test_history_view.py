@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QInputDialog
 
 from config.test_config import TestConfig as _TestConfig
 from config.test_report import JumpTestReport
@@ -138,6 +138,38 @@ class HistoryViewTest(unittest.TestCase):
         self.assertIn("跑步机速度: 5.5 km/h", detail_text)
         self.assertIn("行进方向: Interface side", detail_text)
         self.assertIsInstance(received[0], TreadmillGaitConfig)
+
+    def test_global_results_open_report_and_link_temporary_session(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        session_id = self.store.record_session(
+            None,
+            _TestConfig(number_of_jumps=3),
+            _jump_report(touch_count=3),
+            subject_snapshot={"display_name": "临时测试", "age": 30},
+        )
+        view = HistoryView(self.store)
+        opened = []
+        view.open_report_requested.connect(opened.append)
+
+        view.load_all()
+        view._session_table.selectRow(0)
+        view._on_open_report_clicked()
+
+        self.assertEqual(view._session_table.rowCount(), 1)
+        self.assertEqual(view._session_table.item(0, 0).text(), "临时测试")
+        self.assertIsInstance(opened[0], JumpTestReport)
+
+        original = QInputDialog.getItem
+        QInputDialog.getItem = staticmethod(
+            lambda *args, **kwargs: ("Alice", True)
+        )
+        try:
+            view._on_link_subject_clicked()
+        finally:
+            QInputDialog.getItem = original
+
+        self.assertEqual(self.store.get_session(session_id).subject_id, subject_id)
+        self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
 
 
 if __name__ == "__main__":

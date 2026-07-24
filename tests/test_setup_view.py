@@ -5,9 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QFrame, QLabel
 
 from config.treadmill_config import TreadmillGaitConfig
+from config.test_config import TestConfig as RuntimeTestConfig
 from ui.views.setup_view import SetupView
 
 
@@ -55,3 +56,28 @@ def test_manual_config_initializes_from_selected_agent_test_type():
     assert "direction" in view.param_panel._widgets
     assert "start_type" not in view.param_panel._widgets
     assert view._current_config.test_type == "Treadmill Gait Test"
+
+
+def test_setup_view_uses_application_page_header_and_two_stage_action():
+    _app()
+    view = SetupView()
+
+    labels = [label.text() for label in view.findChildren(QLabel)]
+
+    assert "测试" in labels
+    assert "配置测试参数并连接设备" in labels
+    assert "IronJump 步态分析系统" not in labels
+    assert view.btn_ready.text() == "进入测试准备"
+    assert view._device_status_label.text() == "● 设备将在测试界面检查"
+    assert view.findChild(QFrame, "ConfigSummaryCard") is not None
+
+
+def test_all_config_sources_use_final_validation():
+    _app()
+    view = SetupView()
+    invalid = RuntimeTestConfig(stop_type="Status change", number_of_jumps=None)
+
+    for source in ("agent", "manual", "history", "last_session"):
+        view._set_current_config(invalid, source)
+        assert not view.btn_ready.isEnabled()
+        assert view._config_errors

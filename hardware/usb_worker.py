@@ -9,7 +9,7 @@ import os
 import threading
 import time
 
-from qtpy.QtCore import QObject, Signal, QTimer
+from qtpy.QtCore import QObject, Signal, Slot, QTimer
 
 try:
     from .receive import CyUsbInterfaceDevice, E_DATA_REPORT
@@ -23,6 +23,7 @@ except ImportError:
 
 class UsbWorker(QObject):
     data_received = Signal(str)   # 文本日志（HEX）- 节流
+    device_state_changed = Signal(str, str)  # state, user-facing detail
     led_bits_signal = Signal(list)  # 96 位 LED 位图 (物理语义: 1=LED亮/未遮挡) - 节流，供 UI
     led_contact_signal = Signal(list)  # 96 位 LED 位图 (接触语义: 1=遮挡/触地) - 节流，供 UI
     raw_contact_signal = Signal(list, float)  # 96 位无损状态 (1=触地) & 精确时间戳 - 供算法无损计算
@@ -35,6 +36,7 @@ class UsbWorker(QObject):
         self.timeout_ms = int(timeout_ms)
         self.chunk_size = int(chunk_size)
         self.dev = None
+        self._capturing = False
         self._stop = threading.Event()
         # 分包缓存：frameIdx -> { 'packs': {packIdx: bytes}, 'packNum': int }
         self._frames = {}
@@ -60,6 +62,10 @@ class UsbWorker(QObject):
             self.data_received.emit(msg)
         except Exception:
             print(msg)
+
+    def _emit_state(self, state: str, message: str) -> None:
+        self.device_state_changed.emit(state, message)
+        self._emit(message)
 
     def _bytes_to_bits(self, payload: bytes):
         # 按 LSB→MSB 展开，最多取前 12 字节 = 96 位
@@ -241,19 +247,47 @@ class UsbWorker(QObject):
         self._flush_led_if_ready(frameIdx)
 
     # --- 生命周期 ---
-    def start(self):
+    @Slot()
+    def connect_device(self):
+        """Open the USB device without starting the acquisition stream."""
+        self._stop.clear()
+        if self.dev is not None:
+            self._emit_state("connected", "设备已连接")
+            return
+        self._emit_state("connecting", "正在连接设备...")
         if CyUsbInterfaceDevice is None:
-            self._emit("无法导入 receive.CyUsbInterfaceDevice，请检查 receive.py 与 DLL 可用性。")
+            self._emit_state(
+                "error",
+                "无法导入 receive.CyUsbInterfaceDevice，请检查 receive.py 与 DLL 可用性。",
+            )
             return
         try:
             self.dev = CyUsbInterfaceDevice(self.dll_path)
         except Exception as e:
-            self._emit(f"加载 DLL 失败: {e}")
+            self.dev = None
+            self._emit_state("error", f"加载 DLL 失败: {e}")
             return
         if not self.dev.open(self.vid, self.pid):
-            self._emit(f"打开设备失败: VID=0x{self.vid:04X} PID=0x{self.pid:04X}")
+            self.dev = None
+            self._emit_state(
+                "error",
+                f"打开设备失败: VID=0x{self.vid:04X} PID=0x{self.pid:04X}",
+            )
             return
-        self._emit(f"设备已打开 VID=0x{self.vid:04X} PID=0x{self.pid:04X}")
+        self._emit_state(
+            "connected",
+            f"设备已连接 VID=0x{self.vid:04X} PID=0x{self.pid:04X}",
+        )
+
+    @Slot()
+    def start_capture(self):
+        """Start formal acquisition after the user explicitly authorizes it."""
+        if self.dev is None:
+            self._emit_state("error", "设备尚未连接，无法开始采集。")
+            return
+        if self._capturing:
+            self._emit_state("streaming", "设备正在采集")
+            return
         self._ensure_timer()
         try:
             try:
@@ -265,9 +299,19 @@ class UsbWorker(QObject):
             self.dev.set_on_frame(self._on_frame)
             ret = self.dev.start_auto_read(self.chunk_size)
             if ret != 0:
-                self._emit(f"start_auto_read 失败: {ret}")
+                self._emit_state("error", f"start_auto_read 失败: {ret}")
+                return
+            self._capturing = True
+            self._emit_state("streaming", "设备正在采集")
         except Exception as e:
-            self._emit(f"启动读取失败: {e}")
+            self._capturing = False
+            self._emit_state("error", f"启动读取失败: {e}")
+
+    def start(self):
+        """Backward-compatible one-shot start for legacy tools."""
+        self.connect_device()
+        if self.dev is not None:
+            self.start_capture()
 
     def stop(self):
         self._stop.set()
@@ -302,3 +346,5 @@ class UsbWorker(QObject):
             except Exception:
                 pass
             self.dev = None
+        self._capturing = False
+        self._emit_state("disconnected", "设备已断开")

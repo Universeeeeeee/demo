@@ -257,6 +257,7 @@ class ParamPanel(QWidget):
             title="可选参数", widget=optional_container, expand=False
         )
         main_layout.addWidget(self._optional_section)
+        self._optional_section.hide()
 
         # ===== 弹性空间 =====
         main_layout.addStretch()
@@ -449,6 +450,16 @@ class ParamPanel(QWidget):
         """为枚举参数创建 QComboBox，选项从 schema 获取。"""
         combo = QComboBox()
         values = self._schema.get_enum_values(param_name, self._test_type)
+        if param_name == "test_type":
+            values = [
+                test_type
+                for test_type in self._LAYER2_ORDER
+                if test_type in values
+            ]
+        elif param_name in {"start_type", "stop_type"}:
+            values = [
+                value for value in values if value != "External impulse"
+            ]
         combo.addItems(values)
 
         # 设置默认值

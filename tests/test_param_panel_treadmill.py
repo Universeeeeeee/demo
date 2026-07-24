@@ -116,6 +116,21 @@ class TestParamPanelTreadmill:
         assert "filter_gaitr_in" not in self._panel._widgets
         assert "filter_gaitr_out" not in self._panel._widgets
 
+    def test_manual_form_exposes_only_supported_modes_and_triggers(self) -> None:
+        test_types = self._panel._widgets["test_type"]
+        assert [
+            test_types.itemText(index) for index in range(test_types.count())
+        ] == [
+            "Jump Test",
+            "Treadmill Gait Test",
+            "Treadmill Running Test",
+        ]
+        assert "External impulse" not in [
+            self._panel._widgets["start_type"].itemText(index)
+            for index in range(self._panel._widgets["start_type"].count())
+        ]
+        assert not self._panel._optional_section.isVisible()
+
     # ------------------------------------------------------------------
     #  get_config() returns correct type
     # ------------------------------------------------------------------

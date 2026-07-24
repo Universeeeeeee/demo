@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime
 
 # Ensure project root is importable when running `python ui/main_window.py`.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,11 +31,20 @@ from dayu_widgets.qt import application
 from config.test_config import TestConfig
 from config.test_report import TestReport
 from data.subject_store import SubjectProfile, SubjectStore
+from ui.app_shell import (
+    MODULE_ATHLETES,
+    MODULE_RESULTS,
+    MODULE_SETTINGS,
+    MODULE_TEST,
+    ApplicationShell,
+)
 from ui.session_controller import SessionController
+from ui.views.athletes_view import AthletesView
 from ui.views.setup_view import SessionSetup, SetupView
 from ui.views.execution_view import ExecutionView
 from ui.views.history_view import HistoryView
 from ui.views.report_view import ReportView
+from ui.views.settings_view import SettingsView
 from ui.llm_client import LLMWorkerClient
 
 # Camera (可选)
@@ -65,6 +75,11 @@ from qtpy.QtCore import QTimer
 
 
 log = logging.getLogger(__name__)
+_UNSET = object()
+
+
+def _wallclock_now() -> str:
+    return datetime.now().replace(microsecond=0).isoformat(sep=" ")
 
 
 def _detect_tinyse_camera() -> bool:
@@ -106,43 +121,72 @@ class MainWindow(QMainWindow):
       - 处理测试结束后的临时汇总 (Phase 5a, ReportView 在 5b 中加入)
     """
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        subject_store=_UNSET,
+        llm_client=_UNSET,
+        controller=_UNSET,
+        enable_background_checks: bool = True,
+    ):
         super().__init__(parent)
 
-        self.setWindowTitle("Iron Jump — 步态分析系统")
-        self.setMinimumSize(1100, 700)
-        self.resize(1200, 750)
+        self.setWindowTitle("IronJump")
+        self.setMinimumSize(1180, 720)
+        self.resize(1400, 820)
+        self._enable_background_checks = enable_background_checks
+        self._active_module = MODULE_TEST
 
         # ===== Controller =====
-        self._controller = SessionController(self)
+        self._controller = (
+            SessionController(self) if controller is _UNSET else controller
+        )
 
-        try:
-            self._subject_store: SubjectStore | None = SubjectStore()
-        except Exception:
-            log.exception("Failed to initialize subject store")
-            self._subject_store = None
+        if subject_store is _UNSET:
+            try:
+                self._subject_store: SubjectStore | None = SubjectStore()
+            except Exception:
+                log.exception("Failed to initialize subject store")
+                self._subject_store = None
+        else:
+            self._subject_store = subject_store
 
         self._active_config: TestConfig | None = None
         self._subject_id: int | None = None
         self._subject: SubjectProfile | None = None
+        self._subject_snapshot: dict | None = None
+        self._config_source: str | None = None
+        self._session_started_at: str | None = None
+        self._last_session_id: int | None = None
 
         # ===== Views =====
-        self._stack = QStackedWidget() 
-        self.setCentralWidget(self._stack)
+        self._stack = QStackedWidget()
 
-        self._llm_client = LLMWorkerClient(
-            python_exe=sys.executable,
-            worker_script=os.path.join(_project_root, "agent", "llm_worker.py"),
-        )
+        if llm_client is _UNSET:
+            self._llm_client = LLMWorkerClient(
+                python_exe=sys.executable,
+                worker_script=os.path.join(_project_root, "agent", "llm_worker.py"),
+            )
+        else:
+            self._llm_client = llm_client
+
+        self._athletes_view = AthletesView(self._subject_store)
         self._setup_view = SetupView(subject_store=self._subject_store, llm_client=self._llm_client)
         self._exec_view = ExecutionView()
         self._report_view = ReportView()
         self._history_view = HistoryView(self._subject_store)
+        self._settings_view = SettingsView(self._subject_store)
 
-        self._stack.addWidget(self._setup_view)     # index 0
-        self._stack.addWidget(self._exec_view)      # index 1
-        self._stack.addWidget(self._report_view)    # index 2
-        self._stack.addWidget(self._history_view)   # index 3
+        self._stack.addWidget(self._athletes_view)
+        self._stack.addWidget(self._setup_view)
+        self._stack.addWidget(self._exec_view)
+        self._stack.addWidget(self._report_view)
+        self._stack.addWidget(self._history_view)
+        self._stack.addWidget(self._settings_view)
+
+        self._shell = ApplicationShell(self._stack)
+        self.setCentralWidget(self._shell)
 
         # ===== Camera =====
         self._logi_camera = None
@@ -156,12 +200,14 @@ class MainWindow(QMainWindow):
         self._go_to_setup()
 
         # ===== 异步检测相机设备 =====
-        QTimer.singleShot(0, self._detect_cameras)
+        if self._enable_background_checks:
+            QTimer.singleShot(0, self._detect_cameras)
 
         # ===== LLM Worker 健康检查 =====
         self._health_timer = QTimer(self)
         self._health_timer.timeout.connect(self._check_llm_health)
-        self._health_timer.start(5000)
+        if self._enable_background_checks:
+            self._health_timer.start(5000)
         self._health_fail_count = 0
 
     # ------------------------------------------------------------------
@@ -169,12 +215,22 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _connect_signals(self):
+        # Application shell → guarded module routing
+        self._shell.module_requested.connect(self._request_module)
+
+        # AthletesView → test/results modules
+        self._athletes_view.test_requested.connect(self._on_athlete_test_requested)
+        self._athletes_view.results_requested.connect(self._on_history_requested)
+
         # SetupView → MainWindow
         self._setup_view.ready_signal.connect(self._on_ready)
         self._setup_view.history_requested.connect(self._on_history_requested)
 
         # ExecutionView 控制 → MainWindow / Controller
         self._exec_view.start_requested.connect(self._on_start)
+        self._exec_view.return_config_requested.connect(
+            self._on_return_to_config
+        )
         self._exec_view.pause_requested.connect(self._on_pause)
         self._exec_view.stop_requested.connect(self._on_manual_stop)
         self._exec_view.camera_requested.connect(self._on_camera)
@@ -187,8 +243,13 @@ class MainWindow(QMainWindow):
             self._exec_view.on_footprint_visual_frame
         )
         self._controller.device_message.connect(self._exec_view.on_device_message)
+        self._controller.device_state_changed.connect(
+            self._exec_view.on_device_state
+        )
 
         # Controller 生命周期 → MainWindow
+        self._controller.session_started.connect(self._exec_view.on_session_started)
+        self._controller.session_started.connect(self._on_session_started)
         self._controller.session_finished.connect(self._on_session_finished)
 
         # ReportView → MainWindow
@@ -198,25 +259,93 @@ class MainWindow(QMainWindow):
         # HistoryView → MainWindow
         self._history_view.return_setup.connect(self._go_to_setup)
         self._history_view.load_config_requested.connect(self._on_history_load_config)
+        self._history_view.open_report_requested.connect(
+            self._on_history_open_report
+        )
 
     # ------------------------------------------------------------------
     #  视图切换
     # ------------------------------------------------------------------
 
     def _go_to_setup(self):
+        self._set_active_module(MODULE_TEST)
         self._active_config = None
         self._subject_id = None
         self._subject = None
+        self._subject_snapshot = None
+        self._config_source = None
+        self._session_started_at = None
+        self._setup_view.refresh_subjects()
         self._stack.setCurrentWidget(self._setup_view)
 
     def _go_to_execution(self):
+        self._set_active_module(MODULE_TEST)
         self._stack.setCurrentWidget(self._exec_view)
 
     def _go_to_report(self):
+        self._set_active_module(MODULE_RESULTS)
         self._stack.setCurrentWidget(self._report_view)
 
     def _go_to_history(self):
+        self._set_active_module(MODULE_RESULTS)
         self._stack.setCurrentWidget(self._history_view)
+
+    def _go_to_athletes(self):
+        self._athletes_view.refresh()
+        self._set_active_module(MODULE_ATHLETES)
+        self._stack.setCurrentWidget(self._athletes_view)
+
+    def _go_to_settings(self):
+        self._settings_view.refresh()
+        self._set_active_module(MODULE_SETTINGS)
+        self._stack.setCurrentWidget(self._settings_view)
+
+    def _set_active_module(self, module: str) -> None:
+        self._active_module = module
+        self._shell.set_active_module(module)
+
+    def _request_module(self, module: str) -> None:
+        if module == self._active_module:
+            return
+
+        leaving_test = self._active_module == MODULE_TEST and module != MODULE_TEST
+        if leaving_test and self._controller.is_running:
+            answer = QMessageBox.question(
+                self,
+                "测试正在进行",
+                "选择“是”将结束并保存当前结果；选择“中止”将结束并标记异常；"
+                "选择“否”则留在测试。",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Abort,
+                QMessageBox.No,
+            )
+            if answer == QMessageBox.No:
+                self._shell.set_active_module(MODULE_TEST)
+                return
+            if answer == QMessageBox.Abort:
+                self._controller.stop("error")
+            else:
+                self._controller.stop()
+        elif leaving_test and self._stack.currentWidget() is self._exec_view:
+            self._discard_prepared_session()
+
+        if module == MODULE_ATHLETES:
+            self._go_to_athletes()
+        elif module == MODULE_TEST:
+            self._go_to_setup()
+        elif module == MODULE_RESULTS:
+            self._history_view.load_all()
+            self._go_to_history()
+        elif module == MODULE_SETTINGS:
+            self._go_to_settings()
+
+    def _discard_prepared_session(self) -> None:
+        discard = getattr(self._controller, "discard", None)
+        if callable(discard):
+            discard()
+        self._exec_view.reset()
+        self._active_config = None
+        self._subject_id = None
+        self._subject = None
 
     # ------------------------------------------------------------------
     #  事件处理
@@ -228,6 +357,11 @@ class MainWindow(QMainWindow):
         self._active_config = config
         self._subject_id = setup.subject_id
         self._subject = setup.subject
+        self._subject_snapshot = setup.subject_snapshot or self._fallback_snapshot(
+            setup.subject
+        )
+        self._config_source = setup.config_source
+        self._session_started_at = None
         self._exec_view.reset()
         self._exec_view.configure(config)
         self._controller.prepare(config)
@@ -237,13 +371,30 @@ class MainWindow(QMainWindow):
         self._history_view.load_subject(subject_result)
         self._go_to_history()
 
+    def _on_athlete_test_requested(self, subject_result):
+        self._setup_view.select_subject(subject_result.subject.id)
+        self._go_to_setup()
+
     def _on_history_load_config(self, config: TestConfig):
         self._setup_view.load_config_from_history(config)
         self._go_to_setup()
 
+    def _on_history_open_report(self, report: TestReport) -> None:
+        self._report_view.load_report(report)
+        self._go_to_report()
+
     def _on_start(self):
         """ExecutionView '开始采集' → 启动 Controller"""
+        if self._controller.device_state == "error":
+            self._controller.retry_device()
+            return
         self._controller.start()
+
+    def _on_return_to_config(self) -> None:
+        if self._controller.is_running:
+            return
+        self._discard_prepared_session()
+        self._go_to_setup()
 
     def _on_pause(self):
         """ExecutionView '暂停/继续' → 切换 Controller 暂停状态"""
@@ -257,26 +408,55 @@ class MainWindow(QMainWindow):
         """ExecutionView '结束' → 手动停止"""
         self._controller.stop()
 
+    def _on_session_started(self):
+        self._session_started_at = _wallclock_now()
+
     def _on_session_finished(self, report: TestReport):
         """Controller 发来 TestReport → 切到 ReportView"""
         if (
             self._subject_store is not None
-            and self._subject_id is not None
             and self._active_config is not None
         ):
             try:
-                self._subject_store.record_session(
+                snapshot = self._subject_snapshot or self._fallback_snapshot(
+                    self._subject
+                )
+                self._last_session_id = self._subject_store.record_session(
                     self._subject_id,
                     self._active_config,
                     report,
-                    height_cm=self._subject.height_cm if self._subject else None,
-                    weight_kg=self._subject.weight_kg if self._subject else None,
+                    started_at=self._session_started_at,
+                    finished_at=_wallclock_now(),
+                    height_cm=snapshot.get("height_cm"),
+                    weight_kg=snapshot.get("weight_kg"),
+                    subject_snapshot=snapshot,
+                    config_source=self._config_source,
                 )
             except Exception:
                 log.exception("Failed to record subject session")
 
         self._report_view.load_report(report)
         self._go_to_report()
+
+    @staticmethod
+    def _fallback_snapshot(subject: SubjectProfile | None) -> dict:
+        if subject is None:
+            return {
+                "display_name": "临时测试",
+                "age": 30,
+                "height_cm": 170.0,
+                "weight_kg": 70.0,
+                "level": "intermediate",
+                "focus_side": "",
+            }
+        return {
+            "display_name": subject.display_name,
+            "age": max(0, datetime.now().year - subject.birth_year),
+            "height_cm": subject.height_cm,
+            "weight_kg": subject.weight_kg,
+            "level": subject.level,
+            "focus_side": subject.focus_side,
+        }
 
     def _detect_cameras(self):
         """异步检测可用相机设备, 控制 Tiny SE 按钮显隐。"""
@@ -367,6 +547,13 @@ class MainWindow(QMainWindow):
         # 停止测试会话
         if self._controller.is_running:
             self._controller.stop()
+        else:
+            discard = getattr(self._controller, "discard", None)
+            if callable(discard):
+                try:
+                    discard()
+                except Exception:
+                    log.exception("Failed to discard prepared session on close")
 
         # 关闭相机
         try:
@@ -400,7 +587,6 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     with application() as app:
         win = MainWindow()
-        dayu_theme.apply(win)
         win.show()
 
         # 居中到屏幕 (防止 dayu_theme 导致窗口偏移到屏幕外)

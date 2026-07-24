@@ -109,12 +109,18 @@ def test_gait_running_controls_stack_in_right_column(qtbot):
         )
     )
 
+    view.on_device_state("connected", "设备已连接")
     view._on_start()
+    view.on_session_started()
 
     assert not view.btn_start.isVisible()
     assert view.btn_pause.isVisible()
     assert view.btn_stop.isVisible()
     assert view._controls_layout.direction() == QBoxLayout.TopToBottom
+
+    view._on_pause()
+    assert "暂停分析（计时继续）" in view._mode_label.text()
+    assert view.btn_pause.text() == "▶ 继续分析"
 
 
 def test_execution_view_keeps_jump_charts_for_jump(qtbot):
@@ -268,3 +274,25 @@ def test_execution_view_does_not_enable_cycle_panel_for_ground_gait(qtbot):
     view.configure(TestConfig(test_type="Gait Test"))
 
     assert not view._cycle_panel.isVisible()
+
+
+def test_execution_view_waits_for_device_and_session_started(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.configure(TestConfig(test_type="Jump Test"))
+
+    assert not view.btn_start.isEnabled()
+    assert view.btn_start.text() == "开始采集"
+
+    view.on_device_state("connected", "设备已连接")
+    assert view.btn_start.isEnabled()
+
+    view._on_start()
+    assert not view.btn_start.isEnabled()
+    assert not view.btn_start.isHidden()
+    assert view.btn_pause.isHidden()
+
+    view.on_session_started()
+    assert view.btn_start.isHidden()
+    assert not view.btn_pause.isHidden()
+    assert not view.btn_stop.isHidden()

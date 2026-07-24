@@ -1,6 +1,7 @@
 """Tests for the SQLite subject store MVP."""
 
 import sys
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import fields
@@ -331,6 +332,157 @@ class SubjectStoreTest(unittest.TestCase):
             ["gap_below_minimum"],
         )
         self.assertEqual(session.report_detail["boundary_partials"][0]["phase"], "摆动相")
+
+    def test_temporary_session_can_be_saved_and_linked_later(self):
+        snapshot = {
+            "display_name": "临时测试",
+            "age": 30,
+            "height_cm": 170.0,
+            "weight_kg": 70.0,
+            "level": "intermediate",
+            "focus_side": "",
+        }
+        session_id = self.store.record_session(
+            None,
+            _TestConfig(number_of_jumps=5),
+            _jump_report(),
+            subject_snapshot=snapshot,
+            config_source="manual",
+        )
+
+        session = self.store.get_session(session_id)
+        self.assertIsNone(session.subject_id)
+        self.assertEqual(session.subject_snapshot, snapshot)
+        self.assertEqual(session.config_source, "manual")
+        self.assertEqual(self.store.get_all_sessions()[0].id, session_id)
+
+        subject_id = self.store.create_subject("Later Linked", 1990)
+        self.store.link_session_to_subject(session_id, subject_id)
+        linked = self.store.get_session(session_id)
+
+        self.assertEqual(linked.subject_id, subject_id)
+        self.assertEqual(linked.subject_snapshot, snapshot)
+
+    def test_session_reconstructs_saved_jump_and_treadmill_reports(self):
+        jump_id = self.store.record_session(
+            None,
+            _TestConfig(number_of_jumps=5),
+            _jump_report(),
+        )
+        jump = self.store.get_session(jump_id).report
+
+        self.assertIsInstance(jump, JumpTestReport)
+        self.assertEqual(jump.jump_heights, (0.18, 0.22))
+
+        treadmill = TreadmillGaitReport(
+            finish_reason="manual",
+            touch_count=1,
+            lift_count=1,
+            resolved_starting_foot="left",
+            starting_foot_source="auto_first_contact",
+            per_step_results=(
+                TreadmillStepResult(
+                    index=0,
+                    side="left",
+                    row_status="valid",
+                    is_event_valid=True,
+                    is_included_in_statistics=True,
+                    correction_source="none",
+                    quality_flags=("reviewed",),
+                ),
+            ),
+            metric_summaries={"contact_time_s": summarize((0.2,))},
+        )
+        treadmill_id = self.store.record_session(
+            None,
+            TreadmillGaitConfig(
+                stop_type="Software command",
+                test_length=None,
+                treadmill_speed=5.0,
+                direction="Interface side",
+            ),
+            treadmill,
+        )
+        restored = self.store.get_session(treadmill_id).report
+
+        self.assertIsInstance(restored, TreadmillGaitReport)
+        self.assertEqual(restored.per_step_results[0].quality_flags, ("reviewed",))
+        self.assertEqual(restored.metric_summaries["contact_time_s"].mean, 0.2)
+
+    def test_session_subject_id_schema_is_nullable(self):
+        with self.store._connect() as conn:
+            columns = {
+                row["name"]: row
+                for row in conn.execute("PRAGMA table_info(test_sessions)")
+            }
+
+        self.assertEqual(columns["subject_id"]["notnull"], 0)
+        self.assertIn("subject_snapshot_json", columns)
+        self.assertIn("config_source", columns)
+
+    def test_existing_required_subject_schema_is_migrated_without_data_loss(self):
+        legacy_path = Path(self.tmpdir.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE subjects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    display_name TEXT NOT NULL,
+                    sex TEXT NOT NULL DEFAULT '',
+                    birth_year INTEGER NOT NULL,
+                    height_cm REAL,
+                    weight_kg REAL,
+                    level TEXT NOT NULL DEFAULT 'intermediate',
+                    focus_side TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE test_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    test_type TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    height_cm REAL,
+                    weight_kg REAL,
+                    total_jumps INTEGER,
+                    finish_reason TEXT,
+                    report_summary_json TEXT,
+                    export_path TEXT
+                );
+                INSERT INTO subjects (
+                    id, display_name, birth_year, created_at, updated_at
+                ) VALUES (1, 'Legacy', 1990, '2026-01-01', '2026-01-01');
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO test_sessions (
+                    id, subject_id, started_at, test_type, config_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    7,
+                    1,
+                    "2026-01-02 10:00:00",
+                    "Jump Test",
+                    '{"test_type":"Jump Test"}',
+                ),
+            )
+
+        migrated = SubjectStore(legacy_path)
+
+        self.assertEqual(migrated.get_session(7).subject_id, 1)
+        with migrated._connect() as conn:
+            subject_column = next(
+                row
+                for row in conn.execute("PRAGMA table_info(test_sessions)")
+                if row["name"] == "subject_id"
+            )
+        self.assertEqual(subject_column["notnull"], 0)
 
 
 if __name__ == "__main__":

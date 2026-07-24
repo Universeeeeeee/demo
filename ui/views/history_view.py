@@ -12,11 +12,10 @@ from typing import Any
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView, QFrame, QHeaderView, QHBoxLayout, QLabel,
-    QMessageBox, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QInputDialog, QMessageBox, QSizePolicy, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
-from dayu_widgets.divider import MDivider
 from dayu_widgets.label import MLabel
 from dayu_widgets.push_button import MPushButton
 
@@ -25,12 +24,72 @@ from data.subject_store import SessionRecord, SubjectSearchResult, SubjectStore
 
 log = logging.getLogger(__name__)
 
+HISTORY_QSS = """
+QWidget#HistoryViewRoot {
+    background: #0c1119;
+    color: #e7ebf2;
+}
+QLabel#HistoryTitle {
+    color: #f5f7fb;
+    font-size: 20px;
+    font-weight: 700;
+}
+QLabel#HistoryContext {
+    color: #aeb7c5;
+    font-size: 12px;
+}
+QLabel#DetailTitle {
+    color: #f2f5fa;
+    font-size: 13px;
+    font-weight: 650;
+}
+QTableWidget {
+    background: #121923;
+    alternate-background-color: #151d28;
+    color: #dfe5ee;
+    border: 1px solid #293442;
+    border-radius: 8px;
+    gridline-color: #26313f;
+    selection-background-color: #273446;
+    selection-color: white;
+}
+QHeaderView::section {
+    background: #171f2b;
+    color: #9da8b8;
+    border: none;
+    border-bottom: 1px solid #2b3543;
+    padding: 8px;
+}
+QPushButton {
+    min-height: 34px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background: #1a2230;
+    color: #d9dee8;
+    padding: 0 14px;
+}
+QPushButton:hover {
+    background: #232d3c;
+}
+QPushButton:disabled {
+    color: #677386;
+    background: #151c26;
+}
+QPushButton#PrimaryHistoryAction {
+    background: #ff7a00;
+    border-color: #ff7a00;
+    color: white;
+    font-weight: 650;
+}
+"""
+
 
 class HistoryView(QWidget):
     """只读历史记录视图。"""
 
     return_setup = Signal()
     load_config_requested = Signal(object)
+    open_report_requested = Signal(object)
 
     def __init__(self, subject_store: SubjectStore | None = None, parent=None):
         super().__init__(parent)
@@ -40,6 +99,8 @@ class HistoryView(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
+        self.setObjectName("HistoryViewRoot")
+        self.setStyleSheet(HISTORY_QSS)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 15, 20, 15)
         main_layout.setSpacing(12)
@@ -47,14 +108,12 @@ class HistoryView(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(12)
 
-        title = MLabel("历史记录")
-        title.setStyleSheet(
-            "font-size: 22pt; font-weight: bold; color: #e0e0e0;"
-        )
+        title = MLabel("结果")
+        title.setObjectName("HistoryTitle")
         self._subject_label = MLabel("未选择受试者")
-        self._subject_label.setStyleSheet("font-size: 11pt; color: #c8c8c8;")
+        self._subject_label.setObjectName("HistoryContext")
 
-        self._btn_return = MPushButton("返回配置页")
+        self._btn_return = MPushButton("返回测试")
         self._btn_return.clicked.connect(self.return_setup)
 
         header_layout.addWidget(title)
@@ -65,9 +124,9 @@ class HistoryView(QWidget):
         content_layout = QHBoxLayout()
         content_layout.setSpacing(12)
 
-        self._session_table = QTableWidget(0, 4)
+        self._session_table = QTableWidget(0, 5)
         self._session_table.setHorizontalHeaderLabels(
-            ["时间", "测试类型", "结束原因", "结果摘要"]
+            ["运动员", "时间", "测试类型", "结束原因", "结果摘要"]
         )
         self._session_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._session_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -83,6 +142,9 @@ class HistoryView(QWidget):
         self._session_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeToContents
         )
+        self._session_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeToContents
+        )
         self._session_table.itemSelectionChanged.connect(self._on_selection_changed)
         content_layout.addWidget(self._session_table, 5)
 
@@ -96,7 +158,9 @@ class HistoryView(QWidget):
         detail_layout = QVBoxLayout(detail_frame)
         detail_layout.setContentsMargins(14, 12, 14, 12)
         detail_layout.setSpacing(8)
-        detail_layout.addWidget(MDivider("记录摘要"))
+        detail_title = QLabel("记录摘要")
+        detail_title.setObjectName("DetailTitle")
+        detail_layout.addWidget(detail_title)
 
         self._detail_label = QLabel("请选择一条历史记录。")
         self._detail_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -112,14 +176,41 @@ class HistoryView(QWidget):
 
         footer_layout = QHBoxLayout()
         footer_layout.addStretch()
+        self._btn_link_subject = MPushButton("关联运动员")
+        self._btn_link_subject.setMinimumHeight(42)
+        self._btn_link_subject.clicked.connect(self._on_link_subject_clicked)
+        footer_layout.addWidget(self._btn_link_subject)
+
         self._btn_load_config = MPushButton("加载该次参数").primary()
         self._btn_load_config.setMinimumHeight(42)
         self._btn_load_config.setMinimumWidth(160)
         self._btn_load_config.clicked.connect(self._on_load_config_clicked)
         footer_layout.addWidget(self._btn_load_config)
+
+        self._btn_open_report = MPushButton("打开报告").primary()
+        self._btn_open_report.setObjectName("PrimaryHistoryAction")
+        self._btn_open_report.setMinimumHeight(42)
+        self._btn_open_report.setMinimumWidth(140)
+        self._btn_open_report.clicked.connect(self._on_open_report_clicked)
+        footer_layout.addWidget(self._btn_open_report)
         main_layout.addLayout(footer_layout)
 
         self._set_empty_state("请从配置页选择受试者后查看历史记录。")
+
+    def load_all(self) -> None:
+        self._subject_result = None
+        self._subject_label.setText("全部本地测试")
+        if self._subject_store is None:
+            self._set_empty_state("历史数据存储不可用。")
+            return
+        try:
+            self._sessions = self._subject_store.get_all_sessions()
+        except Exception as exc:
+            log.exception("Failed to load all sessions")
+            self._set_empty_state("读取结果失败。")
+            QMessageBox.warning(self, "结果", f"读取失败：{exc}")
+            return
+        self._populate_sessions()
 
     def load_subject(self, result: SubjectSearchResult | None) -> None:
         self._subject_result = result
@@ -149,6 +240,7 @@ class HistoryView(QWidget):
         for row, session in enumerate(self._sessions):
             self._session_table.insertRow(row)
             values = [
+                self._session_subject_name(session),
                 session.started_at[:16],
                 session.test_type,
                 _finish_reason_label(session.finish_reason),
@@ -164,23 +256,36 @@ class HistoryView(QWidget):
             self._session_table.selectRow(0)
             self._show_session_detail(self._sessions[0])
             self._btn_load_config.setEnabled(True)
+            self._btn_open_report.setEnabled(bool(self._sessions[0].report_detail))
+            self._btn_link_subject.setEnabled(self._sessions[0].subject_id is None)
         else:
-            self._set_empty_state("该受试者暂无历史测试。")
+            message = (
+                "暂无本地测试结果。"
+                if self._subject_result is None
+                else "该受试者暂无历史测试。"
+            )
+            self._set_empty_state(message)
 
     def _set_empty_state(self, message: str) -> None:
         self._sessions = []
         self._session_table.setRowCount(0)
         self._detail_label.setText(message)
         self._btn_load_config.setEnabled(False)
+        self._btn_open_report.setEnabled(False)
+        self._btn_link_subject.setEnabled(False)
 
     def _on_selection_changed(self) -> None:
         session = self._selected_session()
         if session is None:
             self._detail_label.setText("请选择一条历史记录。")
             self._btn_load_config.setEnabled(False)
+            self._btn_open_report.setEnabled(False)
+            self._btn_link_subject.setEnabled(False)
             return
         self._show_session_detail(session)
         self._btn_load_config.setEnabled(True)
+        self._btn_open_report.setEnabled(bool(session.report_detail))
+        self._btn_link_subject.setEnabled(session.subject_id is None)
 
     def _selected_session(self) -> SessionRecord | None:
         row = self._session_table.currentRow()
@@ -196,6 +301,7 @@ class HistoryView(QWidget):
         config = session.config
         summary = session.report_summary
         lines = [
+            f"运动员: {self._session_subject_name(session)}",
             f"测试时间: {session.started_at[:16]}",
             f"测试类型: {session.test_type}",
             f"结束原因: {_finish_reason_label(session.finish_reason)}",
@@ -234,6 +340,65 @@ class HistoryView(QWidget):
             QMessageBox.information(self, "加载该次参数", "请先选择一条历史记录。")
             return
         self.load_config_requested.emit(session.config)
+
+    def _on_open_report_clicked(self) -> None:
+        session = self._selected_session()
+        if session is None:
+            QMessageBox.information(self, "打开报告", "请先选择一条历史记录。")
+            return
+        try:
+            report = session.report
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "打开报告", f"该记录无法重建报告：{exc}")
+            return
+        self.open_report_requested.emit(report)
+
+    def _on_link_subject_clicked(self) -> None:
+        session = self._selected_session()
+        if session is None or session.subject_id is not None:
+            return
+        if self._subject_store is None:
+            QMessageBox.warning(self, "关联运动员", "本地运动员数据不可用。")
+            return
+        results = self._subject_store.search_subjects()
+        if not results:
+            QMessageBox.information(
+                self, "关联运动员", "请先在“运动员”模块创建运动员。"
+            )
+            return
+        labels = [result.subject.display_name for result in results]
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "关联运动员",
+            "选择运动员：",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        match = next(
+            result for result in results if result.subject.display_name == selected
+        )
+        try:
+            self._subject_store.link_session_to_subject(
+                session.id, match.subject.id
+            )
+        except Exception as exc:
+            log.exception("Failed to link session to subject")
+            QMessageBox.warning(self, "关联运动员", f"关联失败：{exc}")
+            return
+        if self._subject_result is None:
+            self.load_all()
+        else:
+            self.load_subject(self._subject_result)
+
+    def _session_subject_name(self, session: SessionRecord) -> str:
+        if self._subject_store is not None and session.subject_id is not None:
+            subject = self._subject_store.get_subject(session.subject_id)
+            if subject is not None:
+                return subject.display_name
+        return session.subject_snapshot.get("display_name") or "临时测试"
 
 
 def _finish_reason_label(reason: str | None) -> str:

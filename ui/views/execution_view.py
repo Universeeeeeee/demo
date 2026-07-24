@@ -118,6 +118,7 @@ class ExecutionView(QWidget):
     """实时测试核心页 — 仪表盘 + 图表 + 控制栏。"""
 
     start_requested = Signal()
+    return_config_requested = Signal()
     pause_requested = Signal()
     stop_requested = Signal()
     camera_requested = Signal(str)
@@ -151,6 +152,7 @@ class ExecutionView(QWidget):
 
         # 暂停状态
         self._paused = False
+        self._device_state = "disconnected"
         self._latest_footprint_frame = None
 
         self._build_ui()
@@ -381,22 +383,53 @@ class ExecutionView(QWidget):
         self._controls_layout.setContentsMargins(0, 0, 0, 0)
         self._controls_layout.setSpacing(12)
 
+        self.btn_return_config = MPushButton("返回配置")
+        self.btn_return_config.setMinimumHeight(50)
+        self.btn_return_config.setMinimumWidth(120)
+        self.btn_return_config.setStyleSheet(
+            "background: #1a2230; border: 1px solid #354151;"
+            "border-radius: 8px; color: #d9dee8; font-size: 13pt;"
+        )
+        self.btn_return_config.clicked.connect(self.return_config_requested)
+        self._controls_layout.addWidget(self.btn_return_config)
+
         self.btn_start = MPushButton("▶ 开始采集").primary()
         self.btn_start.setMinimumHeight(50)
-        self.btn_start.setStyleSheet("font-size: 16pt; font-weight: bold; border-radius: 8px;")
+        self.btn_start.setStyleSheet(
+            "QPushButton {"
+            "  background: #ff7a00;"
+            "  border: 1px solid #ff7a00;"
+            "  border-radius: 8px;"
+            "  color: white;"
+            "  font-size: 16pt;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover { background: #ff8a1f; }"
+            "QPushButton:disabled {"
+            "  background: #252d38;"
+            "  border-color: #303a47;"
+            "  color: #768294;"
+            "}"
+        )
         self.btn_start.clicked.connect(self._on_start)
-        self._controls_layout.addWidget(self.btn_start)
+        self._controls_layout.addWidget(self.btn_start, 1)
 
         self.btn_pause = MPushButton("⏸ 暂停")
         self.btn_pause.setMinimumHeight(50)
-        self.btn_pause.setStyleSheet("font-size: 14pt; border-radius: 8px;")
+        self.btn_pause.setStyleSheet(
+            "background: #1a2230; border: 1px solid #354151;"
+            "border-radius: 8px; color: #e7ebf2; font-size: 14pt;"
+        )
         self.btn_pause.clicked.connect(self._on_pause)
         self.btn_pause.hide()
         self._controls_layout.addWidget(self.btn_pause)
 
         self.btn_stop = MPushButton("结束")
         self.btn_stop.setMinimumHeight(50)
-        self.btn_stop.setStyleSheet("font-size: 14pt; border-radius: 8px;")
+        self.btn_stop.setStyleSheet(
+            "background: #402226; border: 1px solid #704047;"
+            "border-radius: 8px; color: #ffb2b2; font-size: 14pt;"
+        )
         self.btn_stop.clicked.connect(self._on_stop)
         self.btn_stop.hide()
         self._controls_layout.addWidget(self.btn_stop)
@@ -463,9 +496,51 @@ class ExecutionView(QWidget):
 
         # 按钮状态: 显示"开始"
         self.btn_start.show()
+        self.btn_return_config.show()
+        self.btn_start.setText("开始采集")
+        self.btn_start.setEnabled(False)
         self.btn_pause.hide()
         self.btn_stop.hide()
-        self._device_label.setText("等待连接...")
+        self._device_state = "connecting"
+        self._device_label.setText("● 正在连接设备...")
+
+    def on_device_state(self, state: str, message: str):
+        """Update acquisition controls from the structured device state."""
+        self._device_state = state
+        labels = {
+            "disconnected": ("● 设备未连接", "#8f9bad"),
+            "connecting": ("● 正在连接设备...", "#f0a24a"),
+            "connected": ("● 设备已连接", "#7ecf68"),
+            "streaming": ("● 正在采集", "#7ecf68"),
+            "error": (f"● {message}", "#f06a6a"),
+        }
+        text, color = labels.get(state, (message or state, "#8f9bad"))
+        self._device_label.setText(text)
+        self._device_label.setToolTip(message)
+        self._device_label.setStyleSheet(f"font-size: 10pt; color: {color};")
+        if state == "connected":
+            self.btn_start.setText("开始采集")
+            self.btn_start.setEnabled(True)
+        elif state == "error":
+            self.btn_start.setText("重试设备")
+            self.btn_start.setEnabled(True)
+            self.btn_start.show()
+            self.btn_pause.hide()
+            self.btn_stop.hide()
+        elif state in {"disconnected", "connecting"}:
+            self.btn_start.setText("开始采集")
+            self.btn_start.setEnabled(False)
+
+    def on_session_started(self):
+        """Enter the running UI only after the device confirms streaming."""
+        self._mode_label.setText(
+            f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 运行中"
+        )
+        self.btn_start.hide()
+        self.btn_return_config.hide()
+        self.btn_pause.show()
+        self.btn_stop.show()
+        self._start_countdown()
 
     def set_tinyse_available(self, available: bool):
         """由 MainWindow 调用, 更新 Tiny SE 按钮提示."""
@@ -797,21 +872,22 @@ class ExecutionView(QWidget):
     # ------------------------------------------------------------------
 
     def _on_start(self):
-        self._mode_label.setText(
-            f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 运行中"
-        )
-        self.btn_start.hide()
-        self.btn_pause.show()
-        self.btn_stop.show()
-        self._start_countdown()
+        if self._device_state == "error":
+            self._device_label.setText("● 正在重新连接设备...")
+        else:
+            self._mode_label.setText(
+                f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 正在启动"
+            )
+        self.btn_start.setEnabled(False)
         self.start_requested.emit()
 
     def _on_pause(self):
         if not self._paused:
             self._paused = True
-            self.btn_pause.setText("▶ 继续")
+            self.btn_pause.setText("▶ 继续分析")
             self._mode_label.setText(
-                f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 已暂停"
+                f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'}"
+                " · 暂停分析（计时继续）"
             )
         else:
             self._paused = False

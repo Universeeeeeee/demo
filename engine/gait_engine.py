@@ -183,6 +183,12 @@ class GaitEngine(QObject):
         self._start_time = t
         self._start_timer()
 
+    @Slot(float)
+    def begin_session(self, t: float):
+        """Enable processing and establish the time base immediately before capture."""
+        self._paused = False
+        self.set_start_time(t)
+
     def set_mode(self, mode: str):
         """切换模式并重置内部状态"""
         if mode == "纵跳":

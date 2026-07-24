@@ -327,7 +327,7 @@ class ReportView(QWidget):
         self.btn_export.clicked.connect(self._on_export)
         btn_layout.addWidget(self.btn_export)
 
-        self.btn_home = MPushButton("🏠 返回首页").primary()
+        self.btn_home = MPushButton("返回测试").primary()
         self.btn_home.setMinimumHeight(45)
         self.btn_home.setMinimumWidth(160)
         self.btn_home.setStyleSheet("font-size: 14pt; font-weight: bold; border-radius: 8px;")
