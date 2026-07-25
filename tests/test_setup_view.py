@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtWidgets import QApplication, QFrame, QLabel
+from qtpy.QtWidgets import QApplication, QFrame, QLabel, QSizePolicy, QSpinBox
 
 from config.treadmill_config import TreadmillGaitConfig
 from config.test_config import TestConfig as RuntimeTestConfig
@@ -39,8 +39,8 @@ def test_setup_view_accepts_treadmill_gait_config_without_attribute_error():
 
     summary_text = view._summary_label.text()
     assert "跑步机步态" in summary_text
-    assert "速度 5.5 km/h" in summary_text
-    assert "方向 Interface side" in summary_text
+    assert "速度：5.5 km/h" in summary_text
+    assert "方向：Interface side" in summary_text
     assert view.btn_ready.isEnabled()
 
 
@@ -68,8 +68,44 @@ def test_setup_view_uses_application_page_header_and_two_stage_action():
     assert "配置测试参数并连接设备" in labels
     assert "IronJump 步态分析系统" not in labels
     assert view.btn_ready.text() == "进入测试准备"
-    assert view._device_status_label.text() == "● 设备将在测试界面检查"
+    assert "● 设备将在测试界面检查" not in labels
     assert view.findChild(QFrame, "ConfigSummaryCard") is not None
+    assert (
+        view._status_bar.sizePolicy().verticalPolicy()
+        == QSizePolicy.Preferred
+    )
+
+
+def test_new_subject_dialog_uses_complete_dark_theme():
+    _app()
+    view = SetupView()
+
+    dialog, _name, birth_year, _level = view._build_new_subject_dialog()
+
+    assert dialog.objectName() == "NewSubjectDialog"
+    assert "#121923" in dialog.styleSheet()
+    assert isinstance(birth_year, QSpinBox)
+    assert "QSpinBox" in dialog.styleSheet()
+
+
+def test_config_summary_is_readable_and_structured():
+    app = _app()
+    view = SetupView()
+    config = RuntimeTestConfig(
+        start_type="Status change",
+        stop_type="Status change",
+        number_of_jumps=3,
+    )
+
+    view._set_current_config(config, "manual")
+    view.show()
+    app.processEvents()
+
+    assert view._summary_label.font().pixelSize() >= 13
+    assert "手动配置 · 纵跳" in view._summary_label.text()
+    assert "启动：Status change" in view._summary_label.text()
+    assert "\n" in view._summary_label.text()
+    assert view._summary_label.height() >= view._summary_label.sizeHint().height()
 
 
 def test_all_config_sources_use_final_validation():

@@ -275,6 +275,52 @@ def test_stat_card_reduces_font_for_long_values():
     assert "font-size: 18pt" in card._value.styleSheet()
 
 
+def test_jump_report_cards_scroll_instead_of_overlapping_at_minimum_height(qtbot):
+    report = JumpTestReport(
+        touch_count=5,
+        lift_count=5,
+        air_times=(0.40, 0.42, 0.39),
+        contact_times=(0.20, 0.21, 0.22),
+        cycle_times=(0.60, 0.63, 0.61),
+        avg_jump_height=0.198,
+        max_jump_height=0.216,
+        avg_air_time=0.403,
+        max_air_time=0.420,
+        avg_contact_time=0.210,
+        avg_cadence=97.8,
+        finish_reason="jump_count_reached",
+        jump_heights=(0.196, 0.216, 0.190),
+        cadences=(100.0, 95.2, 98.4),
+        min_jump_height=0.190,
+        std_jump_height=0.011,
+        min_air_time=0.390,
+        std_air_time=0.012,
+        min_contact_time=0.200,
+        max_contact_time=0.220,
+        std_contact_time=0.008,
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+    view.resize(996, 720)
+    view.load_report(report)
+    view.show()
+    QApplication.processEvents()
+
+    visible_cards = [card for card in view._stat_cards if card.isVisible()]
+    for column_x in {card.x() for card in visible_cards}:
+        column = sorted(
+            (card for card in visible_cards if card.x() == column_x),
+            key=lambda card: card.y(),
+        )
+        for previous, current in zip(column, column[1:]):
+            assert previous.geometry().bottom() < current.geometry().top()
+
+    assert view._stats_scroll.verticalScrollBar().maximum() > 0
+    assert view._tabs.objectName() == "ReportTabs"
+    assert view.btn_export.objectName() == "ReportSecondaryButton"
+    assert view.btn_home.objectName() == "ReportPrimaryButton"
+
+
 def _step(index: int, side: str):
     from config.treadmill_report import TreadmillStepResult
 

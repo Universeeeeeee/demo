@@ -204,6 +204,29 @@ def test_execution_view_shows_current_and_completed_gait_cycles(qtbot):
     assert view._completed_cycle_table.rowCount() == 1
 
 
+def test_completed_cycle_table_keeps_dark_background(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.resize(1180, 720)
+    view.show()
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+    QApplication.processEvents()
+
+    viewport = view._completed_cycle_table.viewport()
+    background = viewport.grab().toImage().pixelColor(
+        viewport.width() // 2,
+        viewport.height() // 2,
+    )
+    assert background.lightness() < 80
+
+
 def test_completed_gait_cycles_show_newest_first_and_return_to_top(qtbot):
     view = ExecutionView()
     qtbot.addWidget(view)

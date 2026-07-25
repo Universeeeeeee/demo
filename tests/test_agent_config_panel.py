@@ -191,14 +191,36 @@ class AgentConfigPanelRequestLifecycleTest(unittest.TestCase):
         self.assertIsInstance(finished[0][0], TreadmillGaitConfig)
         self.assertEqual(finished[0][0].treadmill_speed, 5.5)
 
-    def test_offline_rule_mode_rejects_treadmill_mode_without_crash(self):
-        self.panel._test_type_combo.setCurrentText("Treadmill Gait Test")
-        self.panel._mode_combo.setCurrentText("离线规则")
+    def test_intelligent_config_hides_provider_and_offline_controls(self):
+        self.panel.resize(900, 600)
+        self.panel.show()
+        QApplication.processEvents()
 
-        self.panel._on_offline_generate()
+        self.assertFalse(hasattr(self.panel, "_mode_combo"))
+        self.assertFalse(hasattr(self.panel, "_offline_btn"))
+        self.assertEqual(self.panel._assistant_title.text(), "配置助手")
+        self.assertGreaterEqual(
+            self.panel._assistant_title.width(),
+            self.panel._assistant_title.sizeHint().width(),
+        )
+        self.assertTrue(self.panel._status_label.isHidden())
 
-        self.assertIsNone(self.panel._pending_config)
-        self.assertIn("离线规则暂不支持", self.panel._chat_display.toPlainText())
+    def test_intelligent_config_reflows_without_clipping_at_narrow_width(self):
+        self.panel.setFixedSize(620, 480)
+        self.panel.show()
+        QApplication.processEvents()
+
+        self.assertTrue(self.panel._compact_layout)
+        self.assertGreaterEqual(
+            self.panel._assistant_title.width(),
+            self.panel._assistant_title.sizeHint().width(),
+        )
+        for card in (
+            self.panel._profile_card,
+            self.panel._chat_card,
+            self.panel._suggestion_card,
+        ):
+            self.assertTrue(self.panel.rect().contains(card.geometry()))
 
 
 if __name__ == "__main__":

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from qtpy.QtCore import QObject, Signal
 from qtpy.QtTest import QSignalSpy
-from qtpy.QtWidgets import QMessageBox
+from qtpy.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from config.test_config import default_jump_config
 from config.test_report import JumpTestReport
 from data.subject_store import SubjectStore
 from ui.app_shell import MODULE_ATHLETES, MODULE_SETTINGS, MODULE_TEST
 from ui.main_window import MainWindow
+from ui.views.athletes_view import _SubjectDialog
 from ui.views.setup_view import SessionSetup
 
 
@@ -90,6 +91,30 @@ def test_application_navigation_routes_four_modules(qtbot, tmp_path):
     window._request_module(MODULE_SETTINGS)
     assert window._stack.currentWidget() is window._settings_view
     assert window._shell.sidebar.buttons[MODULE_SETTINGS].isChecked()
+
+
+def test_application_dialogs_use_dark_theme(qtbot, tmp_path):
+    window, _controller = _window(qtbot, tmp_path)
+    window.show()
+
+    athlete_dialog = _SubjectDialog(parent=window._athletes_view)
+    input_dialog = QInputDialog(window._history_view)
+    input_dialog.setLabelText("选择运动员：")
+    input_dialog.setComboBoxItems(["张三", "李四"])
+    message_box = QMessageBox(
+        QMessageBox.Information,
+        "提示",
+        "系统消息框应保持深色主题。",
+        QMessageBox.Ok | QMessageBox.Cancel,
+        window,
+    )
+
+    for dialog in (athlete_dialog, input_dialog, message_box):
+        qtbot.addWidget(dialog)
+        dialog.show()
+        QApplication.processEvents()
+        background = dialog.grab().toImage().pixelColor(5, 5)
+        assert background.lightness() < 80
 
 
 def test_config_submission_enters_execution_without_starting_capture(qtbot, tmp_path):

@@ -59,6 +59,89 @@ except Exception:
 
 G = 9.81
 
+REPORT_QSS = """
+QWidget#ReportViewRoot {
+    background-color: #0c1119;
+    color: #e7ebf2;
+}
+QTabWidget#ReportTabs::pane {
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background-color: #0c1119;
+}
+QTabWidget#ReportTabs QTabBar::tab {
+    min-width: 96px;
+    min-height: 30px;
+    padding: 4px 16px;
+    border: 1px solid #354151;
+    border-bottom: none;
+    background-color: #171f2b;
+    color: #aeb7c5;
+}
+QTabWidget#ReportTabs QTabBar::tab:selected {
+    background-color: #222d3c;
+    color: #ff8a1f;
+    font-weight: 650;
+}
+QTabWidget#ReportTabs QTabBar::tab:hover {
+    background-color: #1d2735;
+    color: #f4f6f9;
+}
+QScrollArea#StatsScroll,
+QScrollArea#StatsScroll QWidget#qt_scrollarea_viewport,
+QWidget#StatsContent {
+    background: transparent;
+    border: none;
+}
+QScrollArea#StatsScroll QScrollBar:vertical {
+    width: 10px;
+    margin: 0;
+    border: none;
+    background-color: #0f1620;
+}
+QScrollArea#StatsScroll QScrollBar::handle:vertical {
+    min-height: 32px;
+    border-radius: 5px;
+    background-color: #3a4656;
+}
+QScrollArea#StatsScroll QScrollBar::handle:vertical:hover {
+    background-color: #4b596b;
+}
+QScrollArea#StatsScroll QScrollBar::add-line:vertical,
+QScrollArea#StatsScroll QScrollBar::sub-line:vertical {
+    height: 0;
+    background: transparent;
+}
+QScrollArea#StatsScroll QScrollBar::add-page:vertical,
+QScrollArea#StatsScroll QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QPushButton#ReportSecondaryButton,
+QPushButton#ReportPrimaryButton {
+    min-height: 45px;
+    min-width: 160px;
+    border-radius: 8px;
+    font-size: 14pt;
+}
+QPushButton#ReportSecondaryButton {
+    background-color: #1a2230;
+    border: 1px solid #354151;
+    color: #d9dee8;
+}
+QPushButton#ReportSecondaryButton:hover {
+    background-color: #232d3c;
+}
+QPushButton#ReportPrimaryButton {
+    background-color: #ff7a00;
+    border: 1px solid #ff7a00;
+    color: white;
+    font-weight: 700;
+}
+QPushButton#ReportPrimaryButton:hover {
+    background-color: #ff8a1f;
+}
+"""
+
 
 # ======================================================================
 #  StatCard — 报告页统计卡片 (比 ExecutionView 的 MetricCard 更紧凑)
@@ -203,6 +286,8 @@ class ReportView(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        self.setObjectName("ReportViewRoot")
+        self.setStyleSheet(REPORT_QSS)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 15, 20, 15)
         main_layout.setSpacing(12)
@@ -225,11 +310,8 @@ class ReportView(QWidget):
 
         # ===== 内容区: 概览页 + 明细页 =====
         self._tabs = QTabWidget()
+        self._tabs.setObjectName("ReportTabs")
         self._tabs.setDocumentMode(True)
-        self._tabs.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #444; border-radius: 6px; }"
-            "QTabBar::tab { min-width: 96px; min-height: 30px; padding: 4px 16px; }"
-        )
 
         self._overview_page = QWidget()
         content_layout = QHBoxLayout(self._overview_page)
@@ -238,9 +320,10 @@ class ReportView(QWidget):
 
         # --- 左侧: 统计卡片网格 ---
         left_container = QWidget()
-        left_container.setMinimumWidth(360)
-        left_container.setMaximumWidth(560)
-        left_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        left_container.setObjectName("StatsContent")
+        left_container.setMinimumWidth(380)
+        left_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        self._stats_content = left_container
         self._stats_layout = QGridLayout(left_container)
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
         self._stats_layout.setSpacing(8)
@@ -254,7 +337,18 @@ class ReportView(QWidget):
             self._stats_layout.addWidget(card, row, col)
             self._stat_cards.append(card)
 
-        content_layout.addWidget(left_container, 0)
+        self._stats_scroll = QScrollArea()
+        self._stats_scroll.setObjectName("StatsScroll")
+        self._stats_scroll.setWidgetResizable(True)
+        self._stats_scroll.setFrameShape(QFrame.NoFrame)
+        self._stats_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._stats_scroll.setMinimumWidth(400)
+        self._stats_scroll.setMaximumWidth(560)
+        self._stats_scroll.setSizePolicy(
+            QSizePolicy.Preferred, QSizePolicy.Expanding
+        )
+        self._stats_scroll.setWidget(left_container)
+        content_layout.addWidget(self._stats_scroll, 0)
         content_layout.addStretch(1)
 
         # --- 右侧: 图表回顾 ---
@@ -321,16 +415,16 @@ class ReportView(QWidget):
         btn_layout.addStretch()
 
         self.btn_export = MPushButton("📥 导出 Excel")
+        self.btn_export.setObjectName("ReportSecondaryButton")
         self.btn_export.setMinimumHeight(45)
         self.btn_export.setMinimumWidth(160)
-        self.btn_export.setStyleSheet("font-size: 14pt; border-radius: 8px;")
         self.btn_export.clicked.connect(self._on_export)
         btn_layout.addWidget(self.btn_export)
 
         self.btn_home = MPushButton("返回测试").primary()
+        self.btn_home.setObjectName("ReportPrimaryButton")
         self.btn_home.setMinimumHeight(45)
         self.btn_home.setMinimumWidth(160)
-        self.btn_home.setStyleSheet("font-size: 14pt; font-weight: bold; border-radius: 8px;")
         self.btn_home.clicked.connect(self.return_home)
         btn_layout.addWidget(self.btn_home)
 
@@ -854,6 +948,9 @@ class ReportView(QWidget):
                 card.show()
             else:
                 card.hide()
+        self._stats_layout.invalidate()
+        self._stats_content.adjustSize()
+        self._stats_content.updateGeometry()
 
     def _on_export(self):
         """导出原始帧数据为 Excel。"""

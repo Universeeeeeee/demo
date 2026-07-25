@@ -53,14 +53,6 @@ QLabel#PageSubtitle {
   color: #8f9bad;
   font-size: 11px;
 }
-QLabel#DeviceStatusChip {
-  color: #d4dae4;
-  background-color: #121923;
-  border: 1px solid #303b49;
-  border-radius: 7px;
-  padding: 7px 11px;
-  font-size: 11px;
-}
 QLabel#SummaryTitle {
   color: #f2f5f9;
   font-size: 15px;
@@ -68,17 +60,16 @@ QLabel#SummaryTitle {
 }
 QLabel#SummaryState {
   color: #ff9a3d;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 QLabel#SummaryText {
   color: #c7cfdb;
-  font-size: 11px;
-  line-height: 145%;
+  font-size: 13px;
 }
 QLabel#SummaryHint {
   color: #7f8a9a;
-  font-size: 10px;
+  font-size: 11px;
 }
 QLineEdit, QComboBox {
   min-height: 32px;
@@ -139,6 +130,57 @@ QMenu::item {
 QMenu::item:selected {
   background-color: rgba(255, 133, 15, 0.22);
 }
+QScrollArea#ManualConfigScroll,
+QScrollArea#ManualConfigScroll QWidget#qt_scrollarea_viewport {
+  background: #121923;
+  border: none;
+}
+"""
+
+NEW_SUBJECT_DIALOG_QSS = """
+QDialog#NewSubjectDialog {
+  background-color: #121923;
+  color: #e8edf5;
+}
+QDialog#NewSubjectDialog QLabel {
+  color: #dfe5ee;
+  font-size: 12px;
+}
+QDialog#NewSubjectDialog QLineEdit,
+QDialog#NewSubjectDialog QComboBox,
+QDialog#NewSubjectDialog QSpinBox {
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid #354151;
+  background-color: #1a2230;
+  color: #e7ebf2;
+  padding: 0 10px;
+  selection-background-color: #ff7a00;
+}
+QDialog#NewSubjectDialog QComboBox::drop-down,
+QDialog#NewSubjectDialog QSpinBox::up-button,
+QDialog#NewSubjectDialog QSpinBox::down-button {
+  border: none;
+  background-color: #242e3c;
+  width: 24px;
+}
+QDialog#NewSubjectDialog QPushButton {
+  min-width: 80px;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid #354151;
+  background-color: #1a2230;
+  color: #e7ebf2;
+  padding: 0 14px;
+}
+QDialog#NewSubjectDialog QPushButton:hover {
+  background-color: #232d3c;
+}
+QDialog#NewSubjectDialog QPushButton:default {
+  background-color: #ff7a00;
+  border-color: #ff7a00;
+  color: white;
+}
 """
 
 
@@ -194,9 +236,6 @@ class SetupView(QWidget):
         title_column.addWidget(subtitle)
         header.addLayout(title_column)
         header.addStretch(1)
-        self._device_status_label = QLabel("● 设备将在测试界面检查")
-        self._device_status_label.setObjectName("DeviceStatusChip")
-        header.addWidget(self._device_status_label)
         layout.addLayout(header)
 
         workspace = QHBoxLayout()
@@ -246,6 +285,7 @@ class SetupView(QWidget):
 
         self.param_panel = ParamPanel()
         scroll = QScrollArea()
+        scroll.setObjectName("ManualConfigScroll")
         scroll.setWidget(self.param_panel)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -258,6 +298,7 @@ class SetupView(QWidget):
         self._status_bar.setObjectName("ConfigSummaryCard")
         self._status_bar.setMinimumWidth(286)
         self._status_bar.setMaximumWidth(330)
+        self._status_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         status_layout = QVBoxLayout(self._status_bar)
         status_layout.setContentsMargins(18, 18, 18, 18)
         status_layout.setSpacing(12)
@@ -272,7 +313,7 @@ class SetupView(QWidget):
         self._summary_label.setWordWrap(True)
         self._summary_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         status_layout.addWidget(self._summary_label)
-        status_layout.addStretch(1)
+        status_layout.addSpacing(8)
         summary_hint = QLabel(
             "进入测试界面后会检查设备。设备就绪后仍需点击“开始采集”。"
         )
@@ -285,7 +326,7 @@ class SetupView(QWidget):
         self.btn_ready.setObjectName("PrimaryStartButton")
         self.btn_ready.clicked.connect(self._on_ready_clicked)
         status_layout.addWidget(self.btn_ready)
-        workspace.addWidget(self._status_bar)
+        workspace.addWidget(self._status_bar, 0, Qt.AlignTop)
         layout.addLayout(workspace, 1)
 
         # ===== 连接参数变更 → 更新摘要 =====
@@ -414,28 +455,9 @@ class SetupView(QWidget):
         if self._subject_store is None:
             return
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("新建受试者")
-        form = QFormLayout(dialog)
-
-        name_edit = QLineEdit()
-        birth_year_spin = QSpinBox()
-        birth_year_spin.setRange(1900, datetime.now().year)
-        birth_year_spin.setValue(1990)
-
-        level_combo = QComboBox()
-        level_combo.addItems(["beginner", "intermediate", "advanced"])
-        level_combo.setCurrentText("intermediate")
-
-        form.addRow("姓名", name_edit)
-        form.addRow("出生年份", birth_year_spin)
-        form.addRow("训练水平", level_combo)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
-
+        dialog, name_edit, birth_year_spin, level_combo = (
+            self._build_new_subject_dialog()
+        )
         if dialog.exec_() != QDialog.Accepted:
             return
 
@@ -466,6 +488,40 @@ class SetupView(QWidget):
         if created is not None:
             self._add_or_select_subject(created)
         self._sync_subject_to_agent()
+
+    def _build_new_subject_dialog(
+        self,
+    ) -> tuple[QDialog, QLineEdit, QSpinBox, QComboBox]:
+        dialog = QDialog(self)
+        dialog.setObjectName("NewSubjectDialog")
+        dialog.setWindowTitle("新建受试者")
+        dialog.setMinimumWidth(380)
+        dialog.setStyleSheet(NEW_SUBJECT_DIALOG_QSS)
+        form = QFormLayout(dialog)
+        form.setContentsMargins(20, 20, 20, 20)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(12)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+
+        name_edit = QLineEdit()
+        birth_year_spin = QSpinBox()
+        birth_year_spin.setRange(1900, datetime.now().year)
+        birth_year_spin.setValue(1990)
+
+        level_combo = QComboBox()
+        level_combo.addItems(["beginner", "intermediate", "advanced"])
+        level_combo.setCurrentText("intermediate")
+
+        form.addRow("姓名", name_edit)
+        form.addRow("出生年份", birth_year_spin)
+        form.addRow("训练水平", level_combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        return dialog, name_edit, birth_year_spin, level_combo
 
     def _find_subject_result(
         self, query: str, subject_id: int
@@ -582,6 +638,7 @@ class SetupView(QWidget):
         if config is None:
             self._summary_label.setText("未确认，请生成建议配置或切换到手动配置。")
             self._summary_state_label.setText("等待确认")
+            self._sync_summary_label_height()
             if hasattr(self, "btn_ready"):
                 self.btn_ready.setEnabled(False)
             return
@@ -592,26 +649,28 @@ class SetupView(QWidget):
             "last_session": "上次参数",
             "history": "历史参数",
         }
-        parts = [
-            f"{source_labels.get(self._config_source or '', '当前配置')}",
-            f"{getattr(config, 'mode_label', config.test_type)}",
-            f"停止 {config.stop_type}",
-        ]
+        source = source_labels.get(self._config_source or "", "当前配置")
+        mode = getattr(config, "mode_label", config.test_type)
+        parts = [f"{source} · {mode}"]
         if hasattr(config, "start_type"):
-            parts.append(f"启动 {config.start_type}")
+            parts.append(f"启动：{config.start_type}")
+        parts.append(f"停止：{config.stop_type}")
         if getattr(config, "number_of_jumps", None):
-            parts.append(f"目标 {config.number_of_jumps} 次")
+            parts.append(f"目标：{config.number_of_jumps} 次")
         if getattr(config, "test_length", None):
-            parts.append(f"时长 {config.test_length}")
+            parts.append(f"时长：{config.test_length}")
         if hasattr(config, "treadmill_speed"):
-            parts.append(f"速度 {config.treadmill_speed:g} km/h")
+            parts.append(f"速度：{config.treadmill_speed:g} km/h")
         if hasattr(config, "direction"):
-            parts.append(f"方向 {config.direction}")
-        parts.append(f"阈值 >{config.min_contact_time}ms / >{config.min_flight_time}ms")
+            parts.append(f"方向：{config.direction}")
+        parts.append(
+            f"阈值：接触 >{config.min_contact_time} ms / "
+            f"腾空 >{config.min_flight_time} ms"
+        )
         if getattr(config, "metronome_enabled", False):
-            parts.append(f"节拍器 {config.metronome_bpm} BPM")
+            parts.append(f"节拍器：{config.metronome_bpm} BPM")
 
-        self._summary_label.setText("  ·  ".join(parts))
+        self._summary_label.setText("\n".join(parts))
         if self._config_errors:
             self._summary_state_label.setText("配置需要修正")
             self._summary_label.setText(
@@ -621,8 +680,21 @@ class SetupView(QWidget):
             )
         else:
             self._summary_state_label.setText("配置已确认")
+        self._sync_summary_label_height()
         if hasattr(self, "btn_ready"):
             self.btn_ready.setEnabled(not self._config_errors)
+
+    def _sync_summary_label_height(self) -> None:
+        self._summary_label.ensurePolished()
+        content_width = max(220, self._status_bar.minimumWidth() - 36)
+        content_height = self._summary_label.heightForWidth(content_width)
+        minimum_height = max(
+            content_height,
+            self._summary_label.fontMetrics().lineSpacing() * 2,
+        )
+        self._summary_label.setMinimumHeight(minimum_height)
+        self._summary_label.updateGeometry()
+        self._status_bar.updateGeometry()
 
     def _on_ready_clicked(self):
         """收集配置并发射信号。"""

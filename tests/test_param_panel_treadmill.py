@@ -131,6 +131,20 @@ class TestParamPanelTreadmill:
         ]
         assert not self._panel._optional_section.isVisible()
 
+    def test_manual_form_owns_a_dark_theme_without_global_dayu_theme(self) -> None:
+        self._panel.resize(900, 600)
+        self._panel.show()
+        QApplication.processEvents()
+
+        assert self._panel.objectName() == "ParamPanelRoot"
+        assert "#121923" in self._panel.styleSheet()
+        assert self._panel.grab().toImage().pixelColor(5, 5).lightness() < 80
+        assert all(
+            row.objectName() == "ParamFormRow"
+            for name, row in self._panel._rows.items()
+            if name != "metronome_enabled"
+        )
+
     # ------------------------------------------------------------------
     #  get_config() returns correct type
     # ------------------------------------------------------------------

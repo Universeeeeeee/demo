@@ -32,6 +32,7 @@ from config.test_config import TestConfig
 from config.test_report import TestReport
 from data.subject_store import SubjectProfile, SubjectStore
 from ui.app_shell import (
+    APP_DIALOG_QSS,
     MODULE_ATHLETES,
     MODULE_RESULTS,
     MODULE_SETTINGS,
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
     ):
         super().__init__(parent)
 
+        self.setStyleSheet(APP_DIALOG_QSS)
         self.setWindowTitle("IronJump")
         self.setMinimumSize(1180, 720)
         self.resize(1400, 820)

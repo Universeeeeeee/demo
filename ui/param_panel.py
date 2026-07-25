@@ -4,9 +4,8 @@ param_panel.py — Jump Test 参数配置面板
 动态生成表单控件，处理 stop_type 联动显隐，
 对外提供 get_config() -> TestConfig 接口。
 
-使用 dayu_widgets 保持 UI 风格统一:
-  - MLabel:       标签
-  - MDivider:     分组标题
+使用局部深色 QSS，避免依赖主窗口的全局 Dayu 主题:
+  - QLabel:       标签和分组标题
   - MSpinBox:     整数输入
   - MTimeEdit:    时间输入 (mm:ss)
   - MSwitch:      布尔开关
@@ -19,17 +18,95 @@ from __future__ import annotations
 from qtpy.QtCore import QSignalBlocker, Signal, Qt, QTime
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox,
-    QDoubleSpinBox, QSizePolicy,
+    QDoubleSpinBox, QLabel, QSizePolicy,
 )
 
-from dayu_widgets.divider import MDivider
-from dayu_widgets.label import MLabel
 from dayu_widgets.spin_box import MSpinBox, MTimeEdit
 from dayu_widgets.switch import MSwitch
 from dayu_widgets.collapse import MSectionItem
 
 from config.param_schema import ParamSchema, ParamDef, get_schema
 from config.test_config import AnyTestConfig, TestConfig, config_from_dict
+
+
+PARAM_PANEL_QSS = """
+QWidget#ParamPanelRoot {
+    background: #121923;
+    color: #e7ebf2;
+}
+QLabel#ParamSectionTitle {
+    color: #f2f5fa;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 2px 0 6px 2px;
+}
+QWidget#ParamFormRow {
+    background: #171f2b;
+    border: 1px solid #293442;
+    border-radius: 8px;
+}
+QLabel#ParamFieldLabel {
+    color: #9da8b8;
+    background: transparent;
+    border: none;
+    font-size: 12px;
+}
+QComboBox,
+QSpinBox,
+QDoubleSpinBox,
+QTimeEdit {
+    min-height: 34px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background: #1a2230;
+    color: #e7ebf2;
+    padding: 0 9px;
+    font-size: 13px;
+    selection-background-color: #ff7a00;
+}
+QComboBox:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QTimeEdit:hover {
+    border-color: #59677a;
+}
+QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QTimeEdit:focus {
+    border-color: #ff7a00;
+}
+QComboBox QAbstractItemView {
+    background: #1a2230;
+    color: #e7ebf2;
+    border: 1px solid #354151;
+    selection-background-color: #273446;
+}
+QAbstractSpinBox::up-button,
+QAbstractSpinBox::down-button {
+    width: 22px;
+    background: #202a38;
+    border-left: 1px solid #354151;
+}
+QWidget#ParamFilterSection {
+    background: transparent;
+    color: #d9dee8;
+}
+QWidget#ParamFilterSection QWidget#title {
+    min-height: 34px;
+    background: #151d28;
+    border: 1px solid #293442;
+    border-radius: 6px;
+}
+QWidget#ParamFilterSection QWidget#title QLabel {
+    color: #cfd6e3;
+    background: transparent;
+    border: none;
+}
+QWidget#ParamFilterContent {
+    background: transparent;
+}
+"""
 
 
 class ParamPanel(QWidget):
@@ -78,6 +155,9 @@ class ParamPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("ParamPanelRoot")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(PARAM_PANEL_QSS)
 
         self._schema: ParamSchema = get_schema()
         self._test_type: str = "Jump Test"
@@ -211,7 +291,9 @@ class ParamPanel(QWidget):
         main_layout.setSpacing(10)
 
         # ===== 基础配置 =====
-        main_layout.addWidget(MDivider("基础配置"))
+        section_title = QLabel("基础配置")
+        section_title.setObjectName("ParamSectionTitle")
+        main_layout.addWidget(section_title)
 
         # 测试模式：独占整行
         test_type_combo = self._create_enum_widget("test_type")
@@ -225,6 +307,7 @@ class ParamPanel(QWidget):
 
         # ===== Layer 3: 滤波参数 (折叠, 2 列网格) =====
         self._filter_container = QWidget()
+        self._filter_container.setObjectName("ParamFilterContent")
         self._filter_grid = QGridLayout(self._filter_container)
         self._filter_grid.setContentsMargins(4, 4, 4, 4)
         self._filter_grid.setSpacing(10)
@@ -232,6 +315,7 @@ class ParamPanel(QWidget):
         self._filter_section = MSectionItem(
             title="滤波参数", widget=self._filter_container, expand=False
         )
+        self._filter_section.setObjectName("ParamFilterSection")
         main_layout.addWidget(self._filter_section)
 
         # ===== Layer 4: 可选参数 (折叠, 2 列网格) =====
@@ -397,31 +481,15 @@ class ParamPanel(QWidget):
     def _create_form_row(self, label_text: str, widget: QWidget) -> QWidget:
         """创建 FormRow: 卡片风格，标签在上、控件在下。"""
         row = QWidget()
-        row.setStyleSheet(
-            "QWidget { "
-            "  background-color: rgba(45, 45, 50, 0.7); "
-            "  border-radius: 8px; "
-            "}"
-        )
+        row.setObjectName("ParamFormRow")
 
         layout = QVBoxLayout(row)
         layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(4)
 
-        label = MLabel(label_text)
+        label = QLabel(label_text)
+        label.setObjectName("ParamFieldLabel")
         label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        label.setStyleSheet(
-            "font-size: 11pt; color: #999999; "
-            "background: transparent; border: none;"
-        )
-
-        # 控件字号增大
-        widget.setStyleSheet(
-            widget.styleSheet() + """
-            font-size: 13pt;
-            min-height: 32px;
-            """
-        )
 
         layout.addWidget(label)
         layout.addWidget(widget)

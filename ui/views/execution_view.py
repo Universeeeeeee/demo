@@ -308,6 +308,7 @@ class ExecutionView(QWidget):
         )
         cycle_layout.addWidget(self._completed_cycle_label)
         self._completed_cycle_table = QTableWidget(0, 6)
+        self._completed_cycle_table.setObjectName("CompletedCycleTable")
         self._completed_cycle_table.setHorizontalHeaderLabels([
             "序号", "脚", "步态周期 (s)", "支撑相 (s)",
             "摆动相 (s)", "双支撑 (s)",
@@ -439,6 +440,29 @@ class ExecutionView(QWidget):
     def _apply_style(self):
         self.setStyleSheet(
             "QWidget { font-family: 'Microsoft YaHei UI', sans-serif; }"
+            "QTableWidget#CompletedCycleTable {"
+            "  background-color: #121923;"
+            "  alternate-background-color: #151d28;"
+            "  color: #dfe5ee;"
+            "  border: 1px solid #293442;"
+            "  gridline-color: #26313f;"
+            "  selection-background-color: #273446;"
+            "  selection-color: white;"
+            "}"
+            "QTableWidget#CompletedCycleTable::item {"
+            "  padding: 4px;"
+            "}"
+            "QTableWidget#CompletedCycleTable QHeaderView::section {"
+            "  background-color: #171f2b;"
+            "  color: #9da8b8;"
+            "  border: none;"
+            "  border-bottom: 1px solid #2b3543;"
+            "  padding: 5px;"
+            "}"
+            "QTableWidget#CompletedCycleTable QTableCornerButton::section {"
+            "  background-color: #171f2b;"
+            "  border: none;"
+            "}"
         )
 
     # ------------------------------------------------------------------

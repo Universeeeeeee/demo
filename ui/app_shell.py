@@ -95,6 +95,68 @@ QFrame#ShellContent {
 }
 """
 
+APP_DIALOG_QSS = """
+QDialog,
+QMessageBox,
+QInputDialog {
+    background-color: #121923;
+    color: #e8edf5;
+}
+QDialog QLabel,
+QMessageBox QLabel,
+QInputDialog QLabel {
+    color: #dfe5ee;
+    background: transparent;
+}
+QDialog QLineEdit,
+QDialog QComboBox,
+QDialog QSpinBox,
+QDialog QDoubleSpinBox {
+    min-height: 34px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background-color: #1a2230;
+    color: #e7ebf2;
+    padding: 0 9px;
+    selection-background-color: #ff7a00;
+}
+QDialog QComboBox::drop-down,
+QDialog QSpinBox::up-button,
+QDialog QSpinBox::down-button,
+QDialog QDoubleSpinBox::up-button,
+QDialog QDoubleSpinBox::down-button {
+    width: 24px;
+    border: none;
+    background-color: #242e3c;
+}
+QDialog QAbstractItemView {
+    background-color: #1a2230;
+    color: #e7ebf2;
+    border: 1px solid #354151;
+    selection-background-color: #34445a;
+}
+QDialog QPushButton,
+QMessageBox QPushButton {
+    min-width: 80px;
+    min-height: 34px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background-color: #1a2230;
+    color: #e7ebf2;
+    padding: 0 14px;
+}
+QDialog QPushButton:hover,
+QMessageBox QPushButton:hover {
+    background-color: #232d3c;
+}
+QDialog QPushButton:default,
+QMessageBox QPushButton:default {
+    background-color: #ff7a00;
+    border-color: #ff7a00;
+    color: white;
+}
+"""
+
 
 class ApplicationSidebar(QFrame):
     """Fixed expanded navigation. Collapsing is intentionally deferred."""
