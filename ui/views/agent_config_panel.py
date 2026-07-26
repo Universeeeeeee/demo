@@ -8,6 +8,7 @@ from html import escape
 
 from markdown_it import MarkdownIt
 from qtpy.QtCore import Qt, Signal, QThread, QTimer
+from qtpy.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox, QTextEdit,
     QFrame, QSizePolicy,
@@ -480,6 +481,19 @@ class AgentConfigPanel(QWidget):
         layout.addWidget(label_widget, row, 0)
         layout.addWidget(widget, row, 1)
 
+    def _append_chat_entry(self, label: str, body_html: str) -> None:
+        document = self._chat_display.document()
+        scrollbar = self._chat_display.verticalScrollBar()
+        follow_new_entries = scrollbar.value() == scrollbar.maximum()
+        cursor = QTextCursor(document)
+        cursor.movePosition(QTextCursor.End)
+        if not document.isEmpty():
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+        cursor.insertHtml(f"<b>{escape(label)}:</b> ")
+        cursor.insertHtml(body_html)
+        if follow_new_entries:
+            scrollbar.setValue(scrollbar.maximum())
+
     # ------------------------------------------------------------------
     # State helpers
     # ------------------------------------------------------------------
@@ -590,7 +604,7 @@ class AgentConfigPanel(QWidget):
         self._worker_ready = True
         self._worker_error = None
 
-        self._chat_display.append(f"<b>你:</b> {message}")
+        self._append_chat_entry("你", escape(message))
 
         self._chat_input.clear()
         self._active_request_id += 1
@@ -617,8 +631,7 @@ class AgentConfigPanel(QWidget):
             if worker is not None:
                 worker.deleteLater()
             return
-        self._chat_display.append("<b>AI:</b> ")
-        self._chat_display.insertHtml(_md_to_html(reply))
+        self._append_chat_entry("AI", _md_to_html(reply))
 
         if config is not None:
             self._set_pending_config(config, "智能服务已生成建议配置。")
