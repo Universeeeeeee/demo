@@ -121,6 +121,63 @@ def test_treadmill_report_uses_overview_and_details_pages():
     assert all(widget.parent() is view._details_content for widget in view._dynamic_widgets)
 
 
+def test_report_details_and_tables_use_dark_layered_theme(qtbot):
+    cycle = _cycle()
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=3,
+        lift_count=2,
+        resolved_starting_foot="left",
+        starting_foot_source="manual_override",
+        per_step_results=(_step(0, "left"),),
+        gait_cycles=(cycle,),
+        cycle_metric_summaries={"gait_cycle_s": _summary()},
+        cycle_side_summaries={
+            "left": {"gait_cycle_s": _summary()},
+            "right": {"gait_cycle_s": _summary()},
+        },
+        metric_summaries={"contact_time_s": _summary()},
+        left_right_results={"left_contact_time_s": _summary()},
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+    view.resize(1200, 720)
+    view.load_report(report)
+    view.show()
+    view._tabs.setCurrentIndex(1)
+    QApplication.processEvents()
+
+    assert view._tabs.tabBar().objectName() == "ReportTabBar"
+    assert view._details_page.objectName() == "ReportDetailsScroll"
+    assert view._details_content.objectName() == "ReportDetailsContent"
+    assert view._dynamic_widgets
+    assert all(
+        table.objectName() == "ReportDetailTable"
+        for table in view._dynamic_widgets
+        if isinstance(table, QTableWidget)
+    )
+
+    viewport = view._cycle_timeline_table.viewport()
+    background = viewport.grab().toImage().pixelColor(
+        max(viewport.width() - 5, 0),
+        max(viewport.height() - 5, 0),
+    )
+    assert background.lightness() < 80
+
+
+def test_report_replay_controls_do_not_fall_back_to_light_theme(qtbot):
+    panel = FootprintReplayPanel()
+    qtbot.addWidget(panel)
+    panel.resize(620, 520)
+    panel.show()
+    QApplication.processEvents()
+
+    assert panel._btn_play.objectName() == "ReplayButton"
+    assert panel._slider.objectName() == "ReplaySlider"
+    button_background = panel._btn_play.grab().toImage().pixelColor(5, 5)
+    assert button_background.lightness() < 80
+
+
 def test_treadmill_report_overview_keeps_tables_off_the_replay_page():
     _app()
     report = TreadmillGaitReport(

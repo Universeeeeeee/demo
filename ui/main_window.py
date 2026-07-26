@@ -248,6 +248,13 @@ class MainWindow(QMainWindow):
         self._controller.device_state_changed.connect(
             self._exec_view.on_device_state
         )
+        self._controller.device_state_changed.connect(
+            self._setup_view.on_device_state
+        )
+        self._setup_view.on_device_state(
+            getattr(self._controller, "device_state", "disconnected"),
+            "",
+        )
 
         # Controller 生命周期 → MainWindow
         self._controller.session_started.connect(self._exec_view.on_session_started)

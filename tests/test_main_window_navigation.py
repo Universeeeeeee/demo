@@ -131,6 +131,18 @@ def test_config_submission_enters_execution_without_starting_capture(qtbot, tmp_
     assert controller.starts == 1
 
 
+def test_setup_device_status_tracks_controller_without_blocking_navigation(
+    qtbot, tmp_path
+):
+    window, controller = _window(qtbot, tmp_path)
+    window._setup_view._set_current_config(default_jump_config(), "manual")
+
+    controller.device_state_changed.emit("disconnected", "设备未连接")
+
+    assert "设备未连接" in window._setup_view._device_state_label.text()
+    assert window._setup_view.btn_ready.isEnabled()
+
+
 def test_prepared_session_can_return_to_config_without_report(qtbot, tmp_path):
     window, controller = _window(qtbot, tmp_path)
     window._on_ready(SessionSetup(default_jump_config()))

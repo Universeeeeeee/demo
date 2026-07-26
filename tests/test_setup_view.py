@@ -5,7 +5,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtWidgets import QApplication, QFrame, QLabel, QSizePolicy, QSpinBox
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import (
+    QApplication,
+    QFrame,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+)
 
 from config.treadmill_config import TreadmillGaitConfig
 from config.test_config import TestConfig as RuntimeTestConfig
@@ -102,7 +110,8 @@ def test_config_summary_is_readable_and_structured():
     app.processEvents()
 
     assert view._summary_label.font().pixelSize() >= 13
-    assert "手动配置 · 纵跳" in view._summary_label.text()
+    assert "配置方式：手动配置" in view._summary_label.text()
+    assert "测试模式：纵跳" in view._summary_label.text()
     assert "启动：Status change" in view._summary_label.text()
     assert "\n" in view._summary_label.text()
     assert view._summary_label.height() >= view._summary_label.sizeHint().height()
@@ -117,3 +126,80 @@ def test_all_config_sources_use_final_validation():
         view._set_current_config(invalid, source)
         assert not view.btn_ready.isEnabled()
         assert view._config_errors
+
+
+def test_ready_button_is_outside_summary_and_fixed_to_bottom_right(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+    view.resize(1200, 720)
+    view.show()
+    QApplication.processEvents()
+
+    assert not view._status_bar.isAncestorOf(view.btn_ready)
+    assert view.rect().right() - view.btn_ready.geometry().right() <= 30
+    assert view.rect().bottom() - view.btn_ready.geometry().bottom() <= 30
+
+
+def test_filter_summary_expands_only_when_defaults_change():
+    _app()
+    view = SetupView()
+    default_config = TreadmillGaitConfig(
+        stop_type="End of Time",
+        test_length="01:00",
+        treadmill_speed=3.0,
+        direction="Opposite side",
+    )
+
+    view._set_current_config(default_config, "manual")
+
+    assert view._filter_state_label.text() == "默认配置"
+    assert view._filter_details_label.isHidden()
+
+    changed_config = TreadmillGaitConfig(
+        stop_type="End of Time",
+        test_length="01:00",
+        treadmill_speed=3.0,
+        direction="Opposite side",
+        min_contact_time=80,
+    )
+    view._set_current_config(changed_config, "manual")
+
+    assert view._filter_state_label.text() == "已修改"
+    assert not view._filter_details_label.isHidden()
+    assert "接触阈值：80 ms" in view._filter_details_label.text()
+
+
+def test_device_state_is_informational_and_does_not_block_preparation():
+    _app()
+    view = SetupView()
+    view._set_current_config(
+        TreadmillGaitConfig(
+            stop_type="End of Time",
+            test_length="01:00",
+            treadmill_speed=3.0,
+            direction="Opposite side",
+        ),
+        "manual",
+    )
+
+    view.on_device_state("disconnected", "设备未连接")
+
+    assert "设备未连接" in view._device_state_label.text()
+    assert "标称采样率：1000 Hz" in view._device_meta_label.text()
+    assert view.btn_ready.isEnabled()
+
+
+def test_manual_config_scrollbar_stays_dark_at_minimum_window_size(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+    view.resize(996, 560)
+    view._set_config_mode(1)
+    scroll = view.findChild(QScrollArea, "ManualConfigScroll")
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+    view.show()
+    QApplication.processEvents()
+
+    scrollbar = scroll.verticalScrollBar()
+    assert scrollbar.isVisible()
+    background = scrollbar.grab().toImage().pixelColor(2, 2)
+    assert background.lightness() < 80

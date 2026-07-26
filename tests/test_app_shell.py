@@ -45,3 +45,27 @@ def test_shell_emits_route_without_switching_business_content(qtbot):
     shell.set_active_module(MODULE_RESULTS)
     assert shell.sidebar.buttons[MODULE_RESULTS].isChecked()
     assert not shell.sidebar.buttons[MODULE_TEST].isChecked()
+
+
+def test_navigation_uses_larger_icons_labels_and_row_spacing(qtbot):
+    shell = ApplicationShell(QLabel("content"))
+    qtbot.addWidget(shell)
+    shell.show()
+
+    buttons = list(shell.sidebar.buttons.values())
+    for button in buttons:
+        glyph = button.findChild(QLabel, "NavGlyph")
+        label = button.findChild(QLabel, "NavLabel")
+        assert glyph is not None
+        assert label is not None
+        assert button.minimumHeight() >= 52
+        assert glyph.font().pixelSize() >= 18
+        assert label.font().pixelSize() >= 15
+
+    assert shell.sidebar.buttons[MODULE_TEST].findChild(
+        QLabel, "NavGlyph"
+    ).property("active")
+    assert not shell.sidebar.buttons[MODULE_RESULTS].findChild(
+        QLabel, "NavGlyph"
+    ).property("active")
+    assert buttons[1].geometry().top() - buttons[0].geometry().bottom() >= 10

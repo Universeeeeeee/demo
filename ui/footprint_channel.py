@@ -22,6 +22,55 @@ _SOURCE_IN = getattr(QPainter, "CompositionMode_SourceIn", None)
 if _SOURCE_IN is None:
     _SOURCE_IN = QPainter.CompositionMode.CompositionMode_SourceIn
 
+REPLAY_QSS = """
+QWidget#FootprintReplayPanel {
+    background: transparent;
+    color: #dce5f0;
+}
+QPushButton#ReplayButton {
+    min-width: 78px;
+    min-height: 30px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background-color: #1a2230;
+    color: #dce5f0;
+    padding: 0 14px;
+}
+QPushButton#ReplayButton:hover {
+    background-color: #243043;
+    border-color: #46566a;
+}
+QPushButton#ReplayButton:pressed {
+    background-color: #111923;
+}
+QSlider#ReplaySlider::groove:horizontal {
+    height: 6px;
+    border-radius: 3px;
+    background-color: #273445;
+}
+QSlider#ReplaySlider::sub-page:horizontal {
+    border-radius: 3px;
+    background-color: #ff7a00;
+}
+QSlider#ReplaySlider::add-page:horizontal {
+    border-radius: 3px;
+    background-color: #273445;
+}
+QSlider#ReplaySlider::handle:horizontal {
+    width: 16px;
+    height: 16px;
+    margin: -5px 0;
+    border: 2px solid #ff9b3d;
+    border-radius: 8px;
+    background-color: #f5f7fb;
+}
+QLabel#ReplayTimeLabel {
+    min-width: 64px;
+    color: #9ca8b8;
+    background: transparent;
+}
+"""
+
 
 class FootprintChannelWidget(QFrame):
     """Render canonical footprint frames between two 96-LED rails."""
@@ -192,6 +241,8 @@ class FootprintReplayPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("FootprintReplayPanel")
+        self.setStyleSheet(REPLAY_QSS)
         self._timeline: list = []
         self._index = 0
         self._timer = QTimer(self)
@@ -206,14 +257,17 @@ class FootprintReplayPanel(QWidget):
 
         controls = QHBoxLayout()
         self._btn_play = MPushButton("Play")
+        self._btn_play.setObjectName("ReplayButton")
         self._btn_play.clicked.connect(self._toggle_playback)
         controls.addWidget(self._btn_play)
 
         self._slider = QSlider(Qt.Horizontal)
+        self._slider.setObjectName("ReplaySlider")
         self._slider.valueChanged.connect(self._on_slider_changed)
         controls.addWidget(self._slider, 1)
 
         self._time_label = QLabel("0.000 s")
+        self._time_label.setObjectName("ReplayTimeLabel")
         controls.addWidget(self._time_label)
         layout.addLayout(controls)
 

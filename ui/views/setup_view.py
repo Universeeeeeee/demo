@@ -8,7 +8,7 @@ setup_view.py — 测试配置页
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass
 from datetime import datetime
 
 from qtpy.QtCore import Signal, Qt
@@ -69,6 +69,44 @@ QLabel#SummaryText {
 }
 QLabel#SummaryHint {
   color: #7f8a9a;
+  font-size: 11px;
+}
+QLabel#SummarySectionLabel {
+  color: #dfe5ee;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+QFrame#SummaryFilterRow {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #2b3746;
+}
+QLabel#SummaryRowLabel {
+  color: #aeb8c7;
+  font-size: 12px;
+}
+QLabel#FilterState {
+  color: #c7cfdb;
+  font-size: 12px;
+  font-weight: 600;
+}
+QLabel#FilterDetails {
+  color: #9eabba;
+  font-size: 11px;
+  padding: 0 0 5px 10px;
+}
+QFrame#DeviceStatusCard {
+  background-color: #101721;
+  border: 1px solid #2b3746;
+  border-radius: 7px;
+}
+QLabel#DeviceState {
+  font-size: 12px;
+  font-weight: 700;
+}
+QLabel#DeviceMeta {
+  color: #aeb8c7;
   font-size: 11px;
 }
 QLineEdit, QComboBox {
@@ -134,6 +172,30 @@ QScrollArea#ManualConfigScroll,
 QScrollArea#ManualConfigScroll QWidget#qt_scrollarea_viewport {
   background: #121923;
   border: none;
+}
+QScrollArea#ManualConfigScroll QScrollBar:vertical {
+  width: 10px;
+  margin: 0;
+  border: none;
+  background-color: #0c131d;
+}
+QScrollArea#ManualConfigScroll QScrollBar::handle:vertical {
+  min-height: 32px;
+  border-radius: 5px;
+  background-color: #3a485a;
+}
+QScrollArea#ManualConfigScroll QScrollBar::handle:vertical:hover {
+  background-color: #4b5b6f;
+}
+QScrollArea#ManualConfigScroll QScrollBar::add-line:vertical,
+QScrollArea#ManualConfigScroll QScrollBar::sub-line:vertical {
+  height: 0;
+  border: none;
+  background: transparent;
+}
+QScrollArea#ManualConfigScroll QScrollBar::add-page:vertical,
+QScrollArea#ManualConfigScroll QScrollBar::sub-page:vertical {
+  background: transparent;
 }
 """
 
@@ -213,6 +275,7 @@ class SetupView(QWidget):
         self._config_errors: list[str] = []
         self._config_mode_index = 0
         self._syncing_config_to_panel = False
+        self._device_state = "disconnected"
         self._build_ui()
 
     def _build_ui(self):
@@ -296,44 +359,83 @@ class SetupView(QWidget):
         # ===== 右侧配置摘要 =====
         self._status_bar = QFrame()
         self._status_bar.setObjectName("ConfigSummaryCard")
-        self._status_bar.setMinimumWidth(286)
-        self._status_bar.setMaximumWidth(330)
+        self._status_bar.setFixedWidth(330)
         self._status_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         status_layout = QVBoxLayout(self._status_bar)
         status_layout.setContentsMargins(18, 18, 18, 18)
-        status_layout.setSpacing(12)
+        status_layout.setSpacing(10)
         status_title = QLabel("当前配置")
         status_title.setObjectName("SummaryTitle")
         status_layout.addWidget(status_title)
         self._summary_state_label = QLabel("等待确认")
         self._summary_state_label.setObjectName("SummaryState")
         status_layout.addWidget(self._summary_state_label)
+        summary_section = QLabel("配置摘要")
+        summary_section.setObjectName("SummarySectionLabel")
+        status_layout.addWidget(summary_section)
         self._summary_label = QLabel("")
         self._summary_label.setObjectName("SummaryText")
         self._summary_label.setWordWrap(True)
         self._summary_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         status_layout.addWidget(self._summary_label)
-        status_layout.addSpacing(8)
-        summary_hint = QLabel(
-            "进入测试界面后会检查设备。设备就绪后仍需点击“开始采集”。"
-        )
-        summary_hint.setObjectName("SummaryHint")
-        summary_hint.setWordWrap(True)
-        status_layout.addWidget(summary_hint)
+
+        filter_row = QFrame()
+        filter_row.setObjectName("SummaryFilterRow")
+        filter_layout = QHBoxLayout(filter_row)
+        filter_layout.setContentsMargins(0, 7, 0, 8)
+        filter_layout.setSpacing(8)
+        filter_label = QLabel("滤波参数")
+        filter_label.setObjectName("SummaryRowLabel")
+        filter_layout.addWidget(filter_label)
+        filter_layout.addStretch(1)
+        self._filter_state_label = QLabel("—")
+        self._filter_state_label.setObjectName("FilterState")
+        filter_layout.addWidget(self._filter_state_label)
+        status_layout.addWidget(filter_row)
+
+        self._filter_details_label = QLabel("")
+        self._filter_details_label.setObjectName("FilterDetails")
+        self._filter_details_label.setWordWrap(True)
+        self._filter_details_label.hide()
+        status_layout.addWidget(self._filter_details_label)
+
+        device_section = QLabel("设备状态")
+        device_section.setObjectName("SummarySectionLabel")
+        status_layout.addWidget(device_section)
+
+        device_card = QFrame()
+        device_card.setObjectName("DeviceStatusCard")
+        device_layout = QVBoxLayout(device_card)
+        device_layout.setContentsMargins(12, 11, 12, 11)
+        device_layout.setSpacing(7)
+        self._device_state_label = QLabel("")
+        self._device_state_label.setObjectName("DeviceState")
+        device_layout.addWidget(self._device_state_label)
+        self._device_meta_label = QLabel("")
+        self._device_meta_label.setObjectName("DeviceMeta")
+        self._device_meta_label.setWordWrap(True)
+        device_layout.addWidget(self._device_meta_label)
+        status_layout.addWidget(device_card)
+        workspace.addWidget(self._status_bar, 0, Qt.AlignTop)
+        layout.addLayout(workspace, 1)
 
         # ===== 准备就绪按钮 =====
         self.btn_ready = QPushButton("进入测试准备")
         self.btn_ready.setObjectName("PrimaryStartButton")
+        self.btn_ready.setFixedWidth(330)
         self.btn_ready.clicked.connect(self._on_ready_clicked)
-        status_layout.addWidget(self.btn_ready)
-        workspace.addWidget(self._status_bar, 0, Qt.AlignTop)
-        layout.addLayout(workspace, 1)
+        action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.addStretch(1)
+        action_layout.addWidget(self.btn_ready)
+        layout.addLayout(action_layout)
 
         # ===== 连接参数变更 → 更新摘要 =====
         self._agent_panel.config_confirmed.connect(self._on_agent_config_confirmed)
         self.param_panel.config_changed.connect(self._on_param_panel_changed)
         self._update_mode_status()
         self._update_summary()
+        self.on_device_state("disconnected", "设备未连接")
 
     def _create_subject_bar(self) -> QFrame:
         frame = QFrame()
@@ -553,6 +655,8 @@ class SetupView(QWidget):
             self._action_history.setEnabled(selected)
         if self._action_load_last_config is not None:
             self._action_load_last_config.setEnabled(selected)
+        if hasattr(self, "_summary_label"):
+            self._update_summary()
 
     def _on_history_clicked(self) -> None:
         result = self._current_subject_result()
@@ -638,6 +742,9 @@ class SetupView(QWidget):
         if config is None:
             self._summary_label.setText("未确认，请生成建议配置或切换到手动配置。")
             self._summary_state_label.setText("等待确认")
+            self._filter_state_label.setText("—")
+            self._filter_details_label.clear()
+            self._filter_details_label.hide()
             self._sync_summary_label_height()
             if hasattr(self, "btn_ready"):
                 self.btn_ready.setEnabled(False)
@@ -651,26 +758,30 @@ class SetupView(QWidget):
         }
         source = source_labels.get(self._config_source or "", "当前配置")
         mode = getattr(config, "mode_label", config.test_type)
-        parts = [f"{source} · {mode}"]
+        result = self._current_subject_result()
+        subject_name = result.subject.display_name if result else "临时测试"
+        parts = [
+            f"测试对象：{subject_name}",
+            f"配置方式：{source}",
+            f"测试模式：{mode}",
+        ]
         if hasattr(config, "start_type"):
             parts.append(f"启动：{config.start_type}")
-        parts.append(f"停止：{config.stop_type}")
+        stop_text = config.stop_type
+        if getattr(config, "test_length", None):
+            stop_text += f" · {config.test_length}"
+        parts.append(f"停止方式：{stop_text}")
         if getattr(config, "number_of_jumps", None):
             parts.append(f"目标：{config.number_of_jumps} 次")
-        if getattr(config, "test_length", None):
-            parts.append(f"时长：{config.test_length}")
         if hasattr(config, "treadmill_speed"):
-            parts.append(f"速度：{config.treadmill_speed:g} km/h")
+            parts.append(f"跑步机速度：{config.treadmill_speed:g} km/h")
         if hasattr(config, "direction"):
-            parts.append(f"方向：{config.direction}")
-        parts.append(
-            f"阈值：接触 >{config.min_contact_time} ms / "
-            f"腾空 >{config.min_flight_time} ms"
-        )
+            parts.append(f"行走方向：{config.direction}")
         if getattr(config, "metronome_enabled", False):
             parts.append(f"节拍器：{config.metronome_bpm} BPM")
 
         self._summary_label.setText("\n".join(parts))
+        self._update_filter_summary(config)
         if self._config_errors:
             self._summary_state_label.setText("配置需要修正")
             self._summary_label.setText(
@@ -683,6 +794,87 @@ class SetupView(QWidget):
         self._sync_summary_label_height()
         if hasattr(self, "btn_ready"):
             self.btn_ready.setEnabled(not self._config_errors)
+
+    def _update_filter_summary(self, config: AnyTestConfig) -> None:
+        changed = self._changed_filter_values(config)
+        if not changed:
+            self._filter_state_label.setText("默认配置")
+            self._filter_state_label.setStyleSheet("")
+            self._filter_details_label.clear()
+            self._filter_details_label.hide()
+            return
+
+        self._filter_state_label.setText("已修改")
+        self._filter_state_label.setStyleSheet("color: #ff9a3d;")
+        self._filter_details_label.setText(
+            "\n".join(
+                f"{self._filter_display_name(name)}："
+                f"{self._format_filter_value(name, value)}"
+                for name, value in changed
+            )
+        )
+        self._filter_details_label.show()
+
+    @staticmethod
+    def _changed_filter_values(config: AnyTestConfig) -> list[tuple[str, object]]:
+        names = ParamPanel._LAYER3_ORDER.get(config.test_type, ())
+        dataclass_fields = getattr(type(config), "__dataclass_fields__", {})
+        changed = []
+        for name in names:
+            field = dataclass_fields.get(name)
+            if field is None or field.default is MISSING:
+                continue
+            value = getattr(config, name, MISSING)
+            if value is not MISSING and value != field.default:
+                changed.append((name, value))
+        return changed
+
+    @staticmethod
+    def _filter_display_name(name: str) -> str:
+        return {
+            "min_contact_time": "接触阈值",
+            "min_flight_time": "腾空阈值",
+            "max_flight_time": "最大腾空时间",
+            "step_length_calculation": "步长计算方式",
+            "min_step_length": "最小步长",
+            "min_gap_between_feet": "两脚最小间距",
+            "min_foot_length": "最小足长",
+            "filter_gaitr_in": "GaitR 进入过滤",
+            "filter_gaitr_out": "GaitR 离开过滤",
+            "automatic_data_filter": "自动数据过滤",
+        }.get(name, name)
+
+    @staticmethod
+    def _format_filter_value(name: str, value: object) -> str:
+        if name in {"min_contact_time", "min_flight_time", "max_flight_time"}:
+            return f"{value} ms"
+        if name in {"min_step_length", "min_gap_between_feet", "min_foot_length"}:
+            return f"{value:g} cm"
+        if name in {"filter_gaitr_in", "filter_gaitr_out"}:
+            return f"{value} LED"
+        if name == "automatic_data_filter":
+            return f"{value}%"
+        return str(value)
+
+    def on_device_state(self, state: str, message: str = "") -> None:
+        """Show device information without gating entry to test preparation."""
+        self._device_state = state
+        labels = {
+            "disconnected": ("● 设备未连接", "#8f9bad", "未连接"),
+            "connecting": ("● 正在连接设备", "#f0a24a", "连接中"),
+            "connected": ("● 设备已连接", "#67c98b", "正常"),
+            "streaming": ("● 正在采集", "#67c98b", "正常"),
+            "error": ("● 设备异常", "#f06a6a", "异常"),
+        }
+        text, color, communication = labels.get(
+            state, (message or state, "#8f9bad", message or state)
+        )
+        self._device_state_label.setText(text)
+        self._device_state_label.setToolTip(message)
+        self._device_state_label.setStyleSheet(f"color: {color};")
+        self._device_meta_label.setText(
+            f"通信状态：{communication}\n标称采样率：1000 Hz"
+        )
 
     def _sync_summary_label_height(self) -> None:
         self._summary_label.ensurePolished()

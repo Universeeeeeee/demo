@@ -26,11 +26,10 @@ from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QFrame, QSizePolicy, QMessageBox, QFileDialog,
-    QScrollArea, QTabWidget,
+    QScrollArea, QTabWidget, QTableWidget,
 )
 
 from dayu_widgets.label import MLabel
-from dayu_widgets.divider import MDivider
 from dayu_widgets.push_button import MPushButton
 from dayu_widgets import dayu_theme
 
@@ -64,12 +63,19 @@ QWidget#ReportViewRoot {
     background-color: #0c1119;
     color: #e7ebf2;
 }
+QTabWidget#ReportTabs,
+QWidget#ReportOverviewPage {
+    background-color: #0c1119;
+}
 QTabWidget#ReportTabs::pane {
     border: 1px solid #354151;
     border-radius: 6px;
     background-color: #0c1119;
 }
-QTabWidget#ReportTabs QTabBar::tab {
+QTabBar#ReportTabBar {
+    background-color: #0c1119;
+}
+QTabBar#ReportTabBar::tab {
     min-width: 96px;
     min-height: 30px;
     padding: 4px 16px;
@@ -78,14 +84,22 @@ QTabWidget#ReportTabs QTabBar::tab {
     background-color: #171f2b;
     color: #aeb7c5;
 }
-QTabWidget#ReportTabs QTabBar::tab:selected {
+QTabBar#ReportTabBar::tab:selected {
     background-color: #222d3c;
     color: #ff8a1f;
     font-weight: 650;
 }
-QTabWidget#ReportTabs QTabBar::tab:hover {
+QTabBar#ReportTabBar::tab:hover {
     background-color: #1d2735;
     color: #f4f6f9;
+}
+QLabel#ReportSectionTitle {
+    color: #8795a8;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #354151;
+    padding: 0 0 8px 0;
+    font-size: 10pt;
 }
 QScrollArea#StatsScroll,
 QScrollArea#StatsScroll QWidget#qt_scrollarea_viewport,
@@ -114,6 +128,87 @@ QScrollArea#StatsScroll QScrollBar::sub-line:vertical {
 }
 QScrollArea#StatsScroll QScrollBar::add-page:vertical,
 QScrollArea#StatsScroll QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollArea#ReportDetailsScroll,
+QScrollArea#ReportDetailsScroll QWidget#qt_scrollarea_viewport,
+QWidget#ReportDetailsContent {
+    background-color: #0f1620;
+    border: none;
+}
+QTableWidget#ReportDetailTable {
+    background-color: #111a25;
+    alternate-background-color: #162130;
+    color: #dce5f0;
+    border: 1px solid #2b394a;
+    border-radius: 7px;
+    gridline-color: #2a3747;
+    selection-background-color: #263d55;
+    selection-color: #ffffff;
+    font-size: 10pt;
+}
+QTableWidget#ReportDetailTable::item {
+    padding: 6px 8px;
+}
+QTableWidget#ReportDetailTable::item:selected {
+    background-color: #263d55;
+    color: #ffffff;
+}
+QTableWidget#ReportDetailTable QHeaderView {
+    background-color: #1b2735;
+}
+QTableWidget#ReportDetailTable QHeaderView::section {
+    background-color: #1b2735;
+    color: #c7d1df;
+    border: none;
+    border-right: 1px solid #2f3d4e;
+    border-bottom: 1px solid #344356;
+    padding: 7px 8px;
+    font-weight: 650;
+}
+QTableWidget#ReportDetailTable QTableCornerButton::section {
+    background-color: #1b2735;
+    border: none;
+    border-right: 1px solid #2f3d4e;
+    border-bottom: 1px solid #344356;
+}
+QScrollArea#ReportDetailsScroll QScrollBar:vertical,
+QTableWidget#ReportDetailTable QScrollBar:vertical {
+    width: 10px;
+    margin: 0;
+    border: none;
+    background-color: #0c131d;
+}
+QScrollArea#ReportDetailsScroll QScrollBar:horizontal,
+QTableWidget#ReportDetailTable QScrollBar:horizontal {
+    height: 10px;
+    margin: 0;
+    border: none;
+    background-color: #0c131d;
+}
+QScrollArea#ReportDetailsScroll QScrollBar::handle,
+QTableWidget#ReportDetailTable QScrollBar::handle {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 5px;
+    background-color: #3a485a;
+}
+QScrollArea#ReportDetailsScroll QScrollBar::handle:hover,
+QTableWidget#ReportDetailTable QScrollBar::handle:hover {
+    background-color: #4b5b6f;
+}
+QScrollArea#ReportDetailsScroll QScrollBar::add-line,
+QScrollArea#ReportDetailsScroll QScrollBar::sub-line,
+QTableWidget#ReportDetailTable QScrollBar::add-line,
+QTableWidget#ReportDetailTable QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+    background: transparent;
+}
+QScrollArea#ReportDetailsScroll QScrollBar::add-page,
+QScrollArea#ReportDetailsScroll QScrollBar::sub-page,
+QTableWidget#ReportDetailTable QScrollBar::add-page,
+QTableWidget#ReportDetailTable QScrollBar::sub-page {
     background: transparent;
 }
 QPushButton#ReportSecondaryButton,
@@ -216,6 +311,7 @@ class CyclePhaseBar(QWidget):
         super().__init__(parent)
         self._cycle = cycle
         self.setMinimumHeight(24)
+        self.setStyleSheet("background: transparent;")
         if self._detailed_stance_is_complete():
             tooltip = "负荷反应期、单支撑、摆动前期和摆动相按实际时长绘制"
         else:
@@ -312,8 +408,10 @@ class ReportView(QWidget):
         self._tabs = QTabWidget()
         self._tabs.setObjectName("ReportTabs")
         self._tabs.setDocumentMode(True)
+        self._tabs.tabBar().setObjectName("ReportTabBar")
 
         self._overview_page = QWidget()
+        self._overview_page.setObjectName("ReportOverviewPage")
         content_layout = QHBoxLayout(self._overview_page)
         content_layout.setContentsMargins(4, 8, 4, 4)
         content_layout.setSpacing(16)
@@ -361,7 +459,9 @@ class ReportView(QWidget):
         right_layout.setSpacing(8)
         self._right_layout = right_layout
 
-        right_layout.addWidget(MDivider("数据回顾"))
+        self._review_title = QLabel("数据回顾")
+        self._review_title.setObjectName("ReportSectionTitle")
+        right_layout.addWidget(self._review_title)
 
         self._replay_panel = FootprintReplayPanel()
         self._replay_panel.hide()
@@ -397,9 +497,11 @@ class ReportView(QWidget):
         self._tabs.addTab(self._overview_page, "概览")
 
         self._details_page = QScrollArea()
+        self._details_page.setObjectName("ReportDetailsScroll")
         self._details_page.setWidgetResizable(True)
         self._details_page.setFrameShape(QFrame.NoFrame)
         self._details_content = QWidget()
+        self._details_content.setObjectName("ReportDetailsContent")
         self._details_layout = QVBoxLayout(self._details_content)
         self._details_layout.setContentsMargins(8, 8, 8, 8)
         self._details_layout.setSpacing(12)
@@ -787,12 +889,6 @@ class ReportView(QWidget):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setAlternatingRowColors(True)
-        table.setStyleSheet(
-            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
-            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
-            "QHeaderView::section { background-color: #333; color: #ccc; "
-            "border: 1px solid #555; padding: 4px; }"
-        )
 
         for row_idx, step in enumerate(steps):
             items = [
@@ -852,12 +948,6 @@ class ReportView(QWidget):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setAlternatingRowColors(True)
-        table.setStyleSheet(
-            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
-            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
-            "QHeaderView::section { background-color: #333; color: #ccc; "
-            "border: 1px solid #555; padding: 4px; }"
-        )
 
         for row_idx, row in enumerate(rows_data):
             for col_idx, text in enumerate(row):
@@ -900,12 +990,6 @@ class ReportView(QWidget):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setAlternatingRowColors(True)
-        table.setStyleSheet(
-            "QTableWidget { background-color: rgba(40, 40, 45, 0.8); "
-            "border: 1px solid #555; border-radius: 6px; font-size: 10pt; }"
-            "QHeaderView::section { background-color: #333; color: #ccc; "
-            "border: 1px solid #555; padding: 4px; }"
-        )
 
         for row_idx, row in enumerate(rows_data):
             for col_idx, text in enumerate(row):
@@ -934,6 +1018,11 @@ class ReportView(QWidget):
         self._dynamic_widgets.clear()
 
     def _add_detail_widget(self, widget: QWidget):
+        if isinstance(widget, QTableWidget):
+            widget.setObjectName("ReportDetailTable")
+            widget.verticalHeader().setDefaultSectionSize(34)
+            widget.verticalHeader().setMinimumSectionSize(30)
+            widget.setFocusPolicy(Qt.NoFocus)
         self._details_layout.addWidget(widget)
         self._dynamic_widgets.append(widget)
 

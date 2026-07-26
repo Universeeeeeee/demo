@@ -60,15 +60,13 @@ QLabel#BrandName {
     font-weight: 700;
 }
 QPushButton#ModuleButton {
-    min-height: 46px;
-    padding: 0 12px;
+    min-height: 54px;
+    padding: 0;
     border: none;
     border-left: 3px solid transparent;
     border-radius: 6px;
     background: transparent;
     color: #aeb7c5;
-    font-size: 13px;
-    text-align: left;
 }
 QPushButton#ModuleButton:hover {
     background: #151d28;
@@ -81,9 +79,21 @@ QPushButton#ModuleButton:checked {
     font-weight: 650;
 }
 QLabel#NavGlyph {
-    min-width: 22px;
-    max-width: 22px;
-    color: inherit;
+    min-width: 25px;
+    max-width: 25px;
+    color: #aeb7c5;
+    font-size: 20px;
+    background: transparent;
+}
+QLabel#NavLabel {
+    color: #aeb7c5;
+    font-size: 15px;
+    background: transparent;
+}
+QLabel#NavGlyph[active="true"],
+QLabel#NavLabel[active="true"] {
+    color: #ff8a1f;
+    font-weight: 650;
 }
 QLabel#LocalModeNote {
     color: #697587;
@@ -176,7 +186,7 @@ class ApplicationSidebar(QFrame):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 18, 10, 16)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         brand_row = QHBoxLayout()
         brand_row.setContentsMargins(8, 0, 4, 22)
@@ -205,12 +215,35 @@ class ApplicationSidebar(QFrame):
             MODULE_RESULTS,
             MODULE_SETTINGS,
         ):
-            button = QPushButton(
-                f"  {MODULE_GLYPHS[module]}     {MODULE_LABELS[module]}"
-            )
+            button = QPushButton()
             button.setObjectName("ModuleButton")
+            button.setMinimumHeight(54)
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
+            button.setAccessibleName(MODULE_LABELS[module])
+
+            button_layout = QHBoxLayout(button)
+            button_layout.setContentsMargins(16, 0, 10, 0)
+            button_layout.setSpacing(13)
+
+            glyph = QLabel(MODULE_GLYPHS[module])
+            glyph.setObjectName("NavGlyph")
+            glyph.setAlignment(Qt.AlignCenter)
+            glyph.setAttribute(Qt.WA_TransparentForMouseEvents)
+            glyph_font = glyph.font()
+            glyph_font.setPixelSize(20)
+            glyph.setFont(glyph_font)
+            button_layout.addWidget(glyph)
+
+            label = QLabel(MODULE_LABELS[module])
+            label.setObjectName("NavLabel")
+            label.setAttribute(Qt.WA_TransparentForMouseEvents)
+            label_font = label.font()
+            label_font.setPixelSize(15)
+            label.setFont(label_font)
+            button_layout.addWidget(label)
+            button_layout.addStretch(1)
+
             button.clicked.connect(
                 lambda _checked=False, key=module: self._request_module(key)
             )
@@ -229,7 +262,16 @@ class ApplicationSidebar(QFrame):
         button = self.buttons.get(module)
         if button is not None:
             self._active_module = module
-            button.setChecked(True)
+            for key, candidate in self.buttons.items():
+                active = key == module
+                candidate.setChecked(active)
+                for object_name in ("NavGlyph", "NavLabel"):
+                    label = candidate.findChild(QLabel, object_name)
+                    if label is None:
+                        continue
+                    label.setProperty("active", active)
+                    label.style().unpolish(label)
+                    label.style().polish(label)
 
     def _request_module(self, module: str) -> None:
         # A route can be rejected by MainWindow (for example while acquiring).
