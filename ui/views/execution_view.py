@@ -863,12 +863,18 @@ class ExecutionView(QWidget):
 
     def _start_countdown(self):
         """启动倒计时定时器（在"开始采集"后调用）。"""
-        if self._countdown_remaining > 0:
+        if (
+            not self._paused
+            and self._countdown_remaining > 0
+            and self._countdown_timer is None
+        ):
             self._countdown_timer = QTimer(self)
             self._countdown_timer.timeout.connect(self._on_countdown_tick)
             self._countdown_timer.start(1000)
 
     def _on_countdown_tick(self):
+        if self._paused:
+            return
         self._countdown_remaining -= 1
         if self._countdown_remaining <= 0:
             self._stop_countdown()
@@ -908,13 +914,15 @@ class ExecutionView(QWidget):
     def _on_pause(self):
         if not self._paused:
             self._paused = True
+            self._stop_countdown()
             self.btn_pause.setText("▶ 继续分析")
             self._mode_label.setText(
                 f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'}"
-                " · 暂停分析（计时继续）"
+                " · 暂停分析（计时已暂停）"
             )
         else:
             self._paused = False
+            self._start_countdown()
             self.btn_pause.setText("⏸ 暂停")
             self._mode_label.setText(
                 f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 运行中"

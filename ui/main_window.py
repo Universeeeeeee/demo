@@ -407,11 +407,7 @@ class MainWindow(QMainWindow):
 
     def _on_pause(self):
         """ExecutionView '暂停/继续' → 切换 Controller 暂停状态"""
-        if self._controller.engine:
-            if self._controller.engine.paused:
-                self._controller.resume()
-            else:
-                self._controller.pause()
+        self._controller.toggle_pause()
 
     def _on_manual_stop(self):
         """ExecutionView '结束' → 手动停止"""

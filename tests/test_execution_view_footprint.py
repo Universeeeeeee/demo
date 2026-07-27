@@ -118,9 +118,18 @@ def test_gait_running_controls_stack_in_right_column(qtbot):
     assert view.btn_stop.isVisible()
     assert view._controls_layout.direction() == QBoxLayout.TopToBottom
 
+    remaining_before_pause = view._countdown_remaining
     view._on_pause()
-    assert "暂停分析（计时继续）" in view._mode_label.text()
+    assert "暂停分析（计时已暂停）" in view._mode_label.text()
     assert view.btn_pause.text() == "▶ 继续分析"
+    assert view._countdown_timer is None
+    view._on_countdown_tick()
+    assert view._countdown_remaining == remaining_before_pause
+
+    view._on_pause()
+    assert view.btn_pause.text() == "⏸ 暂停"
+    assert view._countdown_timer is not None
+    assert view._countdown_timer.isActive()
 
 
 def test_execution_view_keeps_jump_charts_for_jump(qtbot):

@@ -53,6 +53,8 @@ class SessionController(QObject):
     connect_device_requested = Signal()
     start_capture_requested = Signal()
     engine_start_requested = Signal(float)
+    engine_pause_requested = Signal()
+    engine_resume_requested = Signal()
 
     # ---- 生命周期信号 → MainWindow ----
     session_started = Signal()
@@ -78,6 +80,7 @@ class SessionController(QObject):
         self._start_time: Optional[float] = None
         self._finish_reason: Optional[str] = None
         self._is_running = False
+        self._is_paused = False
         self._start_pending = False
         self._device_state = "disconnected"
 
@@ -95,6 +98,7 @@ class SessionController(QObject):
 
         self._config = config
         self._finish_reason = None
+        self._is_paused = False
         self._start_pending = False
         self._device_state = "connecting"
 
@@ -136,6 +140,8 @@ class SessionController(QObject):
         self.connect_device_requested.connect(self._worker.connect_device)
         self.start_capture_requested.connect(self._worker.start_capture)
         self.engine_start_requested.connect(self._engine.begin_session)
+        self.engine_pause_requested.connect(self._engine.pause_session)
+        self.engine_resume_requested.connect(self._engine.resume_session)
         self._thread.started.connect(self._worker.connect_device)
         self._thread.finished.connect(self._worker.deleteLater)
 
@@ -159,6 +165,7 @@ class SessionController(QObject):
             return
 
         self._start_time = time.perf_counter()
+        self._is_paused = False
         self._start_pending = True
         self.engine_start_requested.emit(self._start_time)
         self.start_capture_requested.emit()
@@ -175,14 +182,22 @@ class SessionController(QObject):
         self.connect_device_requested.emit()
 
     def pause(self):
-        """暂停数据处理（引擎跳过帧，USB 继续采集）。"""
-        if self._engine:
-            self._engine.paused = True
+        """Pause processing and the active test clock."""
+        if self._engine and not self._is_paused:
+            self._is_paused = True
+            self.engine_pause_requested.emit()
 
     def resume(self):
-        """恢复数据处理。"""
-        if self._engine:
-            self._engine.paused = False
+        """Resume processing from the frozen test clock."""
+        if self._engine and self._is_paused:
+            self._is_paused = False
+            self.engine_resume_requested.emit()
+
+    def toggle_pause(self):
+        if self._is_paused:
+            self.resume()
+        else:
+            self.pause()
 
     def stop(self, reason: str | None = None):
         """停止会话，构造 TestReport 并发射 session_finished 信号。"""
@@ -192,6 +207,7 @@ class SessionController(QObject):
         if reason is not None:
             self._finish_reason = reason
         self._is_running = False
+        self._is_paused = False
         report = self._do_stop(self._finish_reason or "manual")
 
         if report is not None:
@@ -344,6 +360,7 @@ class SessionController(QObject):
         self._thread = None
         self._worker = None
         self._engine = None
+        self._is_paused = False
         self._start_pending = False
         self._device_state = "disconnected"
 

@@ -21,6 +21,41 @@ def test_gait_engine_uses_jump_processor_for_jump_config():
     assert engine.processor_name == "jump"
 
 
+def test_gait_engine_pause_freezes_time_limit_and_relative_clock(
+    qtbot, monkeypatch
+):
+    import engine.gait_engine as gait_engine_module
+
+    config = default_jump_config()
+    config.stop_type = "End of Time"
+    config.test_length = "01:00"
+    engine = GaitEngine(config=config)
+    clock = iter((105.0, 110.0))
+    monkeypatch.setattr(
+        gait_engine_module.time,
+        "perf_counter",
+        lambda: next(clock),
+    )
+
+    engine.set_start_time(100.0)
+    assert engine._stop_timer is not None
+    assert engine._stop_timer.isActive()
+
+    engine.paused = True
+    remaining_ms = engine._stop_timer_remaining_ms
+    assert remaining_ms > 0
+    assert not engine._stop_timer.isActive()
+
+    engine.paused = False
+    assert engine._start_time == pytest.approx(105.0)
+    assert engine._stop_timer.isActive()
+    assert engine._stop_timer.remainingTime() <= remaining_ms
+    engine.process_raw_frame([0] * 96, 111.0)
+    assert engine.export_timestamps[-1] == pytest.approx(6.0)
+
+    engine._stop_timer.stop()
+
+
 def test_gait_engine_uses_treadmill_processor_for_treadmill_running_config():
     config = TreadmillRunningConfig(
         stop_type="Software command",

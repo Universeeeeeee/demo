@@ -121,6 +121,7 @@ class GaitEngine(QObject):
 
         self._start_time: Optional[float] = None
         self._paused = False
+        self._pause_started_at: Optional[float] = None
         self._finished = False  # 防止重复发射 test_finished
 
         # ---- 处理器 ----
@@ -145,6 +146,7 @@ class GaitEngine(QObject):
 
         # ---- End of Time 倒计时 ----
         self._stop_timer: Optional[QTimer] = None
+        self._stop_timer_remaining_ms = 0
 
         # 初始化步态检测器
         self._init_gait_detectors()
@@ -181,12 +183,15 @@ class GaitEngine(QObject):
     def set_start_time(self, t: float):
         """设置时间基准（由 UI 在点击'开始分析'时调用），并启动倒计时。"""
         self._start_time = t
+        self._pause_started_at = None
+        self._stop_timer_remaining_ms = 0
         self._start_timer()
 
     @Slot(float)
     def begin_session(self, t: float):
         """Enable processing and establish the time base immediately before capture."""
         self._paused = False
+        self._pause_started_at = None
         self.set_start_time(t)
 
     def set_mode(self, mode: str):
@@ -221,12 +226,49 @@ class GaitEngine(QObject):
 
     @paused.setter
     def paused(self, val: bool):
-        self._paused = val
+        if val:
+            self.pause_session()
+        else:
+            self.resume_session()
+
+    @Slot()
+    def pause_session(self):
+        """Freeze processing, the time limit, and the relative event clock."""
+        if self._paused:
+            return
+        self._paused = True
+        if self._start_time is not None:
+            self._pause_started_at = time.perf_counter()
+        if self._stop_timer is not None and self._stop_timer.isActive():
+            self._stop_timer_remaining_ms = max(
+                self._stop_timer.remainingTime(), 1
+            )
+            self._stop_timer.stop()
+
         # 暂停时重置检测器的连续帧计数器，避免恢复后读到过时的 streak
-        if val and self._processor is not None:
+        if self._processor is not None:
             if hasattr(self._processor, '_detector') and self._processor._detector is not None:
                 self._processor._detector._touch_streak = 0
                 self._processor._detector._lift_streak = 0
+
+    @Slot()
+    def resume_session(self):
+        """Resume from the frozen remaining time without a timestamp jump."""
+        if not self._paused:
+            return
+        if self._pause_started_at is not None and self._start_time is not None:
+            paused_duration = max(
+                time.perf_counter() - self._pause_started_at, 0.0
+            )
+            self._start_time += paused_duration
+        self._pause_started_at = None
+        self._paused = False
+        if (
+            self._stop_timer is not None
+            and self._stop_timer_remaining_ms > 0
+            and not self._finished
+        ):
+            self._stop_timer.start(self._stop_timer_remaining_ms)
 
     def _init_gait_detectors(self):
         """初始化步态模式检测器（仅在非纵跳模式时）。"""
@@ -243,6 +285,9 @@ class GaitEngine(QObject):
         self.touch_count = 0
         self.lift_count = 0
         self._finished = False
+        self._paused = False
+        self._pause_started_at = None
+        self._start_time = None
 
         # 处理器（重新选择，丢弃旧实例）
         self._processor = self._select_processor()
@@ -263,6 +308,7 @@ class GaitEngine(QObject):
         if self._stop_timer is not None:
             self._stop_timer.stop()
             self._stop_timer = None
+        self._stop_timer_remaining_ms = 0
 
         # 重新初始化步态检测器
         self._init_gait_detectors()
@@ -514,13 +560,15 @@ class GaitEngine(QObject):
         self._stop_timer = QTimer(self)
         self._stop_timer.setSingleShot(True)
         self._stop_timer.timeout.connect(self._on_timer_expired)
-        self._stop_timer.start(seconds * 1000)
+        self._stop_timer_remaining_ms = seconds * 1000
+        self._stop_timer.start(self._stop_timer_remaining_ms)
         log.info("倒计时启动: %d 秒", seconds)
 
     def _on_timer_expired(self):
         """End of Time 倒计时到期。"""
         if self._finished:
             return
+        self._stop_timer_remaining_ms = 0
         self._finished = True
         log.info("自动停止: 测试时间到")
         self.test_finished.emit("time_up")
