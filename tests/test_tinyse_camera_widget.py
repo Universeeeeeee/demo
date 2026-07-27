@@ -8,6 +8,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -423,7 +424,8 @@ class TinySeCameraWidgetLifecycleTest(unittest.TestCase):
             _preview_active=True,
         )
 
-        TinySeCameraWidget._on_recording_finished(widget, "camera/recordings/tinyse_test.avi")
+        with patch("camera.tinyse_camera.QMessageBox.information"):
+            TinySeCameraWidget._on_recording_finished(widget, "camera/recordings/tinyse_test.avi")
 
         self.assertIsNone(widget._record_path)
         self.assertEqual(button.text, "Record")

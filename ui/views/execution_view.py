@@ -18,8 +18,7 @@ from typing import Optional
 from qtpy.QtCore import Signal, Qt, QTimer
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
-    QLabel, QFrame, QSizePolicy, QProgressBar, QTableWidget,
-    QTableWidgetItem, QHeaderView,
+    QLabel, QFrame, QSizePolicy, QProgressBar,
 )
 
 from dayu_widgets.label import MLabel
@@ -44,10 +43,6 @@ except Exception:
     _PG_AVAILABLE = False
 
 G = 9.81
-
-
-def _format_cycle_value(value) -> str:
-    return "N/A" if value is None else f"{value:.3f}"
 
 
 # ======================================================================
@@ -283,8 +278,59 @@ class ExecutionView(QWidget):
         lower_layout.setColumnStretch(2, 1)
         lower_layout.setRowStretch(0, 1)
 
+        self._cycle_panel = QFrame()
+        self._cycle_panel.setObjectName("CurrentCyclePanel")
+        self._cycle_panel.setFixedHeight(72)
+        self._cycle_panel.setStyleSheet(
+            "QFrame#CurrentCyclePanel {"
+            "  background-color: rgba(18, 18, 22, 0.92);"
+            "  border: 1px solid rgba(90, 90, 95, 0.7);"
+            "  border-radius: 8px;"
+            "}"
+        )
+        cycle_layout = QHBoxLayout(self._cycle_panel)
+        cycle_layout.setContentsMargins(14, 4, 14, 4)
+        cycle_layout.setSpacing(14)
+
+        state_layout = QVBoxLayout()
+        state_layout.setContentsMargins(0, 0, 0, 0)
+        state_layout.setSpacing(0)
+        self._current_cycle_title = MLabel("当前周期")
+        self._current_cycle_title.setStyleSheet(
+            "font-size: 9pt; color: #ff9b3d; border: none; background: transparent;"
+        )
+        self._current_cycle_state = MLabel("等待触地事件")
+        self._current_cycle_state.setStyleSheet(
+            "font-size: 18pt; font-weight: bold; color: #f0f3f8; "
+            "border: none; background: transparent;"
+        )
+        state_layout.addWidget(self._current_cycle_title)
+        state_layout.addWidget(self._current_cycle_state)
+        cycle_layout.addLayout(state_layout, 1)
+
+        self._left_cycle_value = MLabel("左脚  --")
+        self._left_cycle_value.setAlignment(Qt.AlignCenter)
+        self._left_cycle_value.setStyleSheet(
+            "font-size: 14pt; color: #d9dee8; border: none; background: transparent;"
+        )
+        cycle_layout.addWidget(self._left_cycle_value, 1)
+
+        self._right_cycle_value = MLabel("右脚  --")
+        self._right_cycle_value.setAlignment(Qt.AlignCenter)
+        self._right_cycle_value.setStyleSheet(
+            "font-size: 14pt; color: #d9dee8; border: none; background: transparent;"
+        )
+        cycle_layout.addWidget(self._right_cycle_value, 1)
+        self._cycle_panel.hide()
+
         self._camera_panel = EmbeddedCameraPanel()
-        lower_layout.addWidget(self._camera_panel, 0, 0, 2, 1)
+        self._camera_column = QWidget()
+        camera_layout = QVBoxLayout(self._camera_column)
+        camera_layout.setContentsMargins(0, 0, 0, 0)
+        camera_layout.setSpacing(10)
+        camera_layout.addWidget(self._camera_panel, 1)
+        camera_layout.addWidget(self._cycle_panel)
+        lower_layout.addWidget(self._camera_column, 0, 0, 2, 1)
 
         self._footprint_channel = FootprintChannelWidget()
         lower_layout.addWidget(self._footprint_channel, 0, 2)
@@ -292,47 +338,17 @@ class ExecutionView(QWidget):
         self._lower_split.hide()
         main_layout.addWidget(self._lower_split, 1)
 
-        self._cycle_panel = QFrame()
-        cycle_layout = QVBoxLayout(self._cycle_panel)
-        cycle_layout.setContentsMargins(8, 6, 8, 6)
-        cycle_layout.setSpacing(5)
-        self._current_cycle_label = MLabel("当前未完成周期：等待触地事件")
-        self._current_cycle_label.setWordWrap(True)
-        self._current_cycle_label.setStyleSheet(
-            "font-size: 10pt; color: #d9dee8; background: transparent;"
-        )
-        cycle_layout.addWidget(self._current_cycle_label)
-        self._completed_cycle_label = MLabel("已完成周期")
-        self._completed_cycle_label.setStyleSheet(
-            "font-size: 10pt; color: #aab2c0; background: transparent;"
-        )
-        cycle_layout.addWidget(self._completed_cycle_label)
-        self._completed_cycle_table = QTableWidget(0, 6)
-        self._completed_cycle_table.setObjectName("CompletedCycleTable")
-        self._completed_cycle_table.setHorizontalHeaderLabels([
-            "序号", "脚", "步态周期 (s)", "支撑相 (s)",
-            "摆动相 (s)", "双支撑 (s)",
-        ])
-        self._completed_cycle_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._completed_cycle_table.setSelectionMode(QTableWidget.NoSelection)
-        self._completed_cycle_table.setAlternatingRowColors(True)
-        self._completed_cycle_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
-        self._completed_cycle_table.setMaximumHeight(170)
-        cycle_layout.addWidget(self._completed_cycle_table)
-        self._cycle_panel.hide()
-        main_layout.addWidget(self._cycle_panel)
-
         # ===== 进度条 =====
         self._progress_container = QFrame()
         progress_layout = QGridLayout(self._progress_container)
         progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(0)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat("")
         self._progress_bar.setValue(0)
+        self._progress_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._progress_bar.setStyleSheet(
             "QProgressBar {"
             "  background-color: rgba(40, 40, 45, 0.8);"
@@ -353,6 +369,7 @@ class ExecutionView(QWidget):
         self._progress_overlay = QWidget()
         self._progress_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._progress_overlay.setStyleSheet("background: transparent;")
+        self._progress_overlay.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         overlay_layout = QVBoxLayout(self._progress_overlay)
         overlay_layout.setContentsMargins(4, 8, 4, 8)
         overlay_layout.addStretch()
@@ -440,29 +457,6 @@ class ExecutionView(QWidget):
     def _apply_style(self):
         self.setStyleSheet(
             "QWidget { font-family: 'Microsoft YaHei UI', sans-serif; }"
-            "QTableWidget#CompletedCycleTable {"
-            "  background-color: #121923;"
-            "  alternate-background-color: #151d28;"
-            "  color: #dfe5ee;"
-            "  border: 1px solid #293442;"
-            "  gridline-color: #26313f;"
-            "  selection-background-color: #273446;"
-            "  selection-color: white;"
-            "}"
-            "QTableWidget#CompletedCycleTable::item {"
-            "  padding: 4px;"
-            "}"
-            "QTableWidget#CompletedCycleTable QHeaderView::section {"
-            "  background-color: #171f2b;"
-            "  color: #9da8b8;"
-            "  border: none;"
-            "  border-bottom: 1px solid #2b3543;"
-            "  padding: 5px;"
-            "}"
-            "QTableWidget#CompletedCycleTable QTableCornerButton::section {"
-            "  background-color: #171f2b;"
-            "  border: none;"
-            "}"
         )
 
     # ------------------------------------------------------------------
@@ -492,7 +486,7 @@ class ExecutionView(QWidget):
         self._chart_container.setVisible(is_jump)
         self._lower_split.setVisible(not is_jump)
         self._footprint_channel.setVisible(not is_jump)
-        self._cycle_panel.setVisible(is_treadmill)
+        self._cycle_panel.hide()
         self._card_imbalance._title.setText(
             "步态周期不对称率" if is_treadmill else "不平衡指数"
         )
@@ -501,6 +495,8 @@ class ExecutionView(QWidget):
             self._camera_panel.shutdown()
         else:
             self._camera_panel.start_preview()
+        if is_treadmill:
+            QTimer.singleShot(0, self._update_cycle_panel_visibility)
 
         # 切换图表标签
         if _PG_AVAILABLE:
@@ -527,6 +523,50 @@ class ExecutionView(QWidget):
         self.btn_stop.hide()
         self._device_state = "connecting"
         self._device_label.setText("● 正在连接设备...")
+
+    def _update_cycle_panel_visibility(self):
+        is_treadmill = self._config is not None and self._config.test_type in (
+            "Treadmill Gait Test",
+            "Treadmill Running Test",
+        )
+        if not is_treadmill or not self._lower_split.isVisible():
+            self._cycle_panel.hide()
+            return
+
+        camera_layout = self._camera_column.layout()
+        camera_margins = camera_layout.contentsMargins()
+        panel_layout = self._camera_panel.layout()
+        panel_margins = panel_layout.contentsMargins()
+        panel_contents = self._camera_panel.contentsRect()
+        frame_height = self._camera_panel.height() - panel_contents.height()
+        preview_width = max(
+            0,
+            panel_contents.width()
+            - panel_margins.left()
+            - panel_margins.right(),
+        )
+        maximum_preview_height = (preview_width // 16) * 9
+        camera_outer_height = (
+            maximum_preview_height
+            + frame_height
+            + panel_margins.top()
+            + panel_margins.bottom()
+        )
+        required_height = (
+            camera_margins.top()
+            + camera_outer_height
+            + camera_layout.spacing()
+            + self._cycle_panel.height()
+            + camera_margins.bottom()
+        )
+        self._cycle_panel.setVisible(
+            self._camera_column.height() >= required_height
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._mode != "纵跳":
+            QTimer.singleShot(0, self._update_cycle_panel_visibility)
 
     def on_device_state(self, state: str, message: str):
         """Update acquisition controls from the structured device state."""
@@ -600,8 +640,9 @@ class ExecutionView(QWidget):
         if hasattr(self, "_footprint_channel"):
             self._footprint_channel.clear()
         if hasattr(self, "_cycle_panel"):
-            self._current_cycle_label.setText("当前未完成周期：等待触地事件")
-            self._completed_cycle_table.setRowCount(0)
+            self._current_cycle_state.setText("等待触地事件")
+            self._left_cycle_value.setText("左脚  --")
+            self._right_cycle_value.setText("右脚  --")
         if hasattr(self, "_camera_panel"):
             self._camera_panel.shutdown()
 
@@ -693,58 +734,21 @@ class ExecutionView(QWidget):
             self._render_gait_cycle_state(cycle_state)
 
     def _render_gait_cycle_state(self, state: dict):
-        side_labels = {"left": "左脚", "right": "右脚", "unknown": "未知脚"}
-        parts = [
-            f"当前未完成周期：{state.get('support_state', '等待事件')}"
-        ]
         current = state.get("current_cycles", {})
-        for side in ("left", "right", "unknown"):
+        support_state = state.get("support_state") or "等待触地事件"
+        self._current_cycle_state.setText(support_state)
+
+        def phase_text(side: str, label: str) -> str:
             value = current.get(side)
             if not value:
-                continue
+                return f"{label}  --"
+            phase = value.get("phase") or "--"
             elapsed = value.get("elapsed_s")
-            elapsed_text = f"{elapsed:.3f} s" if elapsed is not None else "N/A"
-            parts.append(
-                f"{side_labels[side]}：{value.get('phase', 'N/A')} {elapsed_text}"
-            )
-        self._current_cycle_label.setText("  |  ".join(parts))
+            elapsed_text = f"{elapsed:.3f} s" if elapsed is not None else "--"
+            return f"{label}  {phase} {elapsed_text}"
 
-        cycles = state.get("completed_cycles", [])
-        if "completed_cycle_count" not in state:
-            self._completed_cycle_table.setRowCount(0)
-            start_row = 0
-        else:
-            start_row = state.get(
-                "completed_cycle_start_index",
-                state["completed_cycle_count"] - len(cycles),
-            )
-            current_rows = self._completed_cycle_table.rowCount()
-            if state["completed_cycle_count"] < current_rows:
-                self._completed_cycle_table.setRowCount(0)
-                current_rows = 0
-            if current_rows > start_row:
-                cycles = cycles[current_rows - start_row:]
-                start_row = current_rows
-            elif current_rows < start_row:
-                return
-
-        for offset, cycle in enumerate(cycles):
-            self._completed_cycle_table.insertRow(0)
-            cycle_index = cycle.get("index", start_row + offset)
-            values = [
-                str(cycle_index + 1),
-                side_labels.get(cycle.get("side"), "未知脚"),
-                _format_cycle_value(cycle.get("gait_cycle_s")),
-                _format_cycle_value(cycle.get("stance_phase_s")),
-                _format_cycle_value(cycle.get("swing_phase_s")),
-                _format_cycle_value(cycle.get("total_double_support_s")),
-            ]
-            for column, text in enumerate(values):
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                self._completed_cycle_table.setItem(0, column, item)
-        if cycles:
-            self._completed_cycle_table.scrollToTop()
+        self._left_cycle_value.setText(phase_text("left", "左脚"))
+        self._right_cycle_value.setText(phase_text("right", "右脚"))
 
     def on_footprint_visual_frame(self, frame: dict):
         self._latest_footprint_frame = frame

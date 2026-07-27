@@ -30,19 +30,26 @@
 - Modify `plan.md`: align the previously confirmed live-display rule with the new “current summary only” execution-page behavior.
 - Read only `ui/embedded_camera_panel.py`: retain its existing `_AspectRatioContainer` implementation as the source of exact 16:9 geometry.
 
-### Task 1: Replace the completed-cycle table with a current-cycle summary
+### Task 1: Deliver the complete camera-first execution layout
 
 **Files:**
 - Modify: `tests/test_execution_view_footprint.py:149-308`
+- Modify: `tests/test_execution_view_footprint.py:46-97`
 - Modify: `ui/views/execution_view.py:18-50`
+- Modify: `ui/views/execution_view.py:277-325`
 - Modify: `ui/views/execution_view.py:295-325`
+- Modify: `ui/views/execution_view.py:470-505`
 - Modify: `ui/views/execution_view.py:595-608`
 - Modify: `ui/views/execution_view.py:690-760`
+- Modify: `ui/views/execution_view.py:790-826`
 
 **Interfaces:**
 - Consumes: `ExecutionView.on_gait_snapshot(snapshot: dict)` and `snapshot["gait_cycle_state"]`
 - Produces: `ExecutionView._current_cycle_state: MLabel`, `ExecutionView._left_cycle_value: MLabel`, and `ExecutionView._right_cycle_value: MLabel`
 - Produces: `ExecutionView._render_gait_cycle_state(state: dict) -> None`, which ignores `completed_cycles` for display purposes
+- Produces: `ExecutionView._camera_column: QWidget`
+- Produces: `ExecutionView._update_cycle_panel_visibility() -> None`
+- Produces: `ExecutionView.resizeEvent(event) -> None`
 
 - [ ] **Step 1: Replace completed-table tests with a failing summary test**
 
@@ -221,39 +228,19 @@ def _render_gait_cycle_state(self, state: dict):
 
 In `reset()`, set the same three initial strings used by the tests. Do not read or render `completed_cycles`.
 
-- [ ] **Step 6: Run focused and full execution-view tests**
+- [ ] **Step 6: Run the focused summary tests**
 
 Run:
 
 ```bash
-QT_QPA_PLATFORM=offscreen pytest tests/test_execution_view_footprint.py -v
+QT_QPA_PLATFORM=offscreen pytest \
+  tests/test_execution_view_footprint.py::test_execution_view_shows_current_gait_cycle_without_completed_table \
+  tests/test_execution_view_footprint.py::test_current_cycle_summary_uses_dashes_for_missing_values -v
 ```
 
-Expected: all tests in `tests/test_execution_view_footprint.py` pass; the camera remains directly in the lower grid until Task 2.
+Expected: both summary tests pass. Do not commit yet; the responsive camera-first layout below is part of the same atomic task.
 
-- [ ] **Step 7: Commit the summary change**
-
-```bash
-git add ui/views/execution_view.py tests/test_execution_view_footprint.py
-git commit -m "feat: simplify live gait cycle summary"
-```
-
-### Task 2: Make camera enlargement primary and summary visibility responsive
-
-**Files:**
-- Modify: `tests/test_execution_view_footprint.py:46-97`
-- Modify: `tests/test_execution_view_footprint.py` after the current-cycle tests
-- Modify: `ui/views/execution_view.py:277-325`
-- Modify: `ui/views/execution_view.py:470-505`
-- Modify: `ui/views/execution_view.py:790-826`
-
-**Interfaces:**
-- Consumes: `_camera_panel`, `_cycle_panel`, `_lower_split`, and `_config`
-- Produces: `ExecutionView._camera_column: QWidget`
-- Produces: `ExecutionView._update_cycle_panel_visibility() -> None`
-- Produces: `ExecutionView.resizeEvent(event) -> None`
-
-- [ ] **Step 1: Update the lower-grid test to expect a camera column**
+- [ ] **Step 7: Update the lower-grid test to expect a camera column**
 
 Replace the direct camera-grid assertion with:
 
@@ -270,7 +257,7 @@ assert layout.columnStretch(0) == 3
 assert layout.columnStretch(2) == 1
 ```
 
-- [ ] **Step 2: Add failing responsive and 16:9 tests**
+- [ ] **Step 8: Add failing responsive and 16:9 tests**
 
 ```python
 def test_current_cycle_summary_only_uses_space_left_after_max_camera(qtbot):
@@ -302,7 +289,7 @@ def test_current_cycle_summary_only_uses_space_left_after_max_camera(qtbot):
     assert preview.width() * 9 == preview.height() * 16
 ```
 
-- [ ] **Step 3: Strengthen the countdown-fill geometry test**
+- [ ] **Step 9: Strengthen the countdown-fill geometry test**
 
 After configuring the timed treadmill view and processing events, add:
 
@@ -314,7 +301,7 @@ assert view._progress_bar.height() == view._progress_container.height()
 assert view._progress_overlay.geometry() == view._progress_bar.geometry()
 ```
 
-- [ ] **Step 4: Run the new layout tests and confirm they fail**
+- [ ] **Step 10: Run the new layout tests and confirm they fail**
 
 Run:
 
@@ -327,7 +314,7 @@ QT_QPA_PLATFORM=offscreen pytest \
 
 Expected: failures because `_camera_column` and responsive summary visibility do not exist.
 
-- [ ] **Step 5: Put the camera and summary in one column**
+- [ ] **Step 11: Put the camera and summary in one column**
 
 Create the camera column before adding it to the lower grid:
 
@@ -343,7 +330,7 @@ lower_layout.addWidget(self._camera_column, 0, 0, 2, 1)
 
 Remove the old `main_layout.addWidget(self._cycle_panel)` call. The countdown and footprint/control placements remain `(0, 1, 2, 1)`, `(0, 2)`, and `(1, 2)`.
 
-- [ ] **Step 6: Add the camera-first visibility calculation**
+- [ ] **Step 12: Add the camera-first visibility calculation**
 
 Add:
 
@@ -379,7 +366,7 @@ if is_treadmill:
     QTimer.singleShot(0, self._update_cycle_panel_visibility)
 ```
 
-- [ ] **Step 7: Make countdown widgets fill the complete 72px column**
+- [ ] **Step 13: Make countdown widgets fill the complete 72px column**
 
 Set zero layout spacing and explicit expanding policies:
 
@@ -392,7 +379,7 @@ self._progress_overlay.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expandin
 
 Keep the existing 1px `QProgressBar` border and do not add padding to either the progress bar or its chunk.
 
-- [ ] **Step 8: Run execution and camera-panel tests**
+- [ ] **Step 14: Run execution and camera-panel tests**
 
 Run:
 
@@ -404,14 +391,14 @@ QT_QPA_PLATFORM=offscreen pytest \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 9: Commit the responsive layout**
+- [ ] **Step 15: Commit the complete execution layout**
 
 ```bash
 git add ui/views/execution_view.py tests/test_execution_view_footprint.py
 git commit -m "feat: prioritize execution preview space"
 ```
 
-### Task 3: Align documentation and verify the delivered layout
+### Task 2: Align documentation and verify the delivered layout
 
 **Files:**
 - Modify: `plan.md:244-251`
@@ -420,7 +407,7 @@ git commit -m "feat: prioritize execution preview space"
 - Verify: `tests/test_execution_view_footprint.py`
 
 **Interfaces:**
-- Consumes: the completed Task 1 and Task 2 execution-page behavior
+- Consumes: the completed Task 1 execution-page behavior
 - Produces: project documentation consistent with the delivered runtime UI
 
 - [ ] **Step 1: Update the live-display rules in `plan.md`**
@@ -488,4 +475,4 @@ git status --short
 git log -4 --oneline
 ```
 
-Expected: the three implementation commits are present. Pre-existing unrelated modifications remain unstaged and unchanged.
+Expected: the two task commits are present. Pre-existing unrelated modifications remain unstaged and unchanged.
