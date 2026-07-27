@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 
 _CYCLE_SUMMARY_FIELDS: Final[tuple[str, ...]] = (
     "gait_cycle_s",
+    "stride_length_cm",
     "stance_phase_s",
     "stance_phase_percent",
     "swing_phase_s",
@@ -284,30 +285,30 @@ class TreadmillProcessor:
 
         # Build metric summaries from valid, included rows
         valid_included = [
-            r for r in rows
+            r
+            for r in rows
             if r.is_event_valid and r.is_included_in_statistics
-            and r.contact_time_s is not None
         ]
 
         metric_summaries: dict[str, MetricSummary] = {}
-        if valid_included:
-            contact_times = tuple(
-                r.contact_time_s for r in valid_included
-                if r.contact_time_s is not None
+        step_metric_values = {
+            "contact_time_s": lambda row: row.contact_time_s,
+            "step_length_cm": lambda row: row.step_length_cm,
+            "flight_time_s": lambda row: row.flight_time_s,
+            "cadence_steps_per_min": lambda row: (
+                60.0 / row.step_time_s
+                if row.step_time_s is not None and row.step_time_s > 0
+                else None
+            ),
+        }
+        for metric_name, value_getter in step_metric_values.items():
+            values = tuple(
+                value
+                for row in valid_included
+                if (value := value_getter(row)) is not None
             )
-            metric_summaries["contact_time_s"] = summarize(contact_times)
-
-            step_lengths = tuple(
-                r.step_length_cm for r in valid_included
-                if r.step_length_cm is not None
-            )
-            metric_summaries["step_length_cm"] = summarize(step_lengths)
-
-            flight_times = tuple(
-                r.flight_time_s for r in valid_included
-                if r.flight_time_s is not None
-            )
-            metric_summaries["flight_time_s"] = summarize(flight_times)
+            if values:
+                metric_summaries[metric_name] = summarize(values)
 
         # Build left/right breakdowns
         left_rows = [
@@ -321,30 +322,37 @@ class TreadmillProcessor:
 
         left_right: dict[str, MetricSummary] = {}
         for side_name, side_rows in [("left", left_rows), ("right", right_rows)]:
-            side_ct = tuple(
-                r.contact_time_s for r in side_rows
-                if r.contact_time_s is not None
-            )
-            side_results = side_ct  # only contact_time_s for now
-            if side_results:
-                left_right[side_name] = summarize(side_results)
-            else:
-                left_right[side_name] = summarize(())
+            for metric_name, value_getter in step_metric_values.items():
+                side_values = tuple(
+                    value
+                    for row in side_rows
+                    if (value := value_getter(row)) is not None
+                )
+                if side_values:
+                    left_right[f"{side_name}_{metric_name}"] = summarize(
+                        side_values
+                    )
 
         # Asymmetry metrics
         asymmetry: dict[str, float] = {}
-        if left_rows and right_rows:
-            left_ct = tuple(
-                r.contact_time_s for r in left_rows
-                if r.contact_time_s is not None
-            )
-            right_ct = tuple(
-                r.contact_time_s for r in right_rows
-                if r.contact_time_s is not None
-            )
-            if left_ct and right_ct:
-                asymmetry["contact_time_delta_s"] = (
-                    sum(left_ct) / len(left_ct) - sum(right_ct) / len(right_ct)
+        for metric_name in step_metric_values:
+            left_summary = left_right.get(f"left_{metric_name}")
+            right_summary = left_right.get(f"right_{metric_name}")
+            if (
+                left_summary is None
+                or right_summary is None
+                or left_summary.count < 3
+                or right_summary.count < 3
+                or left_summary.mean is None
+                or right_summary.mean is None
+            ):
+                continue
+            denominator = (left_summary.mean + right_summary.mean) / 2.0
+            if denominator:
+                asymmetry[f"{metric_name}_percent"] = (
+                    abs(left_summary.mean - right_summary.mean)
+                    / denominator
+                    * 100.0
                 )
 
         cycle_metric_summaries, cycle_side_summaries, cycle_asymmetry = (
@@ -631,7 +639,12 @@ class TreadmillProcessor:
 
             left_mean = by_side["left"][field_name].mean
             right_mean = by_side["right"][field_name].mean
-            if left_mean is None or right_mean is None:
+            if (
+                by_side["left"][field_name].count < 3
+                or by_side["right"][field_name].count < 3
+                or left_mean is None
+                or right_mean is None
+            ):
                 continue
             denominator = (left_mean + right_mean) / 2.0
             if denominator:

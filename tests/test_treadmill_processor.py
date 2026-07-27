@@ -4,7 +4,11 @@ test_treadmill_processor.py — Tests for treadmill processor and accumulator
 
 import pytest
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
-from config.treadmill_report import TreadmillRunningReport, TreadmillStepResult
+from config.treadmill_report import (
+    GaitCycleRecord,
+    TreadmillRunningReport,
+    TreadmillStepResult,
+)
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_processor import TreadmillProcessor
@@ -27,6 +31,31 @@ def _emit_contact(
         latest_centroid=centroid_cm,
     )
     processor._handle_step_event(GaitStepEvent(kind, contact), time_s)
+
+
+def _summary_cycle(index, side, gait_cycle_s, stride_length_cm=100.0):
+    return GaitCycleRecord(
+        index=index,
+        side=side,
+        start_time_s=float(index),
+        end_time_s=float(index) + gait_cycle_s,
+        gait_cycle_s=gait_cycle_s,
+        stance_phase_s=gait_cycle_s * 0.6,
+        stance_phase_percent=60.0,
+        swing_phase_s=gait_cycle_s * 0.4,
+        swing_phase_percent=40.0,
+        step_time_s=gait_cycle_s / 2.0,
+        single_support_s=gait_cycle_s * 0.4,
+        single_support_percent=40.0,
+        total_double_support_s=gait_cycle_s * 0.2,
+        total_double_support_percent=20.0,
+        load_response_s=gait_cycle_s * 0.1,
+        load_response_percent=10.0,
+        pre_swing_s=gait_cycle_s * 0.1,
+        pre_swing_percent=10.0,
+        total_flight_time_s=0.0,
+        stride_length_cm=stride_length_cm,
+    )
 
 
 @pytest.mark.parametrize(
@@ -160,6 +189,102 @@ def test_non_positive_stride_is_omitted_and_flagged():
 
     assert cycle.stride_length_cm is None
     assert "non_positive_stride_length" in cycle.quality_flags
+
+
+def test_report_aggregates_stride_cadence_and_side_metrics():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    for index, (time_s, label, centroid) in enumerate(
+        [
+            (0.0, "A", 40.0),
+            (0.5, "B", 42.0),
+            (1.0, "A", 45.0),
+            (1.5, "B", 47.0),
+        ]
+    ):
+        _emit_contact(
+            processor,
+            kind="touch",
+            contact_id=index,
+            label=label,
+            time_s=time_s,
+            centroid_cm=centroid,
+        )
+        _emit_contact(
+            processor,
+            kind="lift",
+            contact_id=index,
+            label=label,
+            time_s=time_s + 0.3,
+            centroid_cm=centroid,
+        )
+
+    report = processor.build_report("manual", (), ())
+
+    assert report.cycle_metric_summaries[
+        "stride_length_cm"
+    ].mean == pytest.approx(105.0)
+    assert report.metric_summaries[
+        "cadence_steps_per_min"
+    ].mean == pytest.approx(120.0)
+    assert report.left_right_results["left_step_length_cm"].count > 0
+    assert report.left_right_results["right_contact_time_s"].count > 0
+
+
+def test_cycle_asymmetry_requires_three_values_per_side():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    cycles = (
+        _summary_cycle(0, "left", 1.0),
+        _summary_cycle(1, "right", 1.1),
+    )
+
+    overall, by_side, asymmetry = processor._build_cycle_summaries(cycles)
+
+    assert overall["gait_cycle_s"].count == 2
+    assert by_side["left"]["gait_cycle_s"].count == 1
+    assert "gait_cycle_s" not in asymmetry
+
+
+def test_cycle_asymmetry_is_computed_with_three_values_per_side():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+    cycles = tuple(
+        _summary_cycle(index, side, duration)
+        for index, (side, duration) in enumerate(
+            [
+                ("left", 1.0),
+                ("right", 1.1),
+                ("left", 1.0),
+                ("right", 1.1),
+                ("left", 1.0),
+                ("right", 1.1),
+            ]
+        )
+    )
+
+    _, _, asymmetry = processor._build_cycle_summaries(cycles)
+
+    assert asymmetry["gait_cycle_s"] == pytest.approx(
+        0.1 / 1.05 * 100.0
+    )
 
 
 def test_accumulator_resolves_starting_foot_from_first_contact():
@@ -461,7 +586,7 @@ def test_processor_live_snapshot_returns_completed_cycles_incrementally():
     assert second["completed_cycles"] == []
 
 
-def test_cycle_summaries_allow_different_side_counts_and_use_mean_asymmetry():
+def test_cycle_summaries_allow_different_side_counts_without_asymmetry():
     config = TreadmillGaitConfig(
         stop_type="Software command",
         test_length=None,
@@ -491,9 +616,7 @@ def test_cycle_summaries_allow_different_side_counts_and_use_mean_asymmetry():
     assert right.count == 1
     assert left.mean == pytest.approx(1.1)
     assert right.mean == pytest.approx(1.0)
-    assert report.cycle_asymmetry_percent["gait_cycle_s"] == pytest.approx(
-        0.1 / 1.05 * 100.0
-    )
+    assert "gait_cycle_s" not in report.cycle_asymmetry_percent
     live = processor.make_status_snapshot(2.2)
     assert live["gait_cycle_asymmetry_percent"]["gait_cycle_s"] == pytest.approx(
         0.1 / 1.05 * 100.0
