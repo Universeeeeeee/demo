@@ -5,7 +5,12 @@ pytest.importorskip("dayu_widgets")
 from qtpy.QtWidgets import QApplication, QTableWidget
 
 from config.test_report import JumpTestReport
-from config.treadmill_report import GaitCycleRecord, TreadmillGaitReport, summarize
+from config.treadmill_report import (
+    GaitCycleRecord,
+    TreadmillGaitReport,
+    TreadmillRunningReport,
+    summarize,
+)
 from engine.footprint_visualization import FootprintVisualFrame
 from ui.footprint_channel import FootprintReplayPanel
 from ui.views.report_view import CyclePhaseBar, ReportView, StatCard
@@ -13,6 +18,100 @@ from ui.views.report_view import CyclePhaseBar, ReportView, StatCard
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def _visible_card_data(view):
+    return [
+        (card._label.text(), card._value.text(), card.toolTip())
+        for card in view._stat_cards
+        if not card.isHidden()
+    ]
+
+
+def test_report_overview_uses_three_columns_without_scroll(qtbot):
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    assert not hasattr(view, "_stats_scroll")
+    assert view._stats_layout.columnCount() == 3
+    assert len(view._stat_cards) == 12
+
+
+def test_gait_overview_prioritizes_available_biomechanics(qtbot):
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=10,
+        lift_count=10,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        per_step_results=tuple(
+            _step(i, "left" if i % 2 == 0 else "right")
+            for i in range(10)
+        ),
+        metric_summaries={
+            "step_length_cm": summarize((60.0, 62.0)),
+            "contact_time_s": summarize((0.25, 0.27)),
+            "cadence_steps_per_min": summarize((110.0, 114.0)),
+            "flight_time_s": summarize((0.04, 0.05)),
+        },
+        cycle_metric_summaries={
+            "stride_length_cm": summarize((122.0, 124.0)),
+            "gait_cycle_s": summarize((1.0, 1.1)),
+            "stance_phase_percent": summarize((61.0, 62.0)),
+            "swing_phase_percent": summarize((39.0, 38.0)),
+            "total_double_support_s": summarize((0.12, 0.13)),
+        },
+        report_config_snapshot={
+            "treadmill_speed": 5.0,
+            "direction": "Interface side",
+        },
+        export_timestamps=(2.0, 12.0),
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+    cards = _visible_card_data(view)
+    labels = [label for label, _, _ in cards]
+
+    assert labels[:8] == [
+        "平均步长",
+        "平均步幅",
+        "平均步频",
+        "平均步态周期",
+        "平均触地时间",
+        "平均支撑相",
+        "平均摆动相",
+        "平均双支撑时间",
+    ]
+    assert "平均腾空时间" not in labels
+    assert "有效步数" in labels
+    assert len(cards) <= 12
+    assert dict((label, value) for label, value, _ in cards)[
+        "实际测试时长"
+    ] == "10.0 s"
+    tooltips = dict((label, tooltip) for label, _, tooltip in cards)
+    assert tooltips["平均步长"]
+    assert tooltips["平均步幅"]
+
+
+def test_running_overview_includes_flight_time(qtbot):
+    report = TreadmillRunningReport(
+        finish_reason="manual",
+        touch_count=2,
+        lift_count=2,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        metric_summaries={"flight_time_s": summarize((0.08, 0.09))},
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    assert "平均腾空时间" in [
+        label for label, _, _ in _visible_card_data(view)
+    ]
 
 
 def test_report_view_passes_treadmill_direction_to_replay_panel():
@@ -248,10 +347,9 @@ def test_treadmill_report_shows_cycle_overview_timeline_and_details(qtbot):
 
     view.load_report(report)
 
-    labels = [card._label.text() for card in view._stat_cards if card.isVisible()]
-    assert "左脚有效周期" in labels
-    assert "右脚有效周期" in labels
+    labels = [label for label, _, _ in _visible_card_data(view)]
     assert "平均步态周期" in labels
+    assert "跑带速度" in labels
     assert view._cycle_timeline_table.rowCount() == 1
     assert view._cycle_detail_table.rowCount() == 1
     assert view._cycle_detail_table.horizontalHeaderItem(1).text() == "脚"
@@ -332,7 +430,7 @@ def test_stat_card_reduces_font_for_long_values():
     assert "font-size: 18pt" in card._value.styleSheet()
 
 
-def test_jump_report_cards_scroll_instead_of_overlapping_at_minimum_height(qtbot):
+def test_jump_report_cards_fit_without_overlapping_at_minimum_height(qtbot):
     report = JumpTestReport(
         touch_count=5,
         lift_count=5,
@@ -372,7 +470,8 @@ def test_jump_report_cards_scroll_instead_of_overlapping_at_minimum_height(qtbot
         for previous, current in zip(column, column[1:]):
             assert previous.geometry().bottom() < current.geometry().top()
 
-    assert view._stats_scroll.verticalScrollBar().maximum() > 0
+    assert len(visible_cards) == 9
+    assert not hasattr(view, "_stats_scroll")
     assert view._tabs.objectName() == "ReportTabs"
     assert view.btn_export.objectName() == "ReportSecondaryButton"
     assert view.btn_home.objectName() == "ReportPrimaryButton"

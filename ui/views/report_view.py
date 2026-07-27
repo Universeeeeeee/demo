@@ -101,34 +101,9 @@ QLabel#ReportSectionTitle {
     padding: 0 0 8px 0;
     font-size: 10pt;
 }
-QScrollArea#StatsScroll,
-QScrollArea#StatsScroll QWidget#qt_scrollarea_viewport,
 QWidget#StatsContent {
     background: transparent;
     border: none;
-}
-QScrollArea#StatsScroll QScrollBar:vertical {
-    width: 10px;
-    margin: 0;
-    border: none;
-    background-color: #0f1620;
-}
-QScrollArea#StatsScroll QScrollBar::handle:vertical {
-    min-height: 32px;
-    border-radius: 5px;
-    background-color: #3a4656;
-}
-QScrollArea#StatsScroll QScrollBar::handle:vertical:hover {
-    background-color: #4b596b;
-}
-QScrollArea#StatsScroll QScrollBar::add-line:vertical,
-QScrollArea#StatsScroll QScrollBar::sub-line:vertical {
-    height: 0;
-    background: transparent;
-}
-QScrollArea#StatsScroll QScrollBar::add-page:vertical,
-QScrollArea#StatsScroll QScrollBar::sub-page:vertical {
-    background: transparent;
 }
 QScrollArea#ReportDetailsScroll,
 QScrollArea#ReportDetailsScroll QWidget#qt_scrollarea_viewport,
@@ -236,6 +211,184 @@ QPushButton#ReportPrimaryButton:hover {
     background-color: #ff8a1f;
 }
 """
+
+
+def _summary_mean(mapping, key):
+    summary = mapping.get(key)
+    return summary.mean if summary and summary.mean is not None else None
+
+
+def _report_duration_s(report):
+    if len(report.export_timestamps) >= 2:
+        return max(report.export_timestamps) - min(report.export_timestamps)
+    events = getattr(report, "raw_gait_events", ())
+    if len(events) >= 2:
+        times = [event.time_s for event in events]
+        return max(times) - min(times)
+    return None
+
+
+def _treadmill_overview_stats(
+    report: TreadmillGaitReport | TreadmillRunningReport,
+) -> list[tuple[str, str, str]]:
+    metric_summaries = report.metric_summaries
+    cycle_summaries = report.cycle_metric_summaries
+    stats: list[tuple[str, str, str]] = []
+
+    candidates = [
+        (
+            "平均步长",
+            _summary_mean(metric_summaries, "step_length_cm"),
+            lambda value: f"{value:.1f} cm",
+            "步长：一侧足触地到对侧足随后触地之间的前进距离。",
+        ),
+        (
+            "平均步幅",
+            _summary_mean(cycle_summaries, "stride_length_cm"),
+            lambda value: f"{value:.1f} cm",
+            "步幅（又称跨步长）：同侧足连续两次触地之间的前进距离。",
+        ),
+        (
+            "平均步频",
+            _summary_mean(metric_summaries, "cadence_steps_per_min"),
+            lambda value: f"{value:.1f} steps/min",
+            "纳入统计的逐步数据对应的平均步频。",
+        ),
+        (
+            "平均步态周期",
+            _summary_mean(cycle_summaries, "gait_cycle_s"),
+            lambda value: f"{value:.3f} s",
+            "同侧足连续两次触地之间的平均时间。",
+        ),
+        (
+            "平均触地时间",
+            _summary_mean(metric_summaries, "contact_time_s"),
+            lambda value: f"{value * 1000:.0f} ms",
+            "足部每次与测试区域保持接触的平均时间。",
+        ),
+    ]
+    if isinstance(report, TreadmillRunningReport):
+        candidates.append(
+            (
+                "平均腾空时间",
+                _summary_mean(metric_summaries, "flight_time_s"),
+                lambda value: f"{value * 1000:.0f} ms",
+                "双脚均离开测试区域的平均持续时间。",
+            )
+        )
+    candidates.extend(
+        [
+            (
+                "平均支撑相",
+                _summary_mean(cycle_summaries, "stance_phase_percent"),
+                lambda value: f"{value:.1f}%",
+                "支撑相占完整步态周期的平均比例。",
+            ),
+            (
+                "平均摆动相",
+                _summary_mean(cycle_summaries, "swing_phase_percent"),
+                lambda value: f"{value:.1f}%",
+                "摆动相占完整步态周期的平均比例。",
+            ),
+        ]
+    )
+    if isinstance(report, TreadmillGaitReport):
+        candidates.append(
+            (
+                "平均双支撑时间",
+                _summary_mean(
+                    cycle_summaries, "total_double_support_s"
+                ),
+                lambda value: f"{value * 1000:.0f} ms",
+                "一个完整步态周期内双脚同时支撑的平均总时长。",
+            )
+        )
+
+    for label, value, formatter, tooltip in candidates:
+        if value is not None:
+            stats.append((label, formatter(value), tooltip))
+
+    for metric_name, label in (
+        ("stride_length_cm", "步幅不对称性"),
+        ("gait_cycle_s", "步态周期不对称性"),
+    ):
+        left = report.cycle_side_summaries.get("left", {}).get(metric_name)
+        right = report.cycle_side_summaries.get("right", {}).get(metric_name)
+        value = report.cycle_asymmetry_percent.get(metric_name)
+        if (
+            left is not None
+            and right is not None
+            and left.count >= 3
+            and right.count >= 3
+            and value is not None
+        ):
+            stats.append(
+                (
+                    label,
+                    f"{value:.1f}%",
+                    "左右侧均至少三个有效完整周期时计算。",
+                )
+            )
+            break
+
+    total_count = len(report.per_step_results)
+    if total_count:
+        included_count = sum(
+            1
+            for row in report.per_step_results
+            if row.is_event_valid and row.is_included_in_statistics
+        )
+        stats.append(
+            (
+                "有效步数",
+                f"{included_count} / {total_count}",
+                "纳入统计的逐步结果数 / 检测到的逐步结果总数。",
+            )
+        )
+
+    speed = report.report_config_snapshot.get("treadmill_speed")
+    try:
+        speed_value = float(speed)
+    except (TypeError, ValueError):
+        speed_value = None
+    if speed_value is not None and math.isfinite(speed_value):
+        stats.append(
+            (
+                "跑带速度",
+                f"{speed_value:g} km/h",
+                "本次测试配置的跑步机带速。",
+            )
+        )
+
+    duration = _report_duration_s(report)
+    if duration is not None and math.isfinite(duration) and duration >= 0:
+        stats.append(
+            (
+                "实际测试时长",
+                f"{duration:.1f} s",
+                "按采样时间戳或原始步态事件的时间跨度计算。",
+            )
+        )
+
+    if report.resolved_starting_foot:
+        stats.append(
+            (
+                "起始脚",
+                _side_label(report.resolved_starting_foot),
+                "测试中识别或手动指定的起始侧。",
+            )
+        )
+    direction = report.report_config_snapshot.get("direction")
+    if direction:
+        stats.append(
+            (
+                "行进方向",
+                str(direction),
+                "受试者相对测试设备接口的行进方向。",
+            )
+        )
+
+    return stats[:12]
 
 
 # ======================================================================
@@ -419,35 +572,25 @@ class ReportView(QWidget):
         # --- 左侧: 统计卡片网格 ---
         left_container = QWidget()
         left_container.setObjectName("StatsContent")
-        left_container.setMinimumWidth(380)
-        left_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        left_container.setMinimumWidth(600)
+        left_container.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
         self._stats_content = left_container
         self._stats_layout = QGridLayout(left_container)
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
         self._stats_layout.setSpacing(8)
 
-        # 预创建统计卡片槽位，纵跳报告会展示更多统计项。
+        # 三列四行，按模式优先级动态展示至多 12 项。
         self._stat_cards: list[StatCard] = []
-        for i in range(16):
+        for i in range(12):
             card = StatCard("")
             card.hide()
-            row, col = divmod(i, 2)
+            row, col = divmod(i, 3)
             self._stats_layout.addWidget(card, row, col)
             self._stat_cards.append(card)
 
-        self._stats_scroll = QScrollArea()
-        self._stats_scroll.setObjectName("StatsScroll")
-        self._stats_scroll.setWidgetResizable(True)
-        self._stats_scroll.setFrameShape(QFrame.NoFrame)
-        self._stats_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._stats_scroll.setMinimumWidth(400)
-        self._stats_scroll.setMaximumWidth(560)
-        self._stats_scroll.setSizePolicy(
-            QSizePolicy.Preferred, QSizePolicy.Expanding
-        )
-        self._stats_scroll.setWidget(left_container)
-        content_layout.addWidget(self._stats_scroll, 0)
-        content_layout.addStretch(1)
+        content_layout.addWidget(left_container, 3)
 
         # --- 右侧: 图表回顾 ---
         right_container = QWidget()
@@ -493,7 +636,7 @@ class ReportView(QWidget):
 
         right_layout.addWidget(self._plot_container, 1)
 
-        content_layout.addWidget(right_container, 0)
+        content_layout.addWidget(right_container, 2)
         self._tabs.addTab(self._overview_page, "概览")
 
         self._details_page = QScrollArea()
@@ -567,28 +710,68 @@ class ReportView(QWidget):
     def _load_jump_report(self, r: JumpTestReport):
         self._title.setText("📊 测试报告 — 纵跳测试")
 
-        # 统计卡片
-        stats = [
-            ("触地次数", f"{r.touch_count}"),
-            ("腾空次数", f"{r.lift_count}"),
-            ("最大跳高", f"{r.max_jump_height:.3f} m"),
-            ("平均跳高", f"{r.avg_jump_height:.3f} m"),
-            ("最小跳高", f"{r.min_jump_height:.3f} m"),
-            ("跳高标准差", f"{r.std_jump_height:.3f} m"),
-            ("最大腾空", f"{r.max_air_time:.3f} s"),
-            ("平均腾空", f"{r.avg_air_time:.3f} s"),
-            ("最小腾空", f"{r.min_air_time:.3f} s"),
-            ("腾空标准差", f"{r.std_air_time:.3f} s"),
-            ("最大触地", f"{r.max_contact_time:.3f} s"),
-            ("平均触地", f"{r.avg_contact_time:.3f} s"),
-            ("最小触地", f"{r.min_contact_time:.3f} s"),
-            ("触地标准差", f"{r.std_contact_time:.3f} s"),
-            ("平均跳跃节奏", f"{r.avg_cadence:.1f} jumps/min" if r.avg_cadence else "--"),
+        stats: list[tuple[str, str, str]] = [
+            (
+                "有效跳跃次数",
+                str(len(r.jump_heights)),
+                "形成完整有效结果的跳跃次数。",
+            ),
         ]
+        if r.jump_heights:
+            stats.extend(
+                [
+                    (
+                        "平均跳高",
+                        f"{r.avg_jump_height:.3f} m",
+                        "全部有效跳跃高度的平均值。",
+                    ),
+                    (
+                        "最大跳高",
+                        f"{r.max_jump_height:.3f} m",
+                        "本次测试记录到的最大跳跃高度。",
+                    ),
+                ]
+            )
+        if r.air_times:
+            stats.append(
+                (
+                    "平均腾空时间",
+                    f"{r.avg_air_time:.3f} s",
+                    "全部有效跳跃腾空时间的平均值。",
+                )
+            )
+        if r.contact_times:
+            stats.append(
+                (
+                    "平均触地时间",
+                    f"{r.avg_contact_time:.3f} s",
+                    "全部有效触地阶段持续时间的平均值。",
+                )
+            )
+        if r.avg_cadence is not None:
+            stats.append(
+                (
+                    "平均跳跃节奏",
+                    f"{r.avg_cadence:.1f} jumps/min",
+                    "按完整跳跃周期计算的平均每分钟跳跃次数。",
+                )
+            )
+        reason = {
+            "jump_count_reached": "达到设定跳跃次数",
+            "time_up": "测试时间到",
+            "manual": "手动结束",
+        }.get(r.finish_reason, r.finish_reason)
+        stats.extend(
+            [
+                ("触地次数", str(r.touch_count), "检测到的触地事件总数。"),
+                ("离地次数", str(r.lift_count), "检测到的离地事件总数。"),
+                ("测试结束原因", reason, "本次测试停止的触发条件。"),
+            ]
+        )
         self._fill_stat_cards(stats)
 
         # 高亮最大跳高
-        if len(self._stat_cards) > 2:
+        if r.jump_heights and len(self._stat_cards) > 2:
             self._stat_cards[2].set_color(dayu_theme.primary_color)
 
         # 图表: 全量数据
@@ -620,18 +803,30 @@ class ReportView(QWidget):
         self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
 
         stats = [
-            ("总步数", f"{r.touch_count}"),
-            ("离地次数", f"{r.lift_count}"),
-            ("平均步长", f"{r.avg_stride:.2f} cm"),
-            ("最大步长", f"{r.max_stride:.2f} cm"),
-            ("平均步速", f"{r.avg_velocity:.2f} cm/s"),
-            ("最大步速", f"{r.max_velocity:.2f} cm/s"),
+            ("总步数", f"{r.touch_count}", "检测到的触地事件总数。"),
+            ("离地次数", f"{r.lift_count}", "检测到的离地事件总数。"),
+            ("平均步长", f"{r.avg_stride:.2f} cm", "全部步长的平均值。"),
+            ("最大步长", f"{r.max_stride:.2f} cm", "本次测试的最大步长。"),
+            ("平均步速", f"{r.avg_velocity:.2f} cm/s", "全部步速的平均值。"),
+            ("最大步速", f"{r.max_velocity:.2f} cm/s", "本次测试的最大步速。"),
         ]
 
         if r.imbalance_index is not None:
-            stats.append(("不平衡指数", f"{r.imbalance_index:.1f}%"))
+            stats.append(
+                (
+                    "不平衡指数",
+                    f"{r.imbalance_index:.1f}%",
+                    "左右侧支撑时间的相对差异。",
+                )
+            )
         if r.avg_double_support is not None:
-            stats.append(("双支撑期", f"{r.avg_double_support:.3f} s"))
+            stats.append(
+                (
+                    "双支撑期",
+                    f"{r.avg_double_support:.3f} s",
+                    "双脚同时接触测试区域的平均时间。",
+                )
+            )
 
         self._fill_stat_cards(stats)
 
@@ -665,45 +860,11 @@ class ReportView(QWidget):
 
         # 配置快照
         snap = r.report_config_snapshot
-        speed = snap.get("treadmill_speed", "--")
         direction = snap.get("direction", "--")
         self._replay_panel.set_direction(direction)
         self._replay_panel.set_timeline(getattr(r, "visual_timeline", ()))
-        foot_length = r.foot_length_cm_snapshot
 
-        # 总览指标
-        stats = [
-            ("触地次数", f"{r.touch_count}"),
-            ("离地次数", f"{r.lift_count}"),
-            ("有效步数", f"{sum(1 for s in r.per_step_results if s.is_included_in_statistics)}"),
-            ("起始脚", _side_label(r.resolved_starting_foot)),
-            ("速度", f"{speed} km/h"),
-            ("方向", direction),
-            ("足长", f"{foot_length} cm" if foot_length else "--"),
-        ]
-        left_count = sum(
-            1 for cycle in r.gait_cycles
-            if cycle.side == "left" and cycle.is_included_in_statistics
-        )
-        right_count = sum(
-            1 for cycle in r.gait_cycles
-            if cycle.side == "right" and cycle.is_included_in_statistics
-        )
-        stats.extend([
-            ("左脚有效周期", str(left_count)),
-            ("右脚有效周期", str(right_count)),
-        ])
-        if r.gait_cycles:
-            cycle_summary = r.cycle_metric_summaries.get("gait_cycle_s")
-            stance_summary = r.cycle_metric_summaries.get("stance_phase_percent")
-            swing_summary = r.cycle_metric_summaries.get("swing_phase_percent")
-            if cycle_summary and cycle_summary.mean is not None:
-                stats.append(("平均步态周期", f"{cycle_summary.mean:.3f} s"))
-            if stance_summary and stance_summary.mean is not None:
-                stats.append(("平均支撑相", f"{stance_summary.mean:.1f}%"))
-            if swing_summary and swing_summary.mean is not None:
-                stats.append(("平均摆动相", f"{swing_summary.mean:.1f}%"))
-        self._fill_stat_cards(stats)
+        self._fill_stat_cards(_treadmill_overview_stats(r))
 
         if r.gait_cycles:
             self._build_cycle_timeline(r.gait_cycles)
@@ -1026,19 +1187,20 @@ class ReportView(QWidget):
         self._details_layout.addWidget(widget)
         self._dynamic_widgets.append(widget)
 
-    def _fill_stat_cards(self, stats: list[tuple[str, str]]):
-        """填充统计卡片。stats 为 (label, value) 列表。"""
+    def _fill_stat_cards(self, stats: list[tuple[str, str, str]]):
+        """填充至多 12 张统计卡片。"""
         for i, card in enumerate(self._stat_cards):
-            if i < len(stats):
-                label, value = stats[i]
+            if i < min(len(stats), 12):
+                label, value, tooltip = stats[i]
                 card._label.setText(label)
                 card.set_value(value)
-                card.set_color("#f0f0f0")  # 重置颜色
+                card.set_color("#f0f0f0")
+                card.setToolTip(tooltip)
                 card.show()
             else:
+                card.setToolTip("")
                 card.hide()
         self._stats_layout.invalidate()
-        self._stats_content.adjustSize()
         self._stats_content.updateGeometry()
 
     def _on_export(self):
