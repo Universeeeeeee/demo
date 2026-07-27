@@ -249,12 +249,6 @@ class LLMConfigAgent:
         has_constraint = any(term in text for term in self.CONFIG_CONSTRAINT_TERMS)
         return has_action and has_constraint
 
-    _CONFIG_SUMMARY_KEYWORDS = ("配置", "参数设置", "设置总结", "为你配置", "测试参数", "已配置")
-
-    @staticmethod
-    def _looks_like_config_summary(reply: str) -> bool:
-        return any(kw in reply for kw in LLMConfigAgent._CONFIG_SUMMARY_KEYWORDS)
-
     def _is_current_config_query(self, user_message: str) -> bool:
         """识别“展示/输出当前配置”类请求，避免误走重新生成配置。"""
         text = user_message.lower()
@@ -415,7 +409,16 @@ class LLMConfigAgent:
         ctx: AthleteProfile,
         snapshot: list,
         runtime_ctx: str,
-        initial_sample: tuple[Any, Union[LLMTestConfig, ChatResponse], float] | None = None,
+        initial_sample: tuple[
+            Any,
+            Union[
+                LLMTestConfig,
+                LLMTreadmillGaitConfig,
+                LLMTreadmillRunningConfig,
+                ChatResponse,
+            ],
+            float,
+        ] | None = None,
     ) -> list[Any]:
         """ClarifyGPT: 从同一个上下文快照并行采样 N 次。"""
         samples: list[Any] = []
@@ -522,6 +525,8 @@ class LLMConfigAgent:
         normalized_reply = self._format_config_reply_markdown(
             config=config, raw_reply=verified.reply_message,
         )
+        if stream_callback:
+            stream_callback(normalized_reply)
         return self._finalize(
             config, normalized_reply, t_start, timing, "配置成功", stream_callback,
         )
@@ -555,7 +560,16 @@ class LLMConfigAgent:
         t_start: float,
         timing: list[str],
         stream_callback: Callable[[str], None] | None = None,
-        initial_sample: tuple[Any, Union[LLMTestConfig, ChatResponse], float] | None = None,
+        initial_sample: tuple[
+            Any,
+            Union[
+                LLMTestConfig,
+                LLMTreadmillGaitConfig,
+                LLMTreadmillRunningConfig,
+                ChatResponse,
+            ],
+            float,
+        ] | None = None,
     ) -> tuple[AnyTestConfig | None, str]:
         """配置请求路径：N 个样本从同一快照真正并行，随后聚类裁判。"""
         if stream_callback:
@@ -627,18 +641,22 @@ class LLMConfigAgent:
                 )
                 elapsed = time.perf_counter() - t0
                 print(f"[Timing] 单次 LLM 调用: {elapsed:.1f}s")
-                timing.append(f"single={elapsed:.1f}s")
 
                 if isinstance(result.output, (LLMTestConfig, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig)):
-                    timing.append("gate=miss→chat")
-                    self.message_history = result.all_messages()
-                    reply = result.output.reply_message or ""
-                    if not reply or self._looks_like_config_summary(reply):
-                        reply = "这个问题不涉及测试配置，当前配置保持不变。"
-                    return self._finalize(
-                        None, reply, t_start, timing, "ChatResponse(gate miss)",
+                    timing.append("gate=miss→config-verify")
+                    return await self._run_parallel_clarify(
+                        agent,
+                        user_message,
+                        ctx,
+                        snapshot,
+                        runtime_ctx,
+                        t_start,
+                        timing,
+                        initial_sample=(result, result.output, elapsed),
                     )
 
+                timing.append(f"single={elapsed:.1f}s")
+                timing.append("gate=miss→chat")
                 self.message_history = result.all_messages()
                 return await self._process_single_output(
                     result.output, t_start, timing,
@@ -713,23 +731,26 @@ class LLMConfigAgent:
 
                     elapsed = time.perf_counter() - t0
                     print(f"[Timing] 单次 LLM 调用(流式): {elapsed:.1f}s")
-                    timing.append(f"single={elapsed:.1f}s")
 
                     output = await result.get_output()
                     stream_history = result.all_messages()
 
                 if isinstance(output, (LLMTestConfig, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig)):
-                    timing.append("gate=miss→chat")
-                    self.message_history = stream_history
-                    reply = output.reply_message or ""
-                    if not reply or self._looks_like_config_summary(reply):
-                        reply = "这个问题不涉及测试配置，当前配置保持不变。"
-                    on_chunk(reply)  # 流式 UI 需要正文，不能只靠 _finalize 的 timing hint
-                    return self._finalize(
-                        None, reply, t_start, timing, "ChatResponse(gate miss)",
+                    timing.append("gate=miss→config-verify")
+                    return await self._run_parallel_clarify(
+                        agent,
+                        user_message,
+                        ctx,
+                        snapshot,
+                        runtime_ctx,
+                        t_start,
+                        timing,
                         stream_callback=on_chunk,
+                        initial_sample=(result, output, elapsed),
                     )
 
+                timing.append(f"single={elapsed:.1f}s")
+                timing.append("gate=miss→chat")
                 self.message_history = stream_history
                 return await self._process_single_output(
                     output, t_start, timing, on_chunk,
