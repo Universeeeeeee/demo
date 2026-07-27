@@ -26,7 +26,7 @@ from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QFrame, QSizePolicy, QMessageBox, QFileDialog,
-    QScrollArea, QTabWidget, QTableWidget,
+    QComboBox, QTabWidget, QTableWidget, QToolButton,
 )
 
 from dayu_widgets.label import MLabel
@@ -105,11 +105,54 @@ QWidget#StatsContent {
     background: transparent;
     border: none;
 }
-QScrollArea#ReportDetailsScroll,
-QScrollArea#ReportDetailsScroll QWidget#qt_scrollarea_viewport,
-QWidget#ReportDetailsContent {
+QWidget#ReportDetailsPage,
+QWidget#ReportDetailPage,
+QTabWidget#ReportDetailTabs {
     background-color: #0f1620;
     border: none;
+}
+QTabWidget#ReportDetailTabs::pane {
+    border: 1px solid #2b394a;
+    border-radius: 7px;
+    background-color: #0f1620;
+}
+QTabWidget#ReportDetailTabs QTabBar::tab {
+    min-width: 110px;
+    min-height: 30px;
+    padding: 4px 14px;
+    border: 1px solid #354151;
+    background-color: #171f2b;
+    color: #aeb7c5;
+}
+QTabWidget#ReportDetailTabs QTabBar::tab:selected {
+    background-color: #222d3c;
+    color: #ff8a1f;
+    font-weight: 650;
+}
+QComboBox#ReportFilterCombo,
+QToolButton#ReportMoreStatsButton {
+    min-height: 30px;
+    padding: 2px 10px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background-color: #171f2b;
+    color: #dce5f0;
+}
+QComboBox#ReportFilterCombo:hover,
+QToolButton#ReportMoreStatsButton:hover,
+QToolButton#ReportMoreStatsButton:checked {
+    border-color: #ff7a00;
+    color: #ff9a3d;
+}
+QComboBox#ReportFilterCombo QAbstractItemView {
+    border: 1px solid #354151;
+    background-color: #171f2b;
+    color: #dce5f0;
+    selection-background-color: #263d55;
+}
+QLabel#ReportFilterLabel {
+    color: #aeb7c5;
+    font-size: 10pt;
 }
 QTableWidget#ReportDetailTable {
     background-color: #111a25;
@@ -147,41 +190,33 @@ QTableWidget#ReportDetailTable QTableCornerButton::section {
     border-right: 1px solid #2f3d4e;
     border-bottom: 1px solid #344356;
 }
-QScrollArea#ReportDetailsScroll QScrollBar:vertical,
 QTableWidget#ReportDetailTable QScrollBar:vertical {
     width: 10px;
     margin: 0;
     border: none;
     background-color: #0c131d;
 }
-QScrollArea#ReportDetailsScroll QScrollBar:horizontal,
 QTableWidget#ReportDetailTable QScrollBar:horizontal {
     height: 10px;
     margin: 0;
     border: none;
     background-color: #0c131d;
 }
-QScrollArea#ReportDetailsScroll QScrollBar::handle,
 QTableWidget#ReportDetailTable QScrollBar::handle {
     min-width: 36px;
     min-height: 36px;
     border-radius: 5px;
     background-color: #3a485a;
 }
-QScrollArea#ReportDetailsScroll QScrollBar::handle:hover,
 QTableWidget#ReportDetailTable QScrollBar::handle:hover {
     background-color: #4b5b6f;
 }
-QScrollArea#ReportDetailsScroll QScrollBar::add-line,
-QScrollArea#ReportDetailsScroll QScrollBar::sub-line,
 QTableWidget#ReportDetailTable QScrollBar::add-line,
 QTableWidget#ReportDetailTable QScrollBar::sub-line {
     width: 0;
     height: 0;
     background: transparent;
 }
-QScrollArea#ReportDetailsScroll QScrollBar::add-page,
-QScrollArea#ReportDetailsScroll QScrollBar::sub-page,
 QTableWidget#ReportDetailTable QScrollBar::add-page,
 QTableWidget#ReportDetailTable QScrollBar::sub-page {
     background: transparent;
@@ -639,17 +674,63 @@ class ReportView(QWidget):
         content_layout.addWidget(right_container, 2)
         self._tabs.addTab(self._overview_page, "概览")
 
-        self._details_page = QScrollArea()
-        self._details_page.setObjectName("ReportDetailsScroll")
-        self._details_page.setWidgetResizable(True)
-        self._details_page.setFrameShape(QFrame.NoFrame)
-        self._details_content = QWidget()
-        self._details_content.setObjectName("ReportDetailsContent")
-        self._details_layout = QVBoxLayout(self._details_content)
-        self._details_layout.setContentsMargins(8, 8, 8, 8)
-        self._details_layout.setSpacing(12)
-        self._details_layout.setAlignment(Qt.AlignTop)
-        self._details_page.setWidget(self._details_content)
+        self._details_page = QWidget()
+        self._details_page.setObjectName("ReportDetailsPage")
+        details_layout = QVBoxLayout(self._details_page)
+        details_layout.setContentsMargins(8, 8, 8, 8)
+        details_layout.setSpacing(8)
+
+        self._detail_tabs = QTabWidget()
+        self._detail_tabs.setObjectName("ReportDetailTabs")
+        self._detail_tabs.setDocumentMode(True)
+        details_layout.addWidget(self._detail_tabs)
+
+        self._summary_page = QWidget()
+        self._summary_page.setObjectName("ReportDetailPage")
+        self._summary_layout = QVBoxLayout(self._summary_page)
+        self._summary_layout.setContentsMargins(6, 8, 6, 6)
+        self._summary_layout.setSpacing(8)
+        summary_controls = QHBoxLayout()
+        summary_controls.addStretch()
+        self._more_stats_button = QToolButton()
+        self._more_stats_button.setObjectName("ReportMoreStatsButton")
+        self._more_stats_button.setText("更多统计")
+        self._more_stats_button.setCheckable(True)
+        self._more_stats_button.toggled.connect(
+            self._toggle_extended_summary_columns
+        )
+        summary_controls.addWidget(self._more_stats_button)
+        self._summary_layout.addLayout(summary_controls)
+        self._detail_tabs.addTab(self._summary_page, "统计汇总")
+
+        self._cycle_page = QWidget()
+        self._cycle_page.setObjectName("ReportDetailPage")
+        self._cycle_layout = QVBoxLayout(self._cycle_page)
+        self._cycle_layout.setContentsMargins(6, 8, 6, 6)
+        self._cycle_layout.setSpacing(8)
+        self._cycle_filter = self._build_detail_filter()
+        self._cycle_filter.currentIndexChanged.connect(
+            self._rebuild_cycle_detail_table
+        )
+        self._cycle_layout.addLayout(
+            self._filter_row("显示周期", self._cycle_filter)
+        )
+        self._detail_tabs.addTab(self._cycle_page, "周期明细")
+
+        self._step_page = QWidget()
+        self._step_page.setObjectName("ReportDetailPage")
+        self._step_layout = QVBoxLayout(self._step_page)
+        self._step_layout.setContentsMargins(6, 8, 6, 6)
+        self._step_layout.setSpacing(8)
+        self._step_filter = self._build_detail_filter()
+        self._step_filter.currentIndexChanged.connect(
+            self._rebuild_step_detail_table
+        )
+        self._step_layout.addLayout(
+            self._filter_row("显示逐步数据", self._step_filter)
+        )
+        self._detail_tabs.addTab(self._step_page, "逐步数据")
+
         self._tabs.addTab(self._details_page, "明细")
 
         main_layout.addWidget(self._tabs, 1)
@@ -686,14 +767,23 @@ class ReportView(QWidget):
 
         # 结束原因
         reason_map = {
-            "jump_count_reached": "✅ 跳跃次数已达标",
-            "time_up": "✅ 测试时间到",
-            "manual": "⏹ 手动结束",
+            "jump_count_reached": "测试已完成 · 跳跃次数已达标",
+            "time_up": "测试已完成 · 测试时间到",
+            "manual": "测试已完成 · 手动结束",
         }
         self._reason_label.setText(reason_map.get(report.finish_reason, report.finish_reason))
         self._replay_panel.hide()
         self._plot_container.show()
         self._tabs.setCurrentIndex(0)
+        self._tabs.setTabVisible(1, isinstance(
+            report, (TreadmillGaitReport, TreadmillRunningReport)
+        ))
+        self._detail_tabs.setCurrentIndex(0)
+        self._more_stats_button.setChecked(False)
+        for detail_filter in (self._cycle_filter, self._step_filter):
+            detail_filter.blockSignals(True)
+            detail_filter.setCurrentIndex(0)
+            detail_filter.blockSignals(False)
         self._clear_dynamic_widgets()
 
         if isinstance(report, JumpTestReport):
@@ -866,103 +956,39 @@ class ReportView(QWidget):
 
         self._fill_stat_cards(_treadmill_overview_stats(r))
 
-        if r.gait_cycles:
-            self._build_cycle_timeline(r.gait_cycles)
-            self._build_cycle_detail_table(r.gait_cycles)
-            self._build_cycle_summary_table(r)
-
-        # 逐步详情表
-        if r.per_step_results:
-            self._build_treadmill_step_table(r.per_step_results)
-
-        # 指标汇总
-        if r.metric_summaries:
-            self._build_treadmill_metric_summary(r.metric_summaries)
-
-        # 左右侧对比
-        if r.left_right_results:
-            self._build_treadmill_left_right(r.left_right_results)
-
-    def _build_cycle_timeline(self, cycles: tuple[GaitCycleRecord, ...]):
-        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-
-        table = QTableWidget(len(cycles), 6)
-        table.setHorizontalHeaderLabels([
-            "序号", "脚", "周期阶段图", "周期 (s)", "纳入统计", "统计说明",
-        ])
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
-        table.setAlternatingRowColors(True)
-        table.verticalHeader().setVisible(False)
-        for row, cycle in enumerate(cycles):
-            side = "左脚" if cycle.side == "left" else "右脚" if cycle.side == "right" else "未知脚"
-            for column, text in enumerate((str(cycle.index + 1), side)):
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(row, column, item)
-            table.setCellWidget(row, 2, CyclePhaseBar(cycle))
-            item = QTableWidgetItem(_fmt(cycle.gait_cycle_s))
-            item.setTextAlignment(Qt.AlignCenter)
-            table.setItem(row, 3, item)
-            included_item = QTableWidgetItem(
-                "是" if cycle.is_included_in_statistics else "否"
-            )
-            included_item.setTextAlignment(Qt.AlignCenter)
-            table.setItem(row, 4, included_item)
-            note_item = QTableWidgetItem(
-                _statistics_note(
-                    cycle.is_included_in_statistics,
-                    cycle.statistics_exclusion_reason,
-                    cycle.quality_flags,
-                )
-            )
-            note_item.setTextAlignment(Qt.AlignCenter)
-            table.setItem(row, 5, note_item)
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        table.setMinimumHeight(min(max(len(cycles) * 30 + 52, 120), 420))
-        self._cycle_timeline_table = table
-        self._add_detail_widget(table)
+        self._build_treadmill_summary_table(r)
+        self._rebuild_cycle_detail_table()
+        self._rebuild_step_detail_table()
 
     def _build_cycle_detail_table(self, cycles: tuple[GaitCycleRecord, ...]):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 
         columns = [
-            "序号", "脚", "步态周期(s)", "支撑相(s)", "支撑相(%)",
-            "摆动相(s)", "摆动相(%)", "步时间(s)", "单支撑(s)",
-            "单支撑(%)", "总双支撑(s)", "总双支撑(%)",
-            "负荷反应期(s)", "负荷反应期(%)", "摆动前期(s)",
-            "摆动前期(%)", "腾空时间(s)", "纳入统计", "统计说明",
+            "序号",
+            "脚",
+            "周期阶段图",
+            "步态周期(s)",
+            "支撑相(%)",
+            "摆动相(%)",
+            "步幅(cm)",
+            "纳入统计",
+            "统计说明",
         ]
         table = QTableWidget(len(cycles), len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
         for row, cycle in enumerate(cycles):
             values = [
                 str(cycle.index + 1),
-                "左脚" if cycle.side == "left" else "右脚" if cycle.side == "right" else "未知脚",
+                _side_label(cycle.side),
+                None,
                 _fmt(cycle.gait_cycle_s),
-                _fmt(cycle.stance_phase_s),
                 _fmt(cycle.stance_phase_percent),
-                _fmt(cycle.swing_phase_s),
                 _fmt(cycle.swing_phase_percent),
-                _fmt(cycle.step_time_s),
-                _fmt(cycle.single_support_s),
-                _fmt(cycle.single_support_percent),
-                _fmt(cycle.total_double_support_s),
-                _fmt(cycle.total_double_support_percent),
-                _fmt(cycle.load_response_s),
-                _fmt(cycle.load_response_percent),
-                _fmt(cycle.pre_swing_s),
-                _fmt(cycle.pre_swing_percent),
-                _fmt(cycle.total_flight_time_s),
+                _fmt(cycle.stride_length_cm),
                 "是" if cycle.is_included_in_statistics else "否",
                 _statistics_note(
                     cycle.is_included_in_statistics,
@@ -971,205 +997,296 @@ class ReportView(QWidget):
                 ),
             ]
             for column, text in enumerate(values):
+                if column == 2:
+                    table.setCellWidget(row, column, CyclePhaseBar(cycle))
+                    continue
                 item = QTableWidgetItem(text or "N/A")
                 item.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row, column, item)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.setMinimumHeight(min(max(len(cycles) * 28 + 52, 120), 520))
+        header = table.horizontalHeader()
+        for column in range(len(columns)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._cycle_detail_table = table
-        self._add_detail_widget(table)
+        self._cycle_timeline_table = table
+        self._add_detail_widget(table, self._cycle_layout)
 
-    def _build_cycle_summary_table(
+    def _build_treadmill_summary_table(
         self, report: TreadmillGaitReport | TreadmillRunningReport
     ):
         from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 
-        names = {
-            "gait_cycle_s": "步态周期 (s)",
-            "stance_phase_s": "支撑相 (s)",
-            "stance_phase_percent": "支撑相 (%)",
-            "swing_phase_s": "摆动相 (s)",
-            "swing_phase_percent": "摆动相 (%)",
-            "step_time_s": "步时间 (s)",
-            "single_support_s": "单支撑 (s)",
-            "single_support_percent": "单支撑 (%)",
-            "total_double_support_s": "总双支撑 (s)",
-            "total_double_support_percent": "总双支撑 (%)",
-            "load_response_s": "负荷反应期 (s)",
-            "load_response_percent": "负荷反应期 (%)",
-            "pre_swing_s": "摆动前期 (s)",
-            "pre_swing_percent": "摆动前期 (%)",
-            "total_flight_time_s": "腾空时间 (s)",
-        }
+        step_rows = [
+            ("step_length_cm", "步长 (cm)", 1.0),
+            ("cadence_steps_per_min", "步频 (steps/min)", 1.0),
+            ("contact_time_s", "触地时间 (ms)", 1000.0),
+        ]
+        cycle_rows = [
+            ("stride_length_cm", "步幅 (cm)", 1.0),
+            ("gait_cycle_s", "步态周期 (s)", 1.0),
+        ]
+        if isinstance(report, TreadmillRunningReport):
+            step_rows.append(("flight_time_s", "腾空时间 (ms)", 1000.0))
+        cycle_rows.extend(
+            [
+                ("stance_phase_percent", "支撑相 (%)", 1.0),
+                ("swing_phase_percent", "摆动相 (%)", 1.0),
+            ]
+        )
+        if isinstance(report, TreadmillGaitReport):
+            cycle_rows.extend(
+                [
+                    (
+                        "total_double_support_s",
+                        "双支撑时间 (ms)",
+                        1000.0,
+                    ),
+                    ("single_support_s", "单支撑时间 (ms)", 1000.0),
+                ]
+            )
+
+        ordered_rows = [
+            ("step", *step_rows[0]),
+            ("cycle", *cycle_rows[0]),
+            ("step", *step_rows[1]),
+            ("cycle", *cycle_rows[1]),
+            ("step", *step_rows[2]),
+        ]
+        if isinstance(report, TreadmillRunningReport):
+            ordered_rows.append(("step", *step_rows[3]))
+        ordered_rows.extend(
+            ("cycle", *row) for row in cycle_rows[2:]
+        )
+
         rows = []
-        for key, summary in report.cycle_metric_summaries.items():
-            if summary.count == 0:
+        for source, key, label, scale in ordered_rows:
+            if source == "step":
+                summary = report.metric_summaries.get(key)
+                left = report.left_right_results.get(f"left_{key}")
+                right = report.left_right_results.get(f"right_{key}")
+                asymmetry = report.asymmetry_metrics.get(f"{key}_percent")
+            else:
+                summary = report.cycle_metric_summaries.get(key)
+                left = report.cycle_side_summaries.get("left", {}).get(key)
+                right = report.cycle_side_summaries.get("right", {}).get(key)
+                asymmetry = report.cycle_asymmetry_percent.get(key)
+            if summary is None or summary.count == 0:
                 continue
-            left = report.cycle_side_summaries.get("left", {}).get(key)
-            right = report.cycle_side_summaries.get("right", {}).get(key)
-            rows.append([
-                names.get(key, key),
-                _fmt(summary.mean),
-                str(left.count if left else 0),
-                _fmt(left.mean if left else None),
-                str(right.count if right else 0),
-                _fmt(right.mean if right else None),
-                _fmt(report.cycle_asymmetry_percent.get(key)),
-            ])
 
-        table = QTableWidget(len(rows), 7)
-        table.setHorizontalHeaderLabels([
-            "指标", "总体均值", "左脚数量", "左脚均值",
-            "右脚数量", "右脚均值", "不对称率(%)",
-        ])
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
-        table.setAlternatingRowColors(True)
-        for row_index, row in enumerate(rows):
-            for column, text in enumerate(row):
-                item = QTableWidgetItem(text or "N/A")
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(row_index, column, item)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.setMinimumHeight(max(len(rows) * 28 + 52, 120))
-        self._cycle_summary_table = table
-        self._add_detail_widget(table)
-
-    def _build_treadmill_step_table(self, steps: tuple[TreadmillStepResult, ...]):
-        """Build step detail table below the stat cards."""
-        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+            side_samples_sufficient = (
+                left is not None
+                and right is not None
+                and left.count >= 3
+                and right.count >= 3
+            )
+            if not side_samples_sufficient:
+                asymmetry_text = "样本不足"
+            elif asymmetry is not None:
+                asymmetry_text = f"{asymmetry:.1f}%"
+            else:
+                asymmetry_text = "—"
+            rows.append(
+                [
+                    label,
+                    str(summary.count),
+                    _scaled_fmt(summary.mean, scale),
+                    _scaled_fmt(left.mean if left else None, scale),
+                    _scaled_fmt(right.mean if right else None, scale),
+                    asymmetry_text,
+                    _scaled_fmt(summary.min, scale),
+                    _scaled_fmt(summary.max, scale),
+                    _scaled_fmt(summary.std, scale),
+                    _fmt(summary.cv_percent),
+                ]
+            )
 
         columns = [
-            "#", "脚", "状态", "有效", "纳入统计",
-            "触地时间(s)", "离地时间(s)", "步长(cm)", "参考点(cm)",
-            "两脚间距(cm)", "步速(m/s)", "统计说明",
+            "指标",
+            "有效样本数",
+            "总体均值",
+            "左脚均值",
+            "右脚均值",
+            "不对称性",
+            "最小值",
+            "最大值",
+            "标准差",
+            "CV(%)",
         ]
-        table = QTableWidget(len(steps), len(columns))
+        table = QTableWidget(len(rows), len(columns))
         table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setStretchLastSection(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        for row_index, row in enumerate(rows):
+            for column, text in enumerate(row):
+                item = QTableWidgetItem(text or "—")
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_index, column, item)
+        header = table.horizontalHeader()
+        for column in range(len(columns)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        for column in (0, 2, 3, 4, 5):
+            header.setSectionResizeMode(column, QHeaderView.Stretch)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._summary_table = table
+        self._cycle_summary_table = table
+        self._add_detail_widget(table, self._summary_layout)
+        self._toggle_extended_summary_columns(
+            self._more_stats_button.isChecked()
+        )
+
+    def _build_treadmill_step_table(self, steps: tuple[TreadmillStepResult, ...]):
+        """Build the mode-specific per-step detail table."""
+        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        is_running = isinstance(self._report, TreadmillRunningReport)
+        show_flight = is_running and any(
+            step.flight_time_s is not None
+            for step in getattr(self._report, "per_step_results", ())
+        )
+        columns = [
+            "序号",
+            "脚",
+            "步长(cm)",
+            "触地时间(ms)",
+        ]
+        if show_flight:
+            columns.append("腾空时间(ms)")
+        columns.extend(["纳入统计", "统计说明"])
+
+        table = QTableWidget(len(steps), len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
 
         for row_idx, step in enumerate(steps):
             items = [
-                str(step.index),
-                step.side,
-                step.row_status,
-                "yes" if step.is_event_valid else "no",
-                "yes" if step.is_included_in_statistics else "no",
-                _fmt(step.contact_time_s),
-                _fmt(step.flight_time_s),
+                str(step.index + 1),
+                _side_label(step.side),
                 _fmt(step.step_length_cm),
-                _fmt(step.step_reference_cm),
-                _fmt(step.gap_between_feet_cm),
-                _fmt(step.speed_m_s),
-                _statistics_note(
-                    step.is_included_in_statistics,
-                    step.statistics_exclusion_reason,
-                    step.quality_flags,
-                ),
+                _scaled_fmt(step.contact_time_s, 1000.0),
             ]
+            if show_flight:
+                items.append(_scaled_fmt(step.flight_time_s, 1000.0))
+            items.extend(
+                [
+                    "是" if step.is_included_in_statistics else "否",
+                    _statistics_note(
+                        step.is_included_in_statistics,
+                        step.statistics_exclusion_reason,
+                        step.quality_flags,
+                    ),
+                ]
+            )
             for col_idx, text in enumerate(items):
                 item = QTableWidgetItem(text or "N/A")
                 item.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row_idx, col_idx, item)
 
-        # Resize columns
         header = table.horizontalHeader()
         for col in range(len(columns)):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-
-        table.setMinimumHeight(max(len(steps) * 28 + 52, 120))
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        header.setSectionResizeMode(len(columns) - 1, QHeaderView.Stretch)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._treadmill_step_table = table
-        self._add_detail_widget(table)
-
-    def _build_treadmill_metric_summary(self, summaries: dict[str, "MetricSummary"]):
-        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-
-        rows_data = []
-        for metric_name, summary in summaries.items():
-            display_name = metric_name.replace("_", " ")
-            rows_data.append((
-                display_name,
-                str(summary.count),
-                _fmt(summary.mean),
-                _fmt(summary.min),
-                _fmt(summary.max),
-                _fmt(summary.std),
-                _fmt(summary.cv_percent),
-            ))
-
-        columns = ["指标", "计数", "均值", "最小值", "最大值", "标准差", "CV(%)"]
-        table = QTableWidget(len(rows_data), len(columns))
-        table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
-        table.setAlternatingRowColors(True)
-
-        for row_idx, row in enumerate(rows_data):
-            for col_idx, text in enumerate(row):
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(row_idx, col_idx, item)
-
-        header = table.horizontalHeader()
-        for col in range(len(columns)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-
-        table.setMinimumHeight(max(len(rows_data) * 28 + 52, 120))
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self._add_detail_widget(table)
-
-    def _build_treadmill_left_right(self, lr: dict[str, "MetricSummary"]):
-        from qtpy.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-
-        rows_data = []
-        for metric_name, summary in lr.items():
-            display_name = metric_name.replace("_", " ")
-            rows_data.append((
-                display_name,
-                str(summary.count),
-                _fmt(summary.mean),
-                _fmt(summary.min),
-                _fmt(summary.max),
-                _fmt(summary.std),
-                _fmt(summary.cv_percent),
-            ))
-
-        if not rows_data:
-            return
-
-        columns = ["左右指标", "计数", "均值", "最小值", "最大值", "标准差", "CV(%)"]
-        table = QTableWidget(len(rows_data), len(columns))
-        table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
-        table.setAlternatingRowColors(True)
-
-        for row_idx, row in enumerate(rows_data):
-            for col_idx, text in enumerate(row):
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(row_idx, col_idx, item)
-
-        header = table.horizontalHeader()
-        for col in range(len(columns)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-
-        table.setMinimumHeight(max(len(rows_data) * 28 + 52, 120))
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self._add_detail_widget(table)
+        self._add_detail_widget(table, self._step_layout)
 
     # ------------------------------------------------------------------
     #  辅助方法
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_detail_filter() -> QComboBox:
+        detail_filter = QComboBox()
+        detail_filter.setObjectName("ReportFilterCombo")
+        detail_filter.addItem("已纳入", "included")
+        detail_filter.addItem("已排除", "excluded")
+        detail_filter.addItem("全部", "all")
+        detail_filter.setMinimumWidth(120)
+        return detail_filter
+
+    @staticmethod
+    def _filter_row(label: str, detail_filter: QComboBox) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        filter_label = QLabel(label)
+        filter_label.setObjectName("ReportFilterLabel")
+        row.addWidget(filter_label)
+        row.addWidget(detail_filter)
+        row.addStretch()
+        return row
+
+    @staticmethod
+    def _filter_items(items: tuple, filter_value: str) -> tuple:
+        if filter_value == "included":
+            return tuple(
+                item
+                for item in items
+                if item.is_included_in_statistics
+            )
+        if filter_value == "excluded":
+            return tuple(
+                item
+                for item in items
+                if not item.is_included_in_statistics
+            )
+        return items
+
+    def _rebuild_cycle_detail_table(self, _index=None):
+        if not isinstance(
+            self._report, (TreadmillGaitReport, TreadmillRunningReport)
+        ):
+            return
+        self._drop_dynamic_table(
+            "_cycle_detail_table", "_cycle_timeline_table"
+        )
+        cycles = self._filter_items(
+            self._report.gait_cycles,
+            self._cycle_filter.currentData(),
+        )
+        self._build_cycle_detail_table(cycles)
+
+    def _rebuild_step_detail_table(self, _index=None):
+        if not isinstance(
+            self._report, (TreadmillGaitReport, TreadmillRunningReport)
+        ):
+            return
+        self._drop_dynamic_table("_treadmill_step_table")
+        steps = self._filter_items(
+            self._report.per_step_results,
+            self._step_filter.currentData(),
+        )
+        self._build_treadmill_step_table(steps)
+
+    def _toggle_extended_summary_columns(self, checked: bool):
+        table = getattr(self, "_summary_table", None)
+        if table is None:
+            return
+        for column in range(6, 10):
+            table.setColumnHidden(column, not checked)
+
+    def _drop_dynamic_table(self, *attribute_names: str):
+        table = next(
+            (
+                getattr(self, name, None)
+                for name in attribute_names
+                if getattr(self, name, None) is not None
+            ),
+            None,
+        )
+        if table is not None:
+            if table in self._dynamic_widgets:
+                self._dynamic_widgets.remove(table)
+            table.setParent(None)
+            table.deleteLater()
+        for name in attribute_names:
+            setattr(self, name, None)
 
     def _clear_dynamic_widgets(self):
         """Remove and delete all dynamically-added widgets to avoid stale tables."""
@@ -1177,14 +1294,22 @@ class ReportView(QWidget):
             w.setParent(None)
             w.deleteLater()
         self._dynamic_widgets.clear()
+        for name in (
+            "_summary_table",
+            "_cycle_summary_table",
+            "_cycle_detail_table",
+            "_cycle_timeline_table",
+            "_treadmill_step_table",
+        ):
+            setattr(self, name, None)
 
-    def _add_detail_widget(self, widget: QWidget):
+    def _add_detail_widget(self, widget: QWidget, layout: QVBoxLayout):
         if isinstance(widget, QTableWidget):
             widget.setObjectName("ReportDetailTable")
             widget.verticalHeader().setDefaultSectionSize(34)
             widget.verticalHeader().setMinimumSectionSize(30)
             widget.setFocusPolicy(Qt.NoFocus)
-        self._details_layout.addWidget(widget)
+        layout.addWidget(widget, 1)
         self._dynamic_widgets.append(widget)
 
     def _fill_stat_cards(self, stats: list[tuple[str, str, str]]):
@@ -1437,6 +1562,12 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.3f}"
+
+
+def _scaled_fmt(value: float | None, scale: float) -> str:
+    if value is None:
+        return ""
+    return f"{value * scale:.3f}"
 
 
 def _side_label(side: str) -> str:

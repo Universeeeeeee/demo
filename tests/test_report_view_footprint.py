@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 import pytest
 
 pytest.importorskip("dayu_widgets")
 
-from qtpy.QtWidgets import QApplication, QTableWidget
+from qtpy.QtWidgets import QApplication, QScrollArea, QTableWidget
 
 from config.test_report import JumpTestReport
 from config.treadmill_report import (
@@ -114,6 +116,187 @@ def test_running_overview_includes_flight_time(qtbot):
     ]
 
 
+def test_treadmill_details_use_three_internal_tabs(qtbot):
+    view = ReportView()
+    qtbot.addWidget(view)
+    view.load_report(
+        TreadmillGaitReport(
+            finish_reason="manual",
+            touch_count=0,
+            lift_count=0,
+            resolved_starting_foot="unknown",
+            starting_foot_source="unknown",
+        )
+    )
+
+    assert [view._detail_tabs.tabText(i) for i in range(3)] == [
+        "统计汇总",
+        "周期明细",
+        "逐步数据",
+    ]
+    assert not isinstance(view._details_page, QScrollArea)
+
+
+def test_non_treadmill_report_hides_empty_details_tab(qtbot):
+    view = ReportView()
+    qtbot.addWidget(view)
+    view.load_report(
+        JumpTestReport(
+            touch_count=1,
+            lift_count=1,
+            air_times=(0.4,),
+            contact_times=(0.2,),
+            cycle_times=(0.6,),
+            avg_jump_height=0.1962,
+            max_jump_height=0.1962,
+            avg_air_time=0.4,
+            max_air_time=0.4,
+            avg_contact_time=0.2,
+            avg_cadence=100.0,
+            finish_reason="manual",
+            jump_heights=(0.1962,),
+        )
+    )
+
+    assert not view._tabs.isTabVisible(1)
+
+
+def test_detail_filters_default_to_included_and_preserve_report(qtbot):
+    included = _cycle(index=0, is_included_in_statistics=True)
+    excluded = _cycle(
+        index=1,
+        side="right",
+        is_included_in_statistics=False,
+        statistics_exclusion_reason="Contact time below minimum threshold",
+    )
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=2,
+        lift_count=2,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        gait_cycles=(included, excluded),
+        per_step_results=(
+            _step(0, "left"),
+            replace(
+                _step(1, "right"),
+                is_included_in_statistics=False,
+                statistics_exclusion_reason=(
+                    "Contact time below minimum threshold"
+                ),
+            ),
+        ),
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    assert view._cycle_filter.currentData() == "included"
+    assert view._cycle_detail_table.rowCount() == 1
+    assert view._step_filter.currentData() == "included"
+    assert view._treadmill_step_table.rowCount() == 1
+    view._cycle_filter.setCurrentIndex(
+        view._cycle_filter.findData("excluded")
+    )
+    view._step_filter.setCurrentIndex(
+        view._step_filter.findData("excluded")
+    )
+    assert view._cycle_detail_table.rowCount() == 1
+    assert view._treadmill_step_table.rowCount() == 1
+    assert report.gait_cycles == (included, excluded)
+
+
+def test_treadmill_details_use_compact_mode_specific_columns(qtbot):
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=1,
+        lift_count=1,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        gait_cycles=(_cycle(stride_length_cm=120.0),),
+        per_step_results=(_step(0, "left"),),
+        metric_summaries={
+            "step_length_cm": summarize((60.0,)),
+            "contact_time_s": summarize((0.25,)),
+        },
+        cycle_metric_summaries={
+            "stride_length_cm": summarize((120.0,)),
+            "gait_cycle_s": summarize((1.0,)),
+        },
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    assert [
+        view._summary_table.horizontalHeaderItem(index).text()
+        for index in range(6)
+    ] == [
+        "指标",
+        "有效样本数",
+        "总体均值",
+        "左脚均值",
+        "右脚均值",
+        "不对称性",
+    ]
+    assert all(
+        view._summary_table.isColumnHidden(index)
+        for index in range(6, 10)
+    )
+    view._more_stats_button.setChecked(True)
+    assert not any(
+        view._summary_table.isColumnHidden(index)
+        for index in range(6, 10)
+    )
+    assert [
+        view._cycle_detail_table.horizontalHeaderItem(index).text()
+        for index in range(view._cycle_detail_table.columnCount())
+    ] == [
+        "序号",
+        "脚",
+        "周期阶段图",
+        "步态周期(s)",
+        "支撑相(%)",
+        "摆动相(%)",
+        "步幅(cm)",
+        "纳入统计",
+        "统计说明",
+    ]
+    assert [
+        view._treadmill_step_table.horizontalHeaderItem(index).text()
+        for index in range(view._treadmill_step_table.columnCount())
+    ] == [
+        "序号",
+        "脚",
+        "步长(cm)",
+        "触地时间(ms)",
+        "纳入统计",
+        "统计说明",
+    ]
+
+
+def test_running_step_details_include_flight_time(qtbot):
+    report = TreadmillRunningReport(
+        finish_reason="manual",
+        touch_count=1,
+        lift_count=1,
+        resolved_starting_foot="left",
+        starting_foot_source="auto_first_contact",
+        per_step_results=(_step(0, "left"),),
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    assert "腾空时间(ms)" in [
+        view._treadmill_step_table.horizontalHeaderItem(index).text()
+        for index in range(view._treadmill_step_table.columnCount())
+    ]
+
+
 def test_report_view_passes_treadmill_direction_to_replay_panel():
     _app()
     report = TreadmillGaitReport(
@@ -217,7 +400,14 @@ def test_treadmill_report_uses_overview_and_details_pages():
     assert view._overview_page.isAncestorOf(view._replay_panel)
     assert view._dynamic_widgets
     assert all(isinstance(widget, QTableWidget) for widget in view._dynamic_widgets)
-    assert all(widget.parent() is view._details_content for widget in view._dynamic_widgets)
+    assert len(view._dynamic_widgets) == 3
+    assert {
+        widget.parent() for widget in view._dynamic_widgets
+    } == {
+        view._summary_page,
+        view._cycle_page,
+        view._step_page,
+    }
 
 
 def test_report_details_and_tables_use_dark_layered_theme(qtbot):
@@ -247,8 +437,8 @@ def test_report_details_and_tables_use_dark_layered_theme(qtbot):
     QApplication.processEvents()
 
     assert view._tabs.tabBar().objectName() == "ReportTabBar"
-    assert view._details_page.objectName() == "ReportDetailsScroll"
-    assert view._details_content.objectName() == "ReportDetailsContent"
+    assert view._details_page.objectName() == "ReportDetailsPage"
+    assert view._detail_tabs.objectName() == "ReportDetailTabs"
     assert view._dynamic_widgets
     assert all(
         table.objectName() == "ReportDetailTable"
@@ -382,20 +572,20 @@ def test_treadmill_report_shows_chinese_statistics_notes(qtbot):
     qtbot.addWidget(view)
 
     view.load_report(report)
-
-    timeline_note = _column_index(view._cycle_timeline_table, "统计说明")
-    detail_note = _column_index(view._cycle_detail_table, "统计说明")
-    step_gap = _column_index(view._treadmill_step_table, "两脚间距(cm)")
-    step_note = _column_index(view._treadmill_step_table, "统计说明")
-    assert (
-        view._cycle_timeline_table.item(0, timeline_note).text()
-        == "未纳入：触地时间低于最小阈值；质量提示：跑步时双脚重叠超过容差"
+    view._cycle_filter.setCurrentIndex(
+        view._cycle_filter.findData("excluded")
     )
+
+    detail_note = _column_index(view._cycle_detail_table, "统计说明")
+    step_note = _column_index(view._treadmill_step_table, "统计说明")
     assert (
         view._cycle_detail_table.item(0, detail_note).text()
         == "未纳入：触地时间低于最小阈值；质量提示：跑步时双脚重叠超过容差"
     )
-    assert view._treadmill_step_table.item(0, step_gap).text() == "8.500"
+    assert "两脚间距(cm)" not in [
+        view._treadmill_step_table.horizontalHeaderItem(index).text()
+        for index in range(view._treadmill_step_table.columnCount())
+    ]
     assert (
         view._treadmill_step_table.item(0, step_note).text()
         == "质量提示：两脚间距低于最小阈值"
