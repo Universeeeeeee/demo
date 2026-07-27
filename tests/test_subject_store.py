@@ -1,5 +1,6 @@
 """Tests for the SQLite subject store MVP."""
 
+import json
 import sys
 import sqlite3
 import tempfile
@@ -392,6 +393,30 @@ class SubjectStoreTest(unittest.TestCase):
                 ),
             ),
             metric_summaries={"contact_time_s": summarize((0.2,))},
+            gait_cycles=(
+                GaitCycleRecord(
+                    index=0,
+                    side="left",
+                    start_time_s=0.0,
+                    end_time_s=1.0,
+                    gait_cycle_s=1.0,
+                    stance_phase_s=0.6,
+                    stance_phase_percent=60.0,
+                    swing_phase_s=0.4,
+                    swing_phase_percent=40.0,
+                    step_time_s=0.5,
+                    single_support_s=0.4,
+                    single_support_percent=40.0,
+                    total_double_support_s=0.2,
+                    total_double_support_percent=20.0,
+                    load_response_s=0.1,
+                    load_response_percent=10.0,
+                    pre_swing_s=0.1,
+                    pre_swing_percent=10.0,
+                    total_flight_time_s=0.0,
+                    stride_length_cm=103.5,
+                ),
+            ),
         )
         treadmill_id = self.store.record_session(
             None,
@@ -408,6 +433,22 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertIsInstance(restored, TreadmillGaitReport)
         self.assertEqual(restored.per_step_results[0].quality_flags, ("reviewed",))
         self.assertEqual(restored.metric_summaries["contact_time_s"].mean, 0.2)
+        self.assertEqual(restored.gait_cycles[0].stride_length_cm, 103.5)
+
+        with self.store._connect() as conn:
+            row = conn.execute(
+                "SELECT report_detail_json FROM test_sessions WHERE id = ?",
+                (treadmill_id,),
+            ).fetchone()
+            detail = json.loads(row["report_detail_json"])
+            detail["gait_cycles"][0].pop("stride_length_cm")
+            conn.execute(
+                "UPDATE test_sessions SET report_detail_json = ? WHERE id = ?",
+                (json.dumps(detail, ensure_ascii=False), treadmill_id),
+            )
+
+        legacy_restored = self.store.get_session(treadmill_id).report
+        self.assertIsNone(legacy_restored.gait_cycles[0].stride_length_cm)
 
     def test_session_subject_id_schema_is_nullable(self):
         with self.store._connect() as conn:

@@ -1203,7 +1203,8 @@ TREADMILL_EXPORT_COLUMNS = [
 
 GAIT_CYCLE_EXPORT_FIELDS = [
     "index", "side", "start_time_s", "end_time_s", "gait_cycle_s",
-    "stance_phase_s", "stance_phase_percent", "swing_phase_s",
+    "stride_length_cm", "stance_phase_s", "stance_phase_percent",
+    "swing_phase_s",
     "swing_phase_percent", "step_time_s", "single_support_s",
     "single_support_percent", "total_double_support_s",
     "total_double_support_percent", "load_response_s",
@@ -1214,7 +1215,7 @@ GAIT_CYCLE_EXPORT_FIELDS = [
 
 GAIT_CYCLE_EXPORT_HEADERS = [
     "序号", "脚", "开始时间(s)", "结束时间(s)", "步态周期(s)",
-    "支撑相(s)", "支撑相(%)", "摆动相(s)", "摆动相(%)",
+    "步幅(cm)", "支撑相(s)", "支撑相(%)", "摆动相(s)", "摆动相(%)",
     "步时间(s)", "单支撑(s)", "单支撑(%)", "总双支撑(s)",
     "总双支撑(%)", "负荷反应期(s)", "负荷反应期(%)",
     "摆动前期(s)", "摆动前期(%)", "腾空时间(s)", "纳入统计",
@@ -1223,6 +1224,7 @@ GAIT_CYCLE_EXPORT_HEADERS = [
 
 GAIT_CYCLE_METRIC_LABELS = {
     "gait_cycle_s": "步态周期 (s)",
+    "stride_length_cm": "步幅 (cm)",
     "stance_phase_s": "支撑相 (s)",
     "stance_phase_percent": "支撑相 (%)",
     "swing_phase_s": "摆动相 (s)",
@@ -1295,6 +1297,7 @@ _STATISTICS_REASON_LABELS = {
 _QUALITY_FLAG_LABELS = {
     "gap_below_minimum": "两脚间距低于最小阈值",
     "running_overlap_above_tolerance": "跑步时双脚重叠超过容差",
+    "non_positive_stride_length": "步幅计算结果非正值",
 }
 
 

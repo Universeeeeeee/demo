@@ -213,6 +213,7 @@ def test_gait_cycle_export_includes_exclusion_reason_and_quality_flags():
         pre_swing_s=0.0,
         pre_swing_percent=0.0,
         total_flight_time_s=0.1,
+        stride_length_cm=103.5,
         is_included_in_statistics=False,
         statistics_exclusion_reason="Contact time below minimum threshold",
         quality_flags=("gap_below_minimum",),
@@ -230,5 +231,6 @@ def test_gait_cycle_export_includes_exclusion_reason_and_quality_flags():
     values = dict(zip(GAIT_CYCLE_EXPORT_HEADERS, row))
 
     assert len(row) == len(GAIT_CYCLE_EXPORT_HEADERS)
+    assert values["步幅(cm)"] == 103.5
     assert values["未纳入原因"] == "触地时间低于最小阈值"
     assert values["质量提示"] == "两脚间距低于最小阈值"
