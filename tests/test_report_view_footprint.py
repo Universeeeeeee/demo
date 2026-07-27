@@ -460,6 +460,12 @@ def test_report_details_and_tables_use_dark_layered_theme(qtbot):
     assert view._tabs.tabBar().objectName() == "ReportTabBar"
     assert view._details_page.objectName() == "ReportDetailsPage"
     assert view._detail_tabs.objectName() == "ReportDetailTabs"
+    detail_tab_bar = view._detail_tabs.tabBar().grab().toImage()
+    detail_tab_bar_background = detail_tab_bar.pixelColor(
+        max(detail_tab_bar.width() - 10, 0),
+        detail_tab_bar.height() // 2,
+    )
+    assert detail_tab_bar_background.lightness() < 80
     assert view._dynamic_widgets
     assert all(
         table.objectName() == "ReportDetailTable"

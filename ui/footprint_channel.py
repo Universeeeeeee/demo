@@ -258,6 +258,7 @@ class FootprintReplayPanel(QWidget):
         controls = QHBoxLayout()
         self._btn_play = MPushButton("Play")
         self._btn_play.setObjectName("ReplayButton")
+        self._btn_play.setStyleSheet(REPLAY_QSS)
         self._btn_play.clicked.connect(self._toggle_playback)
         controls.addWidget(self._btn_play)
 

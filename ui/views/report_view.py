@@ -116,6 +116,9 @@ QTabWidget#ReportDetailTabs::pane {
     border-radius: 7px;
     background-color: #0f1620;
 }
+QTabBar#ReportDetailTabBar {
+    background-color: #0f1620;
+}
 QTabWidget#ReportDetailTabs QTabBar::tab {
     min-width: 110px;
     min-height: 30px;
@@ -683,6 +686,7 @@ class ReportView(QWidget):
         self._detail_tabs = QTabWidget()
         self._detail_tabs.setObjectName("ReportDetailTabs")
         self._detail_tabs.setDocumentMode(True)
+        self._detail_tabs.tabBar().setObjectName("ReportDetailTabBar")
         details_layout.addWidget(self._detail_tabs)
 
         self._summary_page = QWidget()
