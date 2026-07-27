@@ -286,6 +286,11 @@ class MainWindow(QMainWindow):
         self._session_started_at = None
         self._setup_view.refresh_subjects()
         self._stack.setCurrentWidget(self._setup_view)
+        ensure_device_connected = getattr(
+            self._controller, "ensure_device_connected", None
+        )
+        if callable(ensure_device_connected):
+            ensure_device_connected()
 
     def _go_to_execution(self):
         self._set_active_module(MODULE_TEST)

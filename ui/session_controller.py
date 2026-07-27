@@ -88,6 +88,35 @@ class SessionController(QObject):
     #  公共方法
     # ------------------------------------------------------------------
 
+    def ensure_device_connected(self):
+        """Connect the USB device for setup-page status without capturing."""
+        if self._thread is not None and self._thread.isRunning():
+            if self._device_state in {"connected", "connecting", "streaming"}:
+                return
+            self._device_state = "connecting"
+            self.device_state_changed.emit("connecting", "正在连接设备...")
+            self.connect_device_requested.emit()
+            return
+
+        self._device_state = "connecting"
+        self._thread = QThread()
+        self._worker = UsbWorker(
+            dll_path=self._dll_path,
+            vid=self._vid,
+            pid=self._pid,
+            timeout_ms=self._timeout_ms,
+            chunk_size=self._chunk_size,
+        )
+        self._worker.moveToThread(self._thread)
+        self._worker.data_received.connect(self._on_device_message)
+        self._worker.device_state_changed.connect(self._on_device_state)
+        self.connect_device_requested.connect(self._worker.connect_device)
+        self._thread.started.connect(self._worker.connect_device)
+        self._thread.finished.connect(self._worker.deleteLater)
+
+        self.device_state_changed.emit("connecting", "正在连接设备...")
+        self._thread.start()
+
     def prepare(self, config: AnyTestConfig):
         """Create resources and connect the device, without starting capture.
 
