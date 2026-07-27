@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from qtpy.QtCore import Qt, QTimer
+from qtpy.QtCore import QLineF, QRectF, Qt, QTimer
 from qtpy.QtGui import QColor, QPainter, QPixmap
 from qtpy.QtWidgets import QFrame, QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
@@ -127,12 +127,27 @@ class FootprintChannelWidget(QFrame):
             )
         self.update()
 
-    def _y_for_index(self, index: float, top: int, height: int) -> float:
+    def _y_for_index(self, index: float, top: float, height: float) -> float:
         clamped = min(max(float(index), 0.0), float(_LED_COUNT - 1))
         ratio = clamped / float(_LED_COUNT - 1)
         if self._direction == "Opposite side":
             ratio = 1.0 - ratio
         return top + ratio * height
+
+    def _rail_marker_rects(
+        self, rail_x: float, top: float, height: float
+    ) -> list[QRectF]:
+        spacing = height / float(_LED_COUNT - 1)
+        marker_height = min(6.0, max(2.0, spacing * 0.78))
+        return [
+            QRectF(
+                rail_x - 3.0,
+                self._y_for_index(index, top, height) - marker_height / 2.0,
+                6.0,
+                marker_height,
+            )
+            for index in range(_LED_COUNT)
+        ]
 
     def _foot_size_for_lane(
         self, lane_width: int, lane_height: int, length_cm: float | None
@@ -171,16 +186,33 @@ class FootprintChannelWidget(QFrame):
         painter.setBrush(QColor(28, 28, 32))
         painter.drawRoundedRect(lane_left, top, lane_right - lane_left, height, 8, 8)
 
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(42, 42, 48))
+        painter.drawRoundedRect(
+            QRectF(rail_left_x - 3.0, top - 2.0, 6.0, height + 4.0),
+            3.0,
+            3.0,
+        )
+        painter.drawRoundedRect(
+            QRectF(rail_right_x - 3.0, top - 2.0, 6.0, height + 4.0),
+            3.0,
+            3.0,
+        )
+
+        left_markers = self._rail_marker_rects(rail_left_x, top, height)
+        right_markers = self._rail_marker_rects(rail_right_x, top, height)
         for idx, active in enumerate(self._contact_bits):
             y = self._y_for_index(idx, top, height)
             color = QColor(70, 220, 125) if active else QColor(70, 70, 76)
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
-            painter.drawRoundedRect(rail_left_x - 3, int(y) - 2, 6, 4, 2, 2)
-            painter.drawRoundedRect(rail_right_x - 3, int(y) - 2, 6, 4, 2, 2)
+            painter.drawRoundedRect(left_markers[idx], 2.0, 2.0)
+            painter.drawRoundedRect(right_markers[idx], 2.0, 2.0)
             if active:
                 painter.setPen(QColor(70, 220, 125, 60))
-                painter.drawLine(lane_left, int(y), lane_right, int(y))
+                painter.drawLine(
+                    QLineF(float(lane_left), y, float(lane_right), y)
+                )
 
         for foot in self._feet:
             self._paint_foot(painter, foot, lane_left, lane_right, top, height)
