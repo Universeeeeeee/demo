@@ -6,7 +6,7 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QBoxLayout, QGridLayout
 
 from config.test_config import TestConfig
-from config.treadmill_config import TreadmillGaitConfig
+from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 from ui.footprint_channel import FootprintChannelWidget
 from ui.views.execution_view import ExecutionView, MetricCard
 
@@ -43,22 +43,29 @@ def test_execution_view_passes_treadmill_direction_to_footprint_channel():
     assert view._footprint_channel._direction == "Opposite side"
 
 
-def test_execution_view_shows_footprint_channel_for_treadmill(qtbot):
+@pytest.mark.parametrize(
+    "config_type",
+    [TreadmillGaitConfig, TreadmillRunningConfig],
+)
+def test_execution_view_shows_footprint_channel_for_treadmill(qtbot, config_type):
     view = ExecutionView()
     qtbot.addWidget(view)
+    view.resize(1690, 1050)
     view.show()
 
     view.configure(
-        TreadmillGaitConfig(
+        config_type(
             stop_type="Software command",
             test_length=None,
             treadmill_speed=5.0,
             direction="Interface side",
         )
     )
+    QApplication.processEvents()
 
     assert isinstance(view._footprint_channel, FootprintChannelWidget)
     assert view._footprint_channel.isVisible()
+    assert view._cycle_panel.isVisible()
     assert not view._chart_container.isVisible()
     layout = view._lower_split.layout()
     assert isinstance(layout, QGridLayout)
@@ -252,6 +259,33 @@ def test_current_cycle_summary_only_uses_space_left_after_max_camera(qtbot):
     QApplication.processEvents()
 
     assert not view._cycle_panel.isVisible()
+    assert preview.width() * 9 == preview.height() * 16
+
+
+def test_visible_cycle_summary_preserves_max_camera_at_height_threshold(qtbot):
+    view = ExecutionView()
+    qtbot.addWidget(view)
+    view.resize(1280, 810)
+    view.show()
+    view.configure(
+        TreadmillGaitConfig(
+            stop_type="Software command",
+            test_length=None,
+            treadmill_speed=5.0,
+            direction="Interface side",
+        )
+    )
+    QApplication.processEvents()
+
+    preview = view._camera_panel._preview
+    container = view._camera_panel._preview_container
+    assert not view._cycle_panel.isVisible()
+
+    view.resize(1280, 812)
+    QApplication.processEvents()
+
+    assert view._cycle_panel.isVisible()
+    assert preview.width() == (container.width() // 16) * 16
     assert preview.width() * 9 == preview.height() * 16
 
 

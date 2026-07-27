@@ -533,10 +533,32 @@ class ExecutionView(QWidget):
             self._cycle_panel.hide()
             return
 
-        camera_inner_width = max(0, self._camera_column.width() - 8)
-        unit = max(1, camera_inner_width // 16)
-        maximum_camera_height = unit * 9 + 8
-        required_height = maximum_camera_height + 10 + self._cycle_panel.height()
+        camera_layout = self._camera_column.layout()
+        camera_margins = camera_layout.contentsMargins()
+        panel_layout = self._camera_panel.layout()
+        panel_margins = panel_layout.contentsMargins()
+        panel_contents = self._camera_panel.contentsRect()
+        frame_height = self._camera_panel.height() - panel_contents.height()
+        preview_width = max(
+            0,
+            panel_contents.width()
+            - panel_margins.left()
+            - panel_margins.right(),
+        )
+        maximum_preview_height = (preview_width // 16) * 9
+        camera_outer_height = (
+            maximum_preview_height
+            + frame_height
+            + panel_margins.top()
+            + panel_margins.bottom()
+        )
+        required_height = (
+            camera_margins.top()
+            + camera_outer_height
+            + camera_layout.spacing()
+            + self._cycle_panel.height()
+            + camera_margins.bottom()
+        )
         self._cycle_panel.setVisible(
             self._camera_column.height() >= required_height
         )
