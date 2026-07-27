@@ -37,11 +37,18 @@ QWidget#SetupViewRoot {
   color: #e8edf5;
 }
 QFrame#TopSubjectBar,
-QFrame#ModeBar,
-QFrame#ConfigWorkArea,
+QFrame#ModeBar {
+  background-color: #121923;
+  border: none;
+  border-radius: 7px;
+}
+QFrame#ConfigWorkArea {
+  background: transparent;
+  border: none;
+}
 QFrame#ConfigSummaryCard {
   background-color: #121923;
-  border: 1px solid #293442;
+  border: none;
   border-radius: 8px;
 }
 QLabel#PageTitle {
@@ -55,25 +62,25 @@ QLabel#PageSubtitle {
 }
 QLabel#SummaryTitle {
   color: #f2f5f9;
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
 }
 QLabel#SummaryState {
   color: #ff9a3d;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 QLabel#SummaryText {
   color: #c7cfdb;
-  font-size: 13px;
+  font-size: 14px;
 }
 QLabel#SummaryHint {
   color: #7f8a9a;
-  font-size: 11px;
+  font-size: 12px;
 }
 QLabel#SummarySectionLabel {
   color: #dfe5ee;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   margin-top: 2px;
 }
@@ -84,30 +91,29 @@ QFrame#SummaryFilterRow {
 }
 QLabel#SummaryRowLabel {
   color: #aeb8c7;
-  font-size: 12px;
+  font-size: 13px;
 }
 QLabel#FilterState {
   color: #c7cfdb;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 QLabel#FilterDetails {
   color: #9eabba;
-  font-size: 11px;
+  font-size: 12px;
   padding: 0 0 5px 10px;
 }
 QFrame#DeviceStatusCard {
-  background-color: #101721;
-  border: 1px solid #2b3746;
-  border-radius: 7px;
+  background: transparent;
+  border: none;
 }
 QLabel#DeviceState {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 QLabel#DeviceMeta {
   color: #aeb8c7;
-  font-size: 11px;
+  font-size: 13px;
 }
 QLineEdit, QComboBox {
   min-height: 32px;
@@ -308,8 +314,8 @@ class SetupView(QWidget):
         config_area = QFrame()
         config_area.setObjectName("ConfigWorkArea")
         config_layout = QVBoxLayout(config_area)
-        config_layout.setContentsMargins(14, 14, 14, 14)
-        config_layout.setSpacing(10)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(12)
 
         if self._subject_store is not None:
             config_layout.addWidget(self._create_subject_bar())
@@ -359,7 +365,7 @@ class SetupView(QWidget):
         # ===== 右侧配置摘要 =====
         self._status_bar = QFrame()
         self._status_bar.setObjectName("ConfigSummaryCard")
-        self._status_bar.setFixedWidth(330)
+        self._status_bar.setFixedWidth(320)
         self._status_bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         status_layout = QVBoxLayout(self._status_bar)
         status_layout.setContentsMargins(18, 18, 18, 18)
@@ -406,7 +412,7 @@ class SetupView(QWidget):
         device_card = QFrame()
         device_card.setObjectName("DeviceStatusCard")
         device_layout = QVBoxLayout(device_card)
-        device_layout.setContentsMargins(12, 11, 12, 11)
+        device_layout.setContentsMargins(0, 2, 0, 0)
         device_layout.setSpacing(7)
         self._device_state_label = QLabel("")
         self._device_state_label.setObjectName("DeviceState")

@@ -11,7 +11,7 @@ from qtpy.QtCore import Qt, Signal, QThread, QTimer
 from qtpy.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox, QTextEdit,
-    QFrame, QSizePolicy,
+    QFrame, QScrollArea, QSizePolicy,
 )
 
 from dayu_widgets.label import MLabel
@@ -35,8 +35,8 @@ QWidget#AgentConfigPanelRoot {
   background: transparent;
 }
 QFrame#AgentCard {
-  background-color: rgba(32, 37, 48, 0.90);
-  border: 1px solid rgba(95, 105, 125, 0.30);
+  background-color: rgba(32, 37, 48, 0.72);
+  border: none;
   border-radius: 8px;
 }
 QLabel#CardTitle {
@@ -65,11 +65,30 @@ QLabel#ServiceStatus {
   font-size: 10pt;
 }
 QTextEdit {
-  border: 1px solid rgba(105, 115, 135, 0.32);
+  border: none;
   border-radius: 8px;
-  background-color: rgba(31, 36, 47, 0.86);
+  background-color: rgba(17, 24, 34, 0.58);
   color: #e7ebf2;
   padding: 12px;
+}
+QScrollArea#SuggestionConfigScroll,
+QScrollArea#SuggestionConfigScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar:vertical {
+  width: 8px;
+  border: none;
+  background: transparent;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar::handle:vertical {
+  min-height: 28px;
+  border-radius: 4px;
+  background: #3a485a;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar::add-line:vertical,
+QScrollArea#SuggestionConfigScroll QScrollBar::sub-line:vertical {
+  height: 0;
 }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
   min-height: 32px;
@@ -382,7 +401,13 @@ class AgentConfigPanel(QWidget):
         self._suggestion_text.setStyleSheet(
             "font-size: 10.5pt; color: #d0d6e2; background: transparent; border: none;"
         )
-        suggestion_layout.addWidget(self._suggestion_text, 1)
+        suggestion_scroll = QScrollArea()
+        suggestion_scroll.setObjectName("SuggestionConfigScroll")
+        suggestion_scroll.setWidgetResizable(True)
+        suggestion_scroll.setFrameShape(QFrame.NoFrame)
+        suggestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        suggestion_scroll.setWidget(self._suggestion_text)
+        suggestion_layout.addWidget(suggestion_scroll, 1)
 
         self._confirm_btn = MPushButton("确认使用此配置").primary()
         self._confirm_btn.setObjectName("PanelPrimaryButton")
@@ -448,13 +473,13 @@ class AgentConfigPanel(QWidget):
             self._main_layout.setRowStretch(1, 1)
             return
 
-        self._profile_card.setMinimumWidth(260)
-        self._profile_card.setMaximumWidth(320)
+        self._profile_card.setMinimumWidth(220)
+        self._profile_card.setMaximumWidth(230)
         self._profile_card.setSizePolicy(
             QSizePolicy.Preferred, QSizePolicy.Expanding
         )
-        self._suggestion_card.setMinimumWidth(300)
-        self._suggestion_card.setMaximumWidth(360)
+        self._suggestion_card.setMinimumWidth(250)
+        self._suggestion_card.setMaximumWidth(270)
         self._suggestion_card.setSizePolicy(
             QSizePolicy.Preferred, QSizePolicy.Expanding
         )
