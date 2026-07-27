@@ -23,8 +23,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from config.config_validation import validate_runtime_config
 from config.test_config import TestConfig, AnyTestConfig
-from config.param_schema import get_schema
 from .models import AthleteProfile, LLMTestConfig, ChatResponse, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
 
 
@@ -189,7 +189,6 @@ class LLMConfigAgent:
 
     def __init__(self, mode: str = "jump"):
         self._mode = mode
-        self._schema = get_schema()
         self.message_history = None
         self._last_config: AnyTestConfig | None = None
         self._CRITICAL_FIELDS = self.MODE_CRITICAL_FIELDS.get(mode, self.MODE_CRITICAL_FIELDS["jump"])
@@ -344,12 +343,15 @@ class LLMConfigAgent:
         raw_reply: str,
     ) -> str:
         """生成稳定的 Markdown 配置摘要，避免模型把多项设置挤在同一行。"""
-        stop_labels = {
-            "External impulse": "手动控制停止",
-            "End of Time": f"按测试时长自动停止，共 {config.test_length}",
-            "Status change": f"按跳跃次数自动停止，共 {config.number_of_jumps} 次",
-            "Software command": "手动（软件指令）停止",
-        }
+        if config.stop_type == "End of Time":
+            stop_label = f"按测试时长自动停止，共 {config.test_length}"
+        elif config.stop_type == "Status change":
+            stop_label = f"按跳跃次数自动停止，共 {config.number_of_jumps} 次"
+        else:
+            stop_label = {
+                "External impulse": "手动控制停止",
+                "Software command": "手动（软件指令）停止",
+            }.get(config.stop_type, config.stop_type)
         start_labels = {
             "Status change": "踩上踏板即开始",
             "External impulse": "手动开始",
@@ -368,7 +370,7 @@ class LLMConfigAgent:
             f"为你配置{getattr(config, 'test_type', '测试')}参数，以下是设置总结：",
             "",
             f"- 测试类型：{config.test_type}",
-            f"- 停止方式：{stop_labels.get(config.stop_type, config.stop_type)}",
+            f"- 停止方式：{stop_label}",
         ]
         if hasattr(config, 'treadmill_speed'):
             lines.append(f"- 跑步机速度：{config.treadmill_speed} km/h")
@@ -506,9 +508,7 @@ class LLMConfigAgent:
     ) -> tuple[AnyTestConfig | None, str]:
         """将已通过 ClarifyGPT 的 LLM 结构化输出转成系统 Config。"""
         config = verified.to_test_config()
-        values = config.to_dict()
-        values.setdefault("test_macro_type", "Performance")
-        errors = self._schema.validate(getattr(config, 'test_type', 'Jump Test'), values)
+        errors = validate_runtime_config(config)
         if errors:
             return self._finalize(
                 None,

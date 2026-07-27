@@ -272,10 +272,15 @@ class LLMTreadmillGaitConfig(BaseModel):
         """转换为系统通用的 TreadmillGaitConfig dataclass。
 
         exclude_none=True 确保 None 字段不传入，
-        exclude={"reply_message"} 排除 LLM 专用字段。
+        排除 LLM 专用字段和只读的测试类型判别字段。
         """
         from config.treadmill_config import TreadmillGaitConfig
-        return TreadmillGaitConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
+        return TreadmillGaitConfig(
+            **self.model_dump(
+                exclude_none=True,
+                exclude={"reply_message", "test_type"},
+            )
+        )
 
 # ---- LLM 结构化输出模型：跑步机跑步 ----
 
@@ -398,10 +403,15 @@ class LLMTreadmillRunningConfig(BaseModel):
         """转换为系统通用的 TreadmillRunningConfig dataclass。
 
         exclude_none=True 确保 None 字段不传入，
-        exclude={"reply_message"} 排除 LLM 专用字段。
+        排除 LLM 专用字段和只读的测试类型判别字段。
         """
         from config.treadmill_config import TreadmillRunningConfig
-        return TreadmillRunningConfig(**self.model_dump(exclude_none=True, exclude={"reply_message"}))
+        return TreadmillRunningConfig(
+            **self.model_dump(
+                exclude_none=True,
+                exclude={"reply_message", "test_type"},
+            )
+        )
 
 # ---- Agent 输入模型 ----
 
@@ -415,4 +425,3 @@ class AthleteProfile:
     focus_side: str = ""            # "" / "left" / "right" / "both"
     device_channels: int = 8
     history: list[dict] = field(default_factory=list)
-
