@@ -115,6 +115,7 @@ class GaitCycleRecord:
     pre_swing_s: float | None
     pre_swing_percent: float | None
     total_flight_time_s: float | None
+    stride_length_cm: float | None = None
     is_included_in_statistics: bool = True
     statistics_exclusion_reason: str | None = None
     quality_flags: tuple[str, ...] = ()

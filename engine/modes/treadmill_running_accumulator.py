@@ -192,11 +192,7 @@ class TreadmillRunningAccumulator(TreadmillAccumulator):
             if partial.step_time_s is not None and partial.step_time_s > 0
             else None
         )
-        stride_length_cm = (
-            partial.step_length_cm * 2.0
-            if partial.step_length_cm is not None
-            else None
-        )
+        stride_length_cm = None
 
         result = TreadmillStepResult(
             index=self._next_index,

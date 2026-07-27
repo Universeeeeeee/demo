@@ -15,6 +15,153 @@ from engine.modes.treadmill_running_accumulator import (
 )
 
 
+def _emit_contact(
+    processor, *, kind, contact_id, label, time_s, centroid_cm
+):
+    contact = ContactState(
+        contact_id=contact_id,
+        foot_label=label,
+        touch_time=time_s if kind == "touch" else None,
+        lift_time=time_s if kind == "lift" else None,
+        centroid_at_touch=centroid_cm,
+        latest_centroid=centroid_cm,
+    )
+    processor._handle_step_event(GaitStepEvent(kind, contact), time_s)
+
+
+@pytest.mark.parametrize(
+    ("direction", "start_centroid", "end_centroid", "expected_cm"),
+    [
+        ("Interface side", 40.0, 45.0, 105.0),
+        ("Opposite side", 40.0, 35.0, 105.0),
+    ],
+)
+def test_treadmill_stride_uses_belt_travel_and_same_side_displacement(
+    direction, start_centroid, end_centroid, expected_cm
+):
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction=direction,
+        starting_foot_override="left",
+        step_length_calculation="Heel-to-Heel",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=1,
+        label="A",
+        time_s=0.0,
+        centroid_cm=start_centroid,
+    )
+    _emit_contact(
+        processor,
+        kind="lift",
+        contact_id=1,
+        label="A",
+        time_s=0.4,
+        centroid_cm=start_centroid,
+    )
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=2,
+        label="A",
+        time_s=1.0,
+        centroid_cm=end_centroid,
+    )
+
+    report = processor.build_report("manual", (), ())
+
+    assert report.gait_cycles[0].stride_length_cm == pytest.approx(expected_cm)
+
+
+def test_treadmill_stride_does_not_require_endpoint_lift():
+    config = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_running")
+
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=1,
+        label="A",
+        time_s=0.0,
+        centroid_cm=40.0,
+    )
+    _emit_contact(
+        processor,
+        kind="lift",
+        contact_id=1,
+        label="A",
+        time_s=0.25,
+        centroid_cm=40.0,
+    )
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=2,
+        label="A",
+        time_s=0.8,
+        centroid_cm=43.0,
+    )
+
+    report = processor.build_report("manual", (), ())
+
+    assert report.gait_cycles[0].stride_length_cm == pytest.approx(83.0)
+    assert len(report.per_step_results) == 1
+    assert report.per_step_results[0].stride_length_cm is None
+
+
+def test_non_positive_stride_is_omitted_and_flagged():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=1,
+        label="A",
+        time_s=0.0,
+        centroid_cm=200.0,
+    )
+    _emit_contact(
+        processor,
+        kind="lift",
+        contact_id=1,
+        label="A",
+        time_s=0.3,
+        centroid_cm=200.0,
+    )
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=2,
+        label="A",
+        time_s=1.0,
+        centroid_cm=90.0,
+    )
+
+    cycle = processor.build_report("manual", (), ()).gait_cycles[0]
+
+    assert cycle.stride_length_cm is None
+    assert "non_positive_stride_length" in cycle.quality_flags
+
+
 def test_accumulator_resolves_starting_foot_from_first_contact():
     config = TreadmillGaitConfig(
         stop_type="Software command",
@@ -506,7 +653,7 @@ def test_treadmill_distance_metrics_are_derived_from_belt_speed_and_time():
     assert row.speed_m_s == 2.0
     assert row.distance_cm == 2000.0
     assert row.step_length_cm == 100.0
-    assert row.stride_length_cm == 200.0
+    assert row.stride_length_cm is None
 
 
 def test_gait_accumulator_allows_double_support_without_no_step():

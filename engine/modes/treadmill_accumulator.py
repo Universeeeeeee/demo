@@ -401,7 +401,7 @@ class TreadmillAccumulator:
         speed_m_s = belt_speed_ms
         distance_cm = belt_speed_ms * elapsed_time_s * 100.0
         step_length_cm = belt_speed_ms * step_time_s * 100.0
-        stride_length_cm = belt_speed_ms * gait_cycle_s * 100.0
+        stride_length_cm = None
 
         return TreadmillStepResult(
             index=-1,

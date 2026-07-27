@@ -38,6 +38,7 @@ from engine.footprint_visualization import FootprintTimelineRecorder
 from engine.modes.base import ModeProcessor
 from engine.modes.treadmill_accumulator import TreadmillAccumulator
 from engine.modes.treadmill_accumulator import belt_speed_m_s
+from engine.modes.treadmill_accumulator import step_reference_cm
 from engine.modes.treadmill_gait_accumulator import TreadmillGaitAccumulator
 from engine.modes.treadmill_running_accumulator import TreadmillRunningAccumulator
 from engine.spatial_clusterer import ClusterTracker, extract_clusters
@@ -127,6 +128,7 @@ class TreadmillProcessor:
         self._live_cycle_cursor = 0
         self._visual_recorder = FootprintTimelineRecorder()
         self._last_clusters = []
+        self._touch_reference_cm: dict[tuple[str, float], float | None] = {}
 
     # ---- ModeProcessor interface ----
 
@@ -144,6 +146,7 @@ class TreadmillProcessor:
         self._live_cycle_cursor = 0
         self._visual_recorder.reset()
         self._last_clusters = []
+        self._touch_reference_cm = {}
 
     def process_raw_frame(
         self, contact_bits: List[int], rel_time: float, abs_time: float
@@ -273,7 +276,10 @@ class TreadmillProcessor:
         """
         self._accumulator.apply_automatic_data_filter()
         rows = self._accumulator.rows
-        gait_cycles = self._cycles_with_row_inclusion(rows)
+        gait_cycles = self._cycles_with_stride(
+            self._cycles_with_row_inclusion(rows)
+        )
+        rows = self._rows_with_cycle_stride(rows, gait_cycles)
         config_snapshot = self._config.to_dict()
 
         # Build metric summaries from valid, included rows
@@ -415,6 +421,12 @@ class TreadmillProcessor:
             toe_cm = centroid_cm - self._toe_offset_cm
 
         if ev.kind == "touch":
+            reference_cm = step_reference_cm(
+                self._config, heel_cm=heel_cm, toe_cm=toe_cm
+            )
+            self._touch_reference_cm[(side, round(event_time, 9))] = (
+                reference_cm
+            )
             self._cycle_builder.record_touch(event_time, side)
             self._accumulator.record_touch(
                 time_s=event_time, side=side, heel_cm=heel_cm, toe_cm=toe_cm
@@ -514,6 +526,76 @@ class TreadmillProcessor:
                 )
             )
         return tuple(enriched_cycles)
+
+    def _cycles_with_stride(
+        self, cycles: tuple[GaitCycleRecord, ...]
+    ) -> tuple[GaitCycleRecord, ...]:
+        direction_sign = (
+            -1 if self._config.direction == "Opposite side" else 1
+        )
+        speed_cm_s = belt_speed_m_s(self._config) * 100.0
+        enriched = []
+        for cycle in cycles:
+            start_ref = self._touch_reference_cm.get(
+                (cycle.side, round(cycle.start_time_s, 9))
+            )
+            end_ref = self._touch_reference_cm.get(
+                (cycle.side, round(cycle.end_time_s, 9))
+            )
+            stride_cm = None
+            quality_flags = cycle.quality_flags
+            if (
+                cycle.side in ("left", "right")
+                and cycle.gait_cycle_s > 0
+                and start_ref is not None
+                and end_ref is not None
+            ):
+                candidate = (
+                    speed_cm_s * cycle.gait_cycle_s
+                    + direction_sign * (end_ref - start_ref)
+                )
+                if candidate > 0:
+                    stride_cm = candidate
+                else:
+                    quality_flags = tuple(
+                        dict.fromkeys(
+                            (*quality_flags, "non_positive_stride_length")
+                        )
+                    )
+            enriched.append(
+                replace(
+                    cycle,
+                    stride_length_cm=stride_cm,
+                    quality_flags=quality_flags,
+                )
+            )
+        return tuple(enriched)
+
+    @staticmethod
+    def _rows_with_cycle_stride(
+        rows: tuple[TreadmillStepResult, ...],
+        cycles: tuple[GaitCycleRecord, ...],
+    ) -> tuple[TreadmillStepResult, ...]:
+        stride_by_endpoint = {
+            (cycle.side, round(cycle.end_time_s, 9)): cycle.stride_length_cm
+            for cycle in cycles
+            if cycle.stride_length_cm is not None
+        }
+        enriched = []
+        for row in rows:
+            if row.time_s is None or row.contact_time_s is None:
+                enriched.append(row)
+                continue
+            touch_time_s = row.time_s - row.contact_time_s
+            stride_cm = stride_by_endpoint.get(
+                (row.side, round(touch_time_s, 9))
+            )
+            enriched.append(
+                replace(row, stride_length_cm=stride_cm)
+                if stride_cm is not None
+                else row
+            )
+        return tuple(enriched)
 
     def _build_cycle_summaries(
         self, source_cycles: tuple[GaitCycleRecord, ...] | None = None
