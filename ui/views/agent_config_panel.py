@@ -79,6 +79,12 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
   color: #e7ebf2;
   padding: 0 8px;
 }
+QComboBox QAbstractItemView {
+  background: #1a2230;
+  color: #e7ebf2;
+  border: 1px solid #354151;
+  selection-background-color: #273446;
+}
 QPushButton {
   min-height: 34px;
   border-radius: 6px;
