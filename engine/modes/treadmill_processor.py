@@ -8,8 +8,8 @@ Pipeline per process_raw_frame call:
   4. Delegate touch/lift events to TreadmillAccumulator
   5. Return event list for Qt signal emission
 
-All distance metrics come from treadmill_speed x time in the accumulator.
-LED clusters are used ONLY for timing (contact/lift detection).
+Step and stride distances combine treadmill travel with tracked contact
+placement. LED clusters provide both event timing and spatial references.
 """
 
 from __future__ import annotations
@@ -415,22 +415,30 @@ class TreadmillProcessor:
         elif ev.kind == "lift" and ev.contact.lift_time is not None:
             event_time = ev.contact.lift_time
 
-        centroid_cm = ev.contact.centroid_at_touch or ev.contact.latest_centroid or 0.0
+        centroid_cm = ev.contact.centroid_at_touch
+        if centroid_cm is None:
+            centroid_cm = ev.contact.latest_centroid
+        has_spatial_reference = centroid_cm is not None
+        geometry_centroid_cm = centroid_cm if centroid_cm is not None else 0.0
 
         # Heel/toe derived from centroid + foot-length offset.
         # For "Interface side", heel is left of centroid, toe is right.
         # (LED index increases left-to-right at the interface.)
         if self._direction == "Interface side":
-            heel_cm = centroid_cm - self._heel_offset_cm
-            toe_cm = centroid_cm + self._toe_offset_cm
+            heel_cm = geometry_centroid_cm - self._heel_offset_cm
+            toe_cm = geometry_centroid_cm + self._toe_offset_cm
         else:
             # Opposite side: reversed perspective
-            heel_cm = centroid_cm + self._heel_offset_cm
-            toe_cm = centroid_cm - self._toe_offset_cm
+            heel_cm = geometry_centroid_cm + self._heel_offset_cm
+            toe_cm = geometry_centroid_cm - self._toe_offset_cm
 
         if ev.kind == "touch":
-            reference_cm = step_reference_cm(
-                self._config, heel_cm=heel_cm, toe_cm=toe_cm
+            reference_cm = (
+                step_reference_cm(
+                    self._config, heel_cm=heel_cm, toe_cm=toe_cm
+                )
+                if has_spatial_reference
+                else None
             )
             self._touch_reference_cm[(side, round(event_time, 9))] = (
                 reference_cm

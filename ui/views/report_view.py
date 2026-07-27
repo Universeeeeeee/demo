@@ -405,7 +405,7 @@ def _treadmill_overview_stats(
             )
         )
 
-    if report.resolved_starting_foot:
+    if report.resolved_starting_foot in ("left", "right"):
         stats.append(
             (
                 "起始脚",
@@ -607,7 +607,7 @@ class ReportView(QWidget):
         # --- 左侧: 统计卡片网格 ---
         left_container = QWidget()
         left_container.setObjectName("StatsContent")
-        left_container.setMinimumWidth(600)
+        left_container.setMinimumWidth(480)
         left_container.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Expanding
         )
@@ -1321,9 +1321,13 @@ class ReportView(QWidget):
                 card.set_value(value)
                 card.set_color("#f0f0f0")
                 card.setToolTip(tooltip)
+                card._label.setToolTip(tooltip)
+                card._value.setToolTip(tooltip)
                 card.show()
             else:
                 card.setToolTip("")
+                card._label.setToolTip("")
+                card._value.setToolTip("")
                 card.hide()
         self._stats_layout.invalidate()
         self._stats_content.updateGeometry()

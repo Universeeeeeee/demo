@@ -116,6 +116,27 @@ def test_running_overview_includes_flight_time(qtbot):
     ]
 
 
+def test_treadmill_overview_omits_unknown_starting_foot(qtbot):
+    report = TreadmillGaitReport(
+        finish_reason="manual",
+        touch_count=0,
+        lift_count=0,
+        resolved_starting_foot="unknown",
+        starting_foot_source="unknown",
+        report_config_snapshot={"direction": "Interface side"},
+    )
+    view = ReportView()
+    qtbot.addWidget(view)
+
+    view.load_report(report)
+
+    labels = [
+        label for label, _, _ in _visible_card_data(view)
+    ]
+    assert "起始脚" not in labels
+    assert "行进方向" in labels
+
+
 def test_treadmill_details_use_three_internal_tabs(qtbot):
     view = ReportView()
     qtbot.addWidget(view)
@@ -463,7 +484,10 @@ def test_report_replay_controls_do_not_fall_back_to_light_theme(qtbot):
 
     assert panel._btn_play.objectName() == "ReplayButton"
     assert panel._slider.objectName() == "ReplaySlider"
-    button_background = panel._btn_play.grab().toImage().pixelColor(5, 5)
+    button_image = panel._btn_play.grab().toImage()
+    button_background = button_image.pixelColor(
+        10, button_image.height() // 2
+    )
     assert button_background.lightness() < 80
 
 

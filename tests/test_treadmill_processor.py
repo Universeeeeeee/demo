@@ -191,6 +191,46 @@ def test_non_positive_stride_is_omitted_and_flagged():
     assert "non_positive_stride_length" in cycle.quality_flags
 
 
+def test_stride_is_omitted_when_cycle_boundary_has_no_spatial_reference():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+        starting_foot_override="left",
+    )
+    processor = TreadmillProcessor(config, mode_name="treadmill_gait")
+
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=1,
+        label="A",
+        time_s=0.0,
+        centroid_cm=None,
+    )
+    _emit_contact(
+        processor,
+        kind="lift",
+        contact_id=1,
+        label="A",
+        time_s=0.3,
+        centroid_cm=None,
+    )
+    _emit_contact(
+        processor,
+        kind="touch",
+        contact_id=2,
+        label="A",
+        time_s=1.0,
+        centroid_cm=None,
+    )
+
+    cycle = processor.build_report("manual", (), ()).gait_cycles[0]
+
+    assert cycle.stride_length_cm is None
+
+
 def test_report_aggregates_stride_cadence_and_side_metrics():
     config = TreadmillGaitConfig(
         stop_type="Software command",
