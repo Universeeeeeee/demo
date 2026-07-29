@@ -19,7 +19,12 @@ from qtpy.QtWidgets import (
 from dayu_widgets.label import MLabel
 from dayu_widgets.push_button import MPushButton
 
-from data.subject_store import SessionRecord, SubjectSearchResult, SubjectStore
+from data.subject_store import (
+    SessionRecord,
+    SubjectSearchResult,
+    SubjectStore,
+    TeamProfile,
+)
 
 
 log = logging.getLogger(__name__)
@@ -95,6 +100,7 @@ class HistoryView(QWidget):
         super().__init__(parent)
         self._subject_store = subject_store
         self._subject_result: SubjectSearchResult | None = None
+        self._team: TeamProfile | None = None
         self._sessions: list[SessionRecord] = []
         self._build_ui()
 
@@ -124,9 +130,9 @@ class HistoryView(QWidget):
         content_layout = QHBoxLayout()
         content_layout.setSpacing(12)
 
-        self._session_table = QTableWidget(0, 5)
+        self._session_table = QTableWidget(0, 6)
         self._session_table.setHorizontalHeaderLabels(
-            ["运动员", "时间", "测试类型", "结束原因", "结果摘要"]
+            ["运动员", "测试身份", "时间", "测试类型", "结束原因", "结果摘要"]
         )
         self._session_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._session_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -144,6 +150,9 @@ class HistoryView(QWidget):
         )
         self._session_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeToContents
+        )
+        self._session_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeToContents
         )
         self._session_table.itemSelectionChanged.connect(self._on_selection_changed)
         content_layout.addWidget(self._session_table, 5)
@@ -199,6 +208,7 @@ class HistoryView(QWidget):
 
     def load_all(self) -> None:
         self._subject_result = None
+        self._team = None
         self._subject_label.setText("全部本地测试")
         if self._subject_store is None:
             self._set_empty_state("历史数据存储不可用。")
@@ -214,6 +224,7 @@ class HistoryView(QWidget):
 
     def load_subject(self, result: SubjectSearchResult | None) -> None:
         self._subject_result = result
+        self._team = None
         if result is None:
             self._subject_label.setText("未选择受试者")
             self._set_empty_state("请先选择受试者。")
@@ -234,6 +245,22 @@ class HistoryView(QWidget):
 
         self._populate_sessions()
 
+    def load_team(self, team: TeamProfile) -> None:
+        self._subject_result = None
+        self._team = team
+        self._subject_label.setText(f"团队: {team.name}")
+        if self._subject_store is None:
+            self._set_empty_state("历史数据存储不可用。")
+            return
+        try:
+            self._sessions = self._subject_store.get_team_sessions(team.id)
+        except Exception as exc:
+            log.exception("Failed to load team sessions")
+            self._set_empty_state("读取团队历史失败。")
+            QMessageBox.warning(self, "团队历史", f"读取失败：{exc}")
+            return
+        self._populate_sessions()
+
     def _populate_sessions(self) -> None:
         self._session_table.blockSignals(True)
         self._session_table.setRowCount(0)
@@ -241,6 +268,7 @@ class HistoryView(QWidget):
             self._session_table.insertRow(row)
             values = [
                 self._session_subject_name(session),
+                self._session_identity_name(session),
                 session.started_at[:16],
                 session.test_type,
                 _finish_reason_label(session.finish_reason),
@@ -260,9 +288,13 @@ class HistoryView(QWidget):
             self._btn_link_subject.setEnabled(self._sessions[0].subject_id is None)
         else:
             message = (
-                "暂无本地测试结果。"
-                if self._subject_result is None
-                else "该受试者暂无历史测试。"
+                "该团队暂无历史测试。"
+                if self._team is not None
+                else (
+                    "暂无本地测试结果。"
+                    if self._subject_result is None
+                    else "该受试者暂无历史测试。"
+                )
             )
             self._set_empty_state(message)
 
@@ -302,6 +334,7 @@ class HistoryView(QWidget):
         summary = session.report_summary
         lines = [
             f"运动员: {self._session_subject_name(session)}",
+            f"测试身份: {self._session_identity_name(session)}",
             f"测试时间: {session.started_at[:16]}",
             f"测试类型: {session.test_type}",
             f"结束原因: {_finish_reason_label(session.finish_reason)}",
@@ -399,6 +432,14 @@ class HistoryView(QWidget):
             if subject is not None:
                 return subject.display_name
         return session.subject_snapshot.get("display_name") or "临时测试"
+
+    @staticmethod
+    def _session_identity_name(session: SessionRecord) -> str:
+        if session.team_id is not None:
+            return session.team_snapshot.get("name") or "团队测试"
+        if session.subject_id is not None:
+            return "个人"
+        return "临时测试"
 
 
 def _finish_reason_label(reason: str | None) -> str:

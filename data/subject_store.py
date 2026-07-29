@@ -530,6 +530,19 @@ class SubjectStore:
             ).fetchall()
         return [_session_from_row(row) for row in rows]
 
+    def get_team_sessions(self, team_id: int, *, limit: int = 200) -> list[SessionRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM test_sessions
+                WHERE team_id = ?
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+                """,
+                (team_id, limit),
+            ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
     def get_recent_history(
         self, subject_id: int, *, limit: int = 3
     ) -> list[dict[str, Any]]:
@@ -558,20 +571,44 @@ class SubjectStore:
         subject_snapshot: dict[str, Any] | None = None,
         config_source: str | None = None,
         export_path: str | None = None,
+        team_id: int | None = None,
+        team_snapshot: dict[str, Any] | None = None,
     ) -> int:
         summary = _report_summary(report)
         finish_reason = _normalize_finish_reason(report.finish_reason)
         now = _now()
         with self._connect() as conn:
+            if subject_id is None:
+                if team_id is not None or team_snapshot is not None:
+                    raise ValueError("Temporary sessions cannot use a team identity")
+            elif team_id is None:
+                if team_snapshot is not None:
+                    raise ValueError("Personal sessions cannot include a team snapshot")
+            else:
+                if not isinstance(team_snapshot, dict) or team_snapshot.get("id") != team_id:
+                    raise ValueError("Team snapshot must identify the selected team")
+                membership = conn.execute(
+                    """
+                    SELECT 1
+                    FROM team_memberships tm
+                    JOIN teams t ON t.id = tm.team_id
+                    WHERE tm.subject_id = ? AND tm.team_id = ?
+                      AND tm.active = 1 AND t.archived = 0
+                    """,
+                    (subject_id, team_id),
+                ).fetchone()
+                if membership is None:
+                    raise ValueError("Subject is not an active member of the selected team")
             cur = conn.execute(
                 """
                 INSERT INTO test_sessions (
                     subject_id, started_at, finished_at, test_type, config_json,
                     height_cm, weight_kg, total_jumps, finish_reason,
                     report_summary_json, report_detail_json,
-                    subject_snapshot_json, config_source, export_path
+                    subject_snapshot_json, config_source, export_path,
+                    team_id, team_snapshot_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     subject_id,
@@ -590,6 +627,10 @@ class SubjectStore:
                     else None,
                     config_source,
                     export_path,
+                    team_id,
+                    json.dumps(team_snapshot, ensure_ascii=False)
+                    if team_snapshot is not None
+                    else None,
                 ),
             )
             return int(cur.lastrowid)

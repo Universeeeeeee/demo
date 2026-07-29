@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
         self._subject_id: int | None = None
         self._subject: SubjectProfile | None = None
         self._subject_snapshot: dict | None = None
+        self._team_id: int | None = None
+        self._team_snapshot: dict | None = None
         self._config_source: str | None = None
         self._session_started_at: str | None = None
         self._last_session_id: int | None = None
@@ -282,6 +284,8 @@ class MainWindow(QMainWindow):
         self._subject_id = None
         self._subject = None
         self._subject_snapshot = None
+        self._team_id = None
+        self._team_snapshot = None
         self._config_source = None
         self._session_started_at = None
         self._setup_view.refresh_subjects()
@@ -360,6 +364,9 @@ class MainWindow(QMainWindow):
         self._active_config = None
         self._subject_id = None
         self._subject = None
+        self._subject_snapshot = None
+        self._team_id = None
+        self._team_snapshot = None
 
     # ------------------------------------------------------------------
     #  事件处理
@@ -374,6 +381,8 @@ class MainWindow(QMainWindow):
         self._subject_snapshot = setup.subject_snapshot or self._fallback_snapshot(
             setup.subject
         )
+        self._team_id = setup.team_id
+        self._team_snapshot = setup.team_snapshot
         self._config_source = setup.config_source
         self._session_started_at = None
         self._exec_view.reset()
@@ -441,6 +450,8 @@ class MainWindow(QMainWindow):
                     weight_kg=snapshot.get("weight_kg"),
                     subject_snapshot=snapshot,
                     config_source=self._config_source,
+                    team_id=self._team_id,
+                    team_snapshot=self._team_snapshot,
                 )
             except Exception:
                 log.exception("Failed to record subject session")

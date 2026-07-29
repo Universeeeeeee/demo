@@ -517,6 +517,113 @@ class SubjectStoreTest(unittest.TestCase):
 
         self.assertEqual(linked.subject_id, subject_id)
         self.assertEqual(linked.subject_snapshot, snapshot)
+        self.assertIsNone(linked.team_id)
+        self.assertEqual(linked.team_snapshot, {})
+
+    def test_team_session_requires_an_active_membership_and_saved_snapshot(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        alpha_id = self.store.create_team("Alpha")
+        beta_id = self.store.create_team("Beta")
+        self.store.add_subject_to_team(subject_id, alpha_id)
+
+        personal_id = self.store.record_session(
+            subject_id, _TestConfig(), _jump_report()
+        )
+        team_id = self.store.record_session(
+            subject_id,
+            _TestConfig(),
+            _jump_report(),
+            team_id=alpha_id,
+            team_snapshot={"id": alpha_id, "name": "Alpha"},
+        )
+
+        self.assertIsNone(self.store.get_session(personal_id).team_id)
+        session = self.store.get_session(team_id)
+        self.assertEqual(session.team_id, alpha_id)
+        self.assertEqual(session.team_snapshot, {"id": alpha_id, "name": "Alpha"})
+
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_snapshot={"id": alpha_id, "name": "Alpha"},
+            )
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_id=beta_id,
+                team_snapshot={"id": beta_id, "name": "Beta"},
+            )
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_id=alpha_id,
+                team_snapshot={"id": beta_id, "name": "Beta"},
+            )
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                None,
+                _TestConfig(),
+                _jump_report(),
+                team_id=alpha_id,
+                team_snapshot={"id": alpha_id, "name": "Alpha"},
+            )
+
+        self.store.remove_subject_from_team(subject_id, alpha_id)
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_id=alpha_id,
+                team_snapshot={"id": alpha_id, "name": "Alpha"},
+            )
+
+        self.store.add_subject_to_team(subject_id, alpha_id)
+        with self.store._connect() as conn:
+            conn.execute("UPDATE teams SET archived = 1 WHERE id = ?", (alpha_id,))
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_id=alpha_id,
+                team_snapshot={"id": alpha_id, "name": "Alpha"},
+            )
+
+    def test_team_history_queries_the_same_session_rows_and_keeps_snapshot(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        alpha_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, alpha_id)
+        team_session_id = self.store.record_session(
+            subject_id,
+            _TestConfig(),
+            _jump_report(),
+            team_id=alpha_id,
+            team_snapshot={"id": alpha_id, "name": "Alpha"},
+        )
+        self.store.record_session(subject_id, _TestConfig(), _jump_report())
+
+        self.assertEqual(len(self.store.get_sessions(subject_id)), 2)
+        self.assertEqual(
+            [session.id for session in self.store.get_team_sessions(alpha_id)],
+            [team_session_id],
+        )
+        self.assertEqual(len(self.store.get_all_sessions()), 2)
+
+        with self.store._connect() as conn:
+            conn.execute(
+                "UPDATE teams SET name = ?, archived = 1 WHERE id = ?",
+                ("Renamed Alpha", alpha_id),
+            )
+        self.assertEqual(
+            self.store.get_session(team_session_id).team_snapshot["name"], "Alpha"
+        )
 
     def test_session_reconstructs_saved_jump_and_treadmill_reports(self):
         jump_id = self.store.record_session(

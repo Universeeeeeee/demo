@@ -171,6 +171,46 @@ class HistoryViewTest(unittest.TestCase):
         self.assertEqual(self.store.get_session(session_id).subject_id, subject_id)
         self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
 
+    def test_history_shows_test_identity_and_can_load_one_team(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        alpha_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, alpha_id)
+        self.store.record_session(
+            subject_id,
+            _TestConfig(number_of_jumps=3),
+            _jump_report(touch_count=3),
+            started_at="2026-05-14 09:00:00",
+            team_id=alpha_id,
+            team_snapshot={"id": alpha_id, "name": "Alpha"},
+        )
+        self.store.record_session(
+            subject_id,
+            _TestConfig(number_of_jumps=6),
+            _jump_report(touch_count=6),
+            started_at="2026-05-14 11:00:00",
+        )
+        self.store.record_session(
+            None,
+            _TestConfig(number_of_jumps=9),
+            _jump_report(touch_count=9),
+            started_at="2026-05-14 12:00:00",
+        )
+        view = HistoryView(self.store)
+
+        view.load_all()
+
+        self.assertEqual(view._session_table.horizontalHeaderItem(1).text(), "测试身份")
+        self.assertEqual(
+            {view._session_table.item(row, 1).text() for row in range(3)},
+            {"Alpha", "个人", "临时测试"},
+        )
+
+        view.load_team(self.store.search_teams("Alpha")[0])
+
+        self.assertEqual(view._session_table.rowCount(), 1)
+        self.assertIn("团队: Alpha", view._subject_label.text())
+        self.assertEqual(view._session_table.item(0, 1).text(), "Alpha")
+
 
 if __name__ == "__main__":
     unittest.main()

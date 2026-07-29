@@ -236,7 +236,52 @@ def test_temporary_session_is_persisted_with_snapshot(qtbot, tmp_path):
     sessions = window._subject_store.get_all_sessions()
     assert len(sessions) == 1
     assert sessions[0].subject_id is None
+    assert sessions[0].team_id is None
+    assert sessions[0].team_snapshot == {}
     assert sessions[0].subject_snapshot["age"] == 30
+
+
+def test_team_identity_is_persisted_and_cleared_when_preparation_is_discarded(
+    qtbot, tmp_path
+):
+    window, _controller = _window(qtbot, tmp_path)
+    subject_id = window._subject_store.create_subject("Alice", 1990)
+    alpha_id = window._subject_store.create_team("Alpha")
+    window._subject_store.add_subject_to_team(subject_id, alpha_id)
+    setup = SessionSetup(
+        default_jump_config(),
+        subject_id=subject_id,
+        subject=window._subject_store.get_subject(subject_id),
+        team_id=alpha_id,
+        team_snapshot={"id": alpha_id, "name": "Alpha"},
+    )
+    report = JumpTestReport(
+        touch_count=1,
+        lift_count=1,
+        air_times=(0.4,),
+        contact_times=(0.2,),
+        cycle_times=(0.6,),
+        avg_jump_height=0.2,
+        max_jump_height=0.2,
+        avg_air_time=0.4,
+        max_air_time=0.4,
+        avg_contact_time=0.2,
+        avg_cadence=100.0,
+        finish_reason="manual",
+    )
+
+    window._on_ready(setup)
+    window._on_session_finished(report)
+
+    session = window._subject_store.get_all_sessions()[0]
+    assert session.team_id == alpha_id
+    assert session.team_snapshot == {"id": alpha_id, "name": "Alpha"}
+
+    window._on_ready(setup)
+    window._discard_prepared_session()
+
+    assert window._team_id is None
+    assert window._team_snapshot is None
 
 
 def test_registered_session_persists_snapshot_without_changing_master_profile(
