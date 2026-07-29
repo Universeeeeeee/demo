@@ -663,6 +663,64 @@ class SubjectStoreTest(unittest.TestCase):
             self.store.get_session(team_session_id).team_snapshot["name"], "Alpha"
         )
 
+    def test_alpha_beta_membership_keeps_team_and_personal_history_separate(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        alpha_id = self.store.create_team("Alpha")
+        beta_id = self.store.create_team("Beta")
+        self.store.add_subject_to_team(subject_id, alpha_id)
+        self.store.add_subject_to_team(subject_id, beta_id)
+
+        alpha_session_id = self.store.record_session(
+            subject_id,
+            _TestConfig(number_of_jumps=3),
+            _jump_report(touch_count=3),
+            team_id=alpha_id,
+            team_snapshot={"id": alpha_id, "name": "Alpha"},
+        )
+        personal_session_id = self.store.record_session(
+            subject_id,
+            _TestConfig(number_of_jumps=6),
+            _jump_report(touch_count=6),
+        )
+
+        self.assertEqual(
+            [session.id for session in self.store.get_sessions(subject_id)],
+            [personal_session_id, alpha_session_id],
+        )
+        self.assertEqual(
+            [session.id for session in self.store.get_team_sessions(alpha_id)],
+            [alpha_session_id],
+        )
+        self.assertEqual(self.store.get_team_sessions(beta_id), [])
+        self.assertEqual(
+            {session.id for session in self.store.get_all_sessions()},
+            {alpha_session_id, personal_session_id},
+        )
+
+        with self.store._connect() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM subjects").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0], 2
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM team_memberships WHERE active = 1"
+                ).fetchone()[0],
+                2,
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM test_sessions").fetchone()[0], 2
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM test_sessions WHERE team_id = ?",
+                    (alpha_id,),
+                ).fetchone()[0],
+                1,
+            )
+
     def test_session_reconstructs_saved_jump_and_treadmill_reports(self):
         jump_id = self.store.record_session(
             None,
