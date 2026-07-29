@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from qtpy.QtCore import Signal, Qt
+from qtpy.QtCore import QSignalBlocker, Signal, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -16,8 +16,11 @@ from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -102,6 +105,8 @@ class AthletesView(QWidget):
 
     test_requested = Signal(object)  # SubjectSearchResult
     results_requested = Signal(object)  # SubjectSearchResult
+    ALL_TEAMS = "all-teams"
+    WITHOUT_TEAM = "without-team"
 
     def __init__(self, subject_store: SubjectStore | None, parent=None):
         super().__init__(parent)
@@ -135,6 +140,10 @@ class AthletesView(QWidget):
         self._search.textChanged.connect(self.refresh)
         toolbar_layout.addWidget(self._search, 1)
 
+        self._team_filter = QComboBox()
+        self._team_filter.currentIndexChanged.connect(self.refresh)
+        toolbar_layout.addWidget(self._team_filter)
+
         self._btn_new = QPushButton("新建运动员")
         self._btn_new.setObjectName("PrimaryButton")
         self._btn_new.clicked.connect(self._create_subject)
@@ -155,9 +164,17 @@ class AthletesView(QWidget):
         card_layout.setContentsMargins(1, 1, 1, 12)
         card_layout.setSpacing(10)
 
-        self._table = QTableWidget(0, 6)
+        self._table = QTableWidget(0, 7)
         self._table.setHorizontalHeaderLabels(
-            ["姓名", "年龄", "身高 / 体重", "训练水平", "训练侧重", "最近测试"]
+            [
+                "姓名",
+                "年龄",
+                "身高 / 体重",
+                "训练水平",
+                "训练侧重",
+                "所属团队",
+                "最近测试",
+            ]
         )
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -193,8 +210,13 @@ class AthletesView(QWidget):
             self._results = []
         else:
             try:
+                self._populate_team_filter()
+                team_filter = self._team_filter.currentData()
+                team_id = team_filter if isinstance(team_filter, int) else None
                 self._results = self._subject_store.search_subjects(
-                    self._search.text().strip()
+                    self._search.text().strip(),
+                    team_id=team_id,
+                    without_team=team_filter == self.WITHOUT_TEAM,
                 )
             except Exception:
                 log.exception("Failed to refresh athlete list")
@@ -219,6 +241,7 @@ class AthletesView(QWidget):
                 measurements,
                 subject.level,
                 focus_labels.get(subject.focus_side, subject.focus_side),
+                "、".join(result.team_names) if result.team_names else "未加入团队",
                 result.last_session_at[:16] if result.last_session_at else "暂无",
             ]
             for column, value in enumerate(values):
@@ -233,6 +256,19 @@ class AthletesView(QWidget):
         elif self._results:
             self._table.selectRow(0)
         self._sync_actions()
+
+    def _populate_team_filter(self) -> None:
+        if self._subject_store is None:
+            return
+        selected = self._team_filter.currentData()
+        with QSignalBlocker(self._team_filter):
+            self._team_filter.clear()
+            self._team_filter.addItem("全部团队", self.ALL_TEAMS)
+            self._team_filter.addItem("未加入团队", self.WITHOUT_TEAM)
+            for team in self._subject_store.search_teams():
+                self._team_filter.addItem(team.name, team.id)
+            index = self._team_filter.findData(selected)
+            self._team_filter.setCurrentIndex(index if index >= 0 else 0)
 
     def _selected_result(self) -> SubjectSearchResult | None:
         row = self._table.currentRow()
@@ -254,16 +290,47 @@ class AthletesView(QWidget):
     def _create_subject(self) -> None:
         if self._subject_store is None:
             return
-        values = _SubjectDialog.get_values(self)
+        values = _SubjectDialog.get_values(self, store=self._subject_store)
         if values is None:
             return
+        self._create_subject_from_values(values)
+
+    def _create_subject_from_values(self, values: dict) -> None:
+        if self._subject_store is None:
+            return
+        subject_values = dict(values)
+        team_ids = subject_values.pop("team_ids", [])
+        team_id = team_ids[0] if team_ids else None
         try:
-            self._subject_store.create_subject(**values)
+            matches = self._subject_store.find_duplicate_subjects(
+                subject_values["display_name"], subject_values["birth_year"]
+            )
+            if matches:
+                action, candidate = self._ask_duplicate_action(matches)
+                if action == "cancel":
+                    return
+                if action == "reuse" and candidate is not None:
+                    if team_id is not None:
+                        self._subject_store.add_subject_to_team(
+                            candidate.subject.id, team_id
+                        )
+                    self._search.clear()
+                    self.refresh()
+                    return
+            self._subject_store.create_subject(**subject_values, team_id=team_id)
         except Exception as exc:
             QMessageBox.warning(self, "新建运动员", f"保存失败：{exc}")
             return
         self._search.clear()
         self.refresh()
+
+    def _ask_duplicate_action(
+        self, matches: list[SubjectSearchResult]
+    ) -> tuple[str, SubjectSearchResult | None]:
+        dialog = _DuplicateSubjectDialog(matches, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return "cancel", None
+        return dialog.action, dialog.selected_result()
 
     def _edit_selected(self) -> None:
         if self._subject_store is None:
@@ -271,11 +338,22 @@ class AthletesView(QWidget):
         result = self._selected_result()
         if result is None:
             return
-        values = _SubjectDialog.get_values(self, result.subject)
+        values = _SubjectDialog.get_values(
+            self, result.subject, store=self._subject_store
+        )
         if values is None:
             return
         try:
+            team_ids = values.pop("team_ids", [])
             self._subject_store.update_subject(result.subject.id, **values)
+            active_team_ids = {
+                team.id for team in self._subject_store.get_subject_teams(result.subject.id)
+            }
+            selected_team_ids = set(team_ids)
+            for team_id in selected_team_ids - active_team_ids:
+                self._subject_store.add_subject_to_team(result.subject.id, team_id)
+            for team_id in active_team_ids - selected_team_ids:
+                self._subject_store.remove_subject_from_team(result.subject.id, team_id)
         except Exception as exc:
             QMessageBox.warning(self, "编辑运动员", f"保存失败：{exc}")
             return
@@ -311,8 +389,17 @@ class AthletesView(QWidget):
 
 
 class _SubjectDialog(QDialog):
-    def __init__(self, subject: SubjectProfile | None = None, parent=None):
+    NEW_TEAM = "new-team"
+
+    def __init__(
+        self,
+        store: SubjectStore | None = None,
+        subject: SubjectProfile | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
+        self._store = store
+        self._subject = subject
         self.setWindowTitle("编辑运动员" if subject else "新建运动员")
         form = QFormLayout(self)
 
@@ -346,6 +433,35 @@ class _SubjectDialog(QDialog):
         form.addRow("训练水平", self.level)
         form.addRow("训练侧重", self.focus)
 
+        self._initial_team: QComboBox | None = None
+        self._team_list: QListWidget | None = None
+        if subject is None:
+            self._initial_team = QComboBox()
+            self._initial_team.addItem("暂不加入团队", None)
+            if store is not None:
+                for team in store.search_teams():
+                    self._initial_team.addItem(team.name, team.id)
+            self._initial_team.addItem("新建团队…", self.NEW_TEAM)
+            self._initial_team.activated.connect(self._handle_initial_team_choice)
+            form.addRow("所属团队", self._initial_team)
+        else:
+            self._team_list = QListWidget()
+            active_team_ids = (
+                {team.id for team in store.get_subject_teams(subject.id)}
+                if store is not None
+                else set()
+            )
+            if store is not None:
+                for team in store.search_teams():
+                    item = QListWidgetItem(team.name)
+                    item.setData(Qt.UserRole, team.id)
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setCheckState(
+                        Qt.Checked if team.id in active_team_ids else Qt.Unchecked
+                    )
+                    self._team_list.addItem(item)
+            form.addRow("所属团队", self._team_list)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._accept_if_valid)
         buttons.rejected.connect(self.reject)
@@ -358,7 +474,7 @@ class _SubjectDialog(QDialog):
         self.accept()
 
     def values(self) -> dict:
-        return {
+        values = {
             "display_name": self.name.text().strip(),
             "birth_year": self.birth_year.value(),
             "height_cm": self.height.value() or None,
@@ -366,15 +482,115 @@ class _SubjectDialog(QDialog):
             "level": self.level.currentText(),
             "focus_side": self.focus.currentData() or "",
         }
+        if self._initial_team is not None:
+            team_id = self._initial_team.currentData()
+            values["team_ids"] = [team_id] if isinstance(team_id, int) else []
+        elif self._team_list is not None:
+            values["team_ids"] = [
+                self._team_list.item(index).data(Qt.UserRole)
+                for index in range(self._team_list.count())
+                if self._team_list.item(index).checkState() == Qt.Checked
+            ]
+        else:
+            values["team_ids"] = []
+        return values
+
+    def _handle_initial_team_choice(self) -> None:
+        if self._initial_team is None or self._initial_team.currentData() != self.NEW_TEAM:
+            return
+        if self._store is None:
+            self._initial_team.setCurrentIndex(0)
+            return
+        name, accepted = QInputDialog.getText(self, "新建团队", "团队名称")
+        if not accepted:
+            self._initial_team.setCurrentIndex(0)
+            return
+        try:
+            team_id = self._store.create_team(name)
+        except Exception as exc:
+            QMessageBox.warning(self, "新建团队", f"保存失败：{exc}")
+            self._initial_team.setCurrentIndex(0)
+            return
+        team = next(
+            (item for item in self._store.search_teams() if item.id == team_id), None
+        )
+        if team is None:
+            self._initial_team.setCurrentIndex(0)
+            return
+        insert_index = self._initial_team.count() - 1
+        self._initial_team.insertItem(insert_index, team.name, team.id)
+        self._initial_team.setCurrentIndex(insert_index)
 
     @classmethod
     def get_values(
-        cls, parent: QWidget, subject: SubjectProfile | None = None
+        cls,
+        parent: QWidget,
+        subject: SubjectProfile | None = None,
+        *,
+        store: SubjectStore | None = None,
     ) -> dict | None:
-        dialog = cls(subject, parent)
+        dialog = cls(store=store, subject=subject, parent=parent)
         if dialog.exec_() != QDialog.Accepted:
             return None
         return dialog.values()
+
+
+class _DuplicateSubjectDialog(QDialog):
+    def __init__(self, matches: list[SubjectSearchResult], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("发现相同姓名和出生年份的运动员")
+        self.action = "cancel"
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("请选择已有档案，或确认仍然新建。"))
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(
+            ["姓名", "出生年份", "所属团队", "创建时间", "最近测试"]
+        )
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        for row, result in enumerate(matches):
+            self._table.insertRow(row)
+            values = [
+                result.subject.display_name,
+                str(result.subject.birth_year),
+                "、".join(result.team_names) if result.team_names else "未加入团队",
+                result.subject.created_at[:16],
+                result.last_session_at[:16] if result.last_session_at else "暂无",
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.UserRole, result)
+                self._table.setItem(row, column, item)
+        if matches:
+            self._table.selectRow(0)
+        layout.addWidget(self._table)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        reuse = buttons.addButton("使用已有档案", QDialogButtonBox.AcceptRole)
+        create = buttons.addButton("仍然新建", QDialogButtonBox.ActionRole)
+        reuse.clicked.connect(self._reuse)
+        create.clicked.connect(self._create)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _reuse(self) -> None:
+        if self.selected_result() is None:
+            return
+        self.action = "reuse"
+        self.accept()
+
+    def _create(self) -> None:
+        self.action = "create"
+        self.accept()
+
+    def selected_result(self) -> SubjectSearchResult | None:
+        row = self._table.currentRow()
+        if row < 0:
+            return None
+        item = self._table.item(row, 0)
+        value = item.data(Qt.UserRole) if item is not None else None
+        return value if isinstance(value, SubjectSearchResult) else None
 
 
 def _measurement_text(subject: SubjectProfile) -> str:

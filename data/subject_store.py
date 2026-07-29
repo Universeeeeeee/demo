@@ -324,8 +324,15 @@ class SubjectStore:
             return cur.rowcount > 0
 
     def search_subjects(
-        self, query: str = "", *, include_archived: bool = False
+        self,
+        query: str = "",
+        *,
+        include_archived: bool = False,
+        team_id: int | None = None,
+        without_team: bool = False,
     ) -> list[SubjectSearchResult]:
+        if team_id is not None and without_team:
+            raise ValueError("team_id and without_team cannot be used together")
         sql = """
             SELECT
                 s.*,
@@ -345,6 +352,30 @@ class SubjectStore:
             params.append(f"%{query.strip()}%")
         if not include_archived:
             where.append("s.archived = 0")
+        if team_id is not None:
+            where.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM team_memberships tm
+                    JOIN teams t ON t.id = tm.team_id
+                    WHERE tm.subject_id = s.id AND tm.team_id = ?
+                      AND tm.active = 1 AND t.archived = 0
+                )
+                """
+            )
+            params.append(team_id)
+        elif without_team:
+            where.append(
+                """
+                NOT EXISTS (
+                    SELECT 1
+                    FROM team_memberships tm
+                    JOIN teams t ON t.id = tm.team_id
+                    WHERE tm.subject_id = s.id AND tm.active = 1 AND t.archived = 0
+                )
+                """
+            )
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY s.updated_at DESC, s.id DESC"
