@@ -218,6 +218,19 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertEqual(self.store.search_subjects("Used"), [])
         self.assertEqual(len(self.store.search_subjects("Used", include_archived=True)), 1)
 
+    def test_delete_unused_subject_removes_team_memberships(self):
+        subject_id = self.store.create_subject("Unused", 1980)
+        team_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, team_id)
+
+        self.assertTrue(self.store.delete_subject_if_unused(subject_id))
+        self.assertIsNone(self.store.get_subject(subject_id))
+        with self.store._connect() as conn:
+            membership = conn.execute(
+                "SELECT * FROM team_memberships WHERE subject_id = ?", (subject_id,)
+            ).fetchone()
+        self.assertIsNone(membership)
+
 
     def test_subject_store_persists_measured_foot_length_and_treadmill_detail(self):
         subject_id = self.store.create_subject(

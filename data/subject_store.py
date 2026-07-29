@@ -311,6 +311,9 @@ class SubjectStore:
                     (_now(), subject_id),
                 )
                 return False
+            conn.execute(
+                "DELETE FROM team_memberships WHERE subject_id = ?", (subject_id,)
+            )
             cur = conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
             return cur.rowcount > 0
 
