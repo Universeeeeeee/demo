@@ -157,9 +157,115 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertNotIn("export_frames", session.report_summary)
         self.assertNotIn("export_timestamps", session.report_summary)
 
+        self.assertEqual(session.height_cm, 168)
+        self.assertEqual(session.weight_kg, 60)
         subject = self.store.get_subject(subject_id)
-        self.assertEqual(subject.height_cm, 168)
-        self.assertEqual(subject.weight_kg, 60)
+        self.assertIsNone(subject.height_cm)
+        self.assertIsNone(subject.weight_kg)
+
+    def test_record_session_does_not_update_subject_measurements(self):
+        subject_id = self.store.create_subject(
+            "Alice", 1990, height_cm=170.0, weight_kg=60.0
+        )
+
+        self.store.record_session(
+            subject_id,
+            _TestConfig(),
+            _jump_report(),
+            height_cm=180.0,
+            weight_kg=70.0,
+            subject_snapshot={"height_cm": 180.0, "weight_kg": 70.0},
+        )
+
+        subject = self.store.get_subject(subject_id)
+        self.assertEqual(subject.height_cm, 170.0)
+        self.assertEqual(subject.weight_kg, 60.0)
+
+    def test_update_subject_from_session_profile_updates_only_safe_profile_fields(self):
+        subject_id = self.store.create_subject(
+            "Alice",
+            1990,
+            height_cm=170.0,
+            weight_kg=60.0,
+            level="beginner",
+            focus_side="left",
+        )
+
+        self.store.update_subject_from_session_profile(
+            subject_id,
+            height_cm=180.0,
+            weight_kg=70.0,
+            level="advanced",
+            focus_side="right",
+        )
+
+        subject = self.store.get_subject(subject_id)
+        self.assertEqual(subject.display_name, "Alice")
+        self.assertEqual(subject.birth_year, 1990)
+        self.assertEqual(subject.height_cm, 180.0)
+        self.assertEqual(subject.weight_kg, 70.0)
+        self.assertEqual(subject.level, "advanced")
+        self.assertEqual(subject.focus_side, "right")
+
+    def test_subject_measurements_require_finite_in_range_values(self):
+        invalid_cases = (
+            (-1.0, None),
+            (float("nan"), None),
+            (float("inf"), None),
+            (251.0, None),
+            (None, -1.0),
+            (None, 301.0),
+        )
+        subject_id = self.store.create_subject("Alice", 1990)
+
+        for height_cm, weight_kg in invalid_cases:
+            with self.subTest(height_cm=height_cm, weight_kg=weight_kg):
+                with self.assertRaises(ValueError):
+                    self.store.create_subject(
+                        "Invalid", 1990, height_cm=height_cm, weight_kg=weight_kg
+                    )
+                with self.assertRaises(ValueError):
+                    self.store.update_subject(
+                        subject_id, height_cm=height_cm, weight_kg=weight_kg
+                    )
+                with self.assertRaises(ValueError):
+                    self.store.update_subject_measurements(
+                        subject_id, height_cm=height_cm, weight_kg=weight_kg
+                    )
+
+        nullable_subject_id = self.store.create_subject(
+            "Nullable", 1990, height_cm=None, weight_kg=None
+        )
+        self.store.update_subject(
+            nullable_subject_id, height_cm=None, weight_kg=None
+        )
+
+    def test_measured_foot_length_requires_a_finite_positive_value(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+
+        for foot_length_cm in (-1.0, 0.0, float("nan"), float("inf")):
+            with self.subTest(foot_length_cm=foot_length_cm):
+                with self.assertRaises(ValueError):
+                    self.store.update_subject_measurements(
+                        subject_id, measured_foot_length_cm=foot_length_cm
+                    )
+
+    def test_sqlite_guards_reject_invalid_subject_measurements(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+
+        with self.store._connect() as conn:
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO subjects (display_name, normalized_name, birth_year, height_cm)
+                    VALUES ('Invalid', 'invalid', 1990, -1.0)
+                    """
+                )
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "UPDATE subjects SET weight_kg = 301.0 WHERE id = ?",
+                    (subject_id,),
+                )
 
     def test_recent_history_uses_agent_expected_keys(self):
         subject_id = self.store.create_subject("Dana", 1998)

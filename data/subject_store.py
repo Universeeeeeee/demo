@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -149,6 +150,7 @@ class SubjectStore:
         team_id: int | None = None,
     ) -> int:
         self._validate_subject_values(display_name, birth_year, level, focus_side)
+        self._validate_measurements(height_cm, weight_kg)
         now = _now()
         with self._connect() as conn:
             cur = conn.execute(
@@ -205,6 +207,10 @@ class SubjectStore:
         level = fields.get("level", current.level)
         focus_side = fields.get("focus_side", current.focus_side)
         self._validate_subject_values(display_name, birth_year, level, focus_side)
+        self._validate_measurements(
+            fields.get("height_cm") if "height_cm" in fields else None,
+            fields.get("weight_kg") if "weight_kg" in fields else None,
+        )
 
         assignments = [f"{name} = ?" for name in fields]
         values = [_db_value(fields[name]) for name in fields]
@@ -503,10 +509,6 @@ class SubjectStore:
                     export_path,
                 ),
             )
-            if subject_id is not None:
-                self._update_subject_measurements(
-                    conn, subject_id, height_cm, weight_kg
-                )
             return int(cur.lastrowid)
 
     def link_session_to_subject(self, session_id: int, subject_id: int) -> None:
@@ -532,6 +534,23 @@ class SubjectStore:
             self._update_subject_measurements(
                 conn, subject_id, height_cm, weight_kg, measured_foot_length_cm
             )
+
+    def update_subject_from_session_profile(
+        self,
+        subject_id: int,
+        *,
+        height_cm: float | None,
+        weight_kg: float | None,
+        level: str,
+        focus_side: str,
+    ) -> None:
+        self.update_subject(
+            subject_id,
+            height_cm=height_cm,
+            weight_kg=weight_kg,
+            level=level,
+            focus_side=focus_side,
+        )
 
     def subject_to_athlete_profile(
         self,
@@ -620,6 +639,34 @@ class SubjectStore:
                     ON test_sessions(subject_id, started_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_team_memberships_active
                     ON team_memberships(subject_id, active, team_id);
+
+                CREATE TRIGGER IF NOT EXISTS validate_subject_measurements_insert
+                BEFORE INSERT ON subjects
+                FOR EACH ROW
+                WHEN (
+                    (NEW.height_cm IS NOT NULL AND
+                        (NEW.height_cm <= 0 OR NEW.height_cm > 250))
+                    OR
+                    (NEW.weight_kg IS NOT NULL AND
+                        (NEW.weight_kg <= 0 OR NEW.weight_kg > 300))
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid subject measurement');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS validate_subject_measurements_update
+                BEFORE UPDATE OF height_cm, weight_kg ON subjects
+                FOR EACH ROW
+                WHEN (
+                    (NEW.height_cm IS NOT NULL AND
+                        (NEW.height_cm <= 0 OR NEW.height_cm > 250))
+                    OR
+                    (NEW.weight_kg IS NOT NULL AND
+                        (NEW.weight_kg <= 0 OR NEW.weight_kg > 300))
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid subject measurement');
+                END;
                 """
             )
 
@@ -756,6 +803,8 @@ class SubjectStore:
         weight_kg: float | None,
         measured_foot_length_cm: float | None = None,
     ) -> None:
+        self._validate_measurements(height_cm, weight_kg)
+        self._validate_measured_foot_length(measured_foot_length_cm)
         updates: dict[str, Any] = {}
         if height_cm is not None:
             updates["height_cm"] = height_cm
@@ -787,6 +836,37 @@ class SubjectStore:
             raise ValueError(f"level must be one of {sorted(LEVELS)}")
         if focus_side not in FOCUS_SIDES:
             raise ValueError(f"focus_side must be one of {sorted(FOCUS_SIDES)}")
+
+    @staticmethod
+    def _validate_measurements(
+        height_cm: float | None, weight_kg: float | None
+    ) -> None:
+        SubjectStore._validate_optional_measurement(height_cm, "height_cm", 250.0)
+        SubjectStore._validate_optional_measurement(weight_kg, "weight_kg", 300.0)
+
+    @staticmethod
+    def _validate_measured_foot_length(value: float | None) -> None:
+        SubjectStore._validate_optional_measurement(
+            value, "measured_foot_length_cm", None
+        )
+
+    @staticmethod
+    def _validate_optional_measurement(
+        value: float | None, field_name: str, maximum: float | None
+    ) -> None:
+        if value is None:
+            return
+        try:
+            is_valid = math.isfinite(value) and value > 0
+        except TypeError as exc:
+            raise ValueError(f"{field_name} must be a finite positive number") from exc
+        if maximum is not None:
+            is_valid = is_valid and value <= maximum
+        if not is_valid:
+            maximum_text = f" and no greater than {maximum:g}" if maximum else ""
+            raise ValueError(
+                f"{field_name} must be finite, positive{maximum_text}"
+            )
 
 
 def _subject_from_row(row: sqlite3.Row) -> SubjectProfile:
