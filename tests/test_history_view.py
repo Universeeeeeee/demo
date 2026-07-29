@@ -170,6 +170,7 @@ class HistoryViewTest(unittest.TestCase):
 
         self.assertEqual(self.store.get_session(session_id).subject_id, subject_id)
         self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
+        self.assertEqual(view._session_table.item(0, 1).text(), "临时测试")
 
     def test_history_shows_test_identity_and_can_load_one_team(self):
         subject_id = self.store.create_subject("Alice", 1990)

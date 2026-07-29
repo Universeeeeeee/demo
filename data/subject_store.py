@@ -92,6 +92,7 @@ class SessionRecord:
     export_path: str | None = None
     team_id: int | None = None
     team_snapshot_json: str | None = None
+    is_temporary: bool = False
 
     @property
     def config(self) -> AnyTestConfig:
@@ -578,27 +579,10 @@ class SubjectStore:
         finish_reason = _normalize_finish_reason(report.finish_reason)
         now = _now()
         with self._connect() as conn:
-            if subject_id is None:
-                if team_id is not None or team_snapshot is not None:
-                    raise ValueError("Temporary sessions cannot use a team identity")
-            elif team_id is None:
-                if team_snapshot is not None:
-                    raise ValueError("Personal sessions cannot include a team snapshot")
-            else:
-                if not isinstance(team_snapshot, dict) or team_snapshot.get("id") != team_id:
-                    raise ValueError("Team snapshot must identify the selected team")
-                membership = conn.execute(
-                    """
-                    SELECT 1
-                    FROM team_memberships tm
-                    JOIN teams t ON t.id = tm.team_id
-                    WHERE tm.subject_id = ? AND tm.team_id = ?
-                      AND tm.active = 1 AND t.archived = 0
-                    """,
-                    (subject_id, team_id),
-                ).fetchone()
-                if membership is None:
-                    raise ValueError("Subject is not an active member of the selected team")
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_session_identity(
+                conn, subject_id, team_id, team_snapshot
+            )
             cur = conn.execute(
                 """
                 INSERT INTO test_sessions (
@@ -606,9 +590,9 @@ class SubjectStore:
                     height_cm, weight_kg, total_jumps, finish_reason,
                     report_summary_json, report_detail_json,
                     subject_snapshot_json, config_source, export_path,
-                    team_id, team_snapshot_json
+                    team_id, team_snapshot_json, is_temporary
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     subject_id,
@@ -631,9 +615,48 @@ class SubjectStore:
                     json.dumps(team_snapshot, ensure_ascii=False)
                     if team_snapshot is not None
                     else None,
+                    int(subject_id is None),
                 ),
             )
             return int(cur.lastrowid)
+
+    @staticmethod
+    def _validate_session_identity(
+        conn: sqlite3.Connection,
+        subject_id: int | None,
+        team_id: int | None,
+        team_snapshot: dict[str, Any] | None,
+    ) -> None:
+        if subject_id is None:
+            if team_id is not None or team_snapshot is not None:
+                raise ValueError("Temporary sessions cannot use a team identity")
+            return
+
+        subject = conn.execute(
+            "SELECT archived FROM subjects WHERE id = ?", (subject_id,)
+        ).fetchone()
+        if subject is None or subject["archived"]:
+            raise ValueError("Subject is not available for testing")
+
+        if team_id is None:
+            if team_snapshot is not None:
+                raise ValueError("Personal sessions cannot include a team snapshot")
+            return
+
+        if not isinstance(team_snapshot, dict) or team_snapshot.get("id") != team_id:
+            raise ValueError("Team snapshot must identify the selected team")
+        membership = conn.execute(
+            """
+            SELECT 1
+            FROM team_memberships tm
+            JOIN teams t ON t.id = tm.team_id
+            WHERE tm.subject_id = ? AND tm.team_id = ?
+              AND tm.active = 1 AND t.archived = 0
+            """,
+            (subject_id, team_id),
+        ).fetchone()
+        if membership is None:
+            raise ValueError("Subject is not an active member of the selected team")
 
     def link_session_to_subject(self, session_id: int, subject_id: int) -> None:
         if self.get_subject(subject_id) is None:
@@ -736,7 +759,8 @@ class SubjectStore:
                     config_source TEXT,
                     export_path TEXT,
                     team_id INTEGER REFERENCES teams(id),
-                    team_snapshot_json TEXT
+                    team_snapshot_json TEXT,
+                    is_temporary INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS teams (
@@ -820,6 +844,12 @@ class SubjectStore:
             )
             _ensure_column(
                 conn, "test_sessions", "team_snapshot_json", "team_snapshot_json TEXT"
+            )
+            _ensure_column(
+                conn,
+                "test_sessions",
+                "is_temporary",
+                "is_temporary INTEGER NOT NULL DEFAULT 0",
             )
             self._backfill_normalized_subject_names(conn)
             _migrate_test_sessions_subject_nullable(conn)
@@ -1037,6 +1067,7 @@ def _session_from_row(row: sqlite3.Row) -> SessionRecord:
         export_path=row["export_path"],
         team_id=_optional_row_value(row, "team_id"),
         team_snapshot_json=_optional_row_value(row, "team_snapshot_json"),
+        is_temporary=bool(_optional_row_value(row, "is_temporary")),
     )
 
 
@@ -1254,7 +1285,8 @@ def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
             config_source TEXT,
             export_path TEXT,
             team_id INTEGER REFERENCES teams(id),
-            team_snapshot_json TEXT
+            team_snapshot_json TEXT,
+            is_temporary INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -1264,13 +1296,13 @@ def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
             id, subject_id, started_at, finished_at, test_type, config_json,
             height_cm, weight_kg, total_jumps, finish_reason,
             report_summary_json, report_detail_json, subject_snapshot_json,
-            config_source, export_path, team_id, team_snapshot_json
+            config_source, export_path, team_id, team_snapshot_json, is_temporary
         )
         SELECT
             id, subject_id, started_at, finished_at, test_type, config_json,
             height_cm, weight_kg, total_jumps, finish_reason,
             report_summary_json, report_detail_json, subject_snapshot_json,
-            config_source, export_path, team_id, team_snapshot_json
+            config_source, export_path, team_id, team_snapshot_json, is_temporary
         FROM test_sessions
         """
     )

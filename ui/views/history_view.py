@@ -435,6 +435,8 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _session_identity_name(session: SessionRecord) -> str:
+        if session.is_temporary:
+            return "临时测试"
         if session.team_id is not None:
             return session.team_snapshot.get("name") or "团队测试"
         if session.subject_id is not None:

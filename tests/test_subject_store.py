@@ -520,6 +520,44 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertIsNone(linked.team_id)
         self.assertEqual(linked.team_snapshot, {})
 
+    def test_record_session_rejects_archived_subject_but_allows_temporary(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        alpha_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, alpha_id)
+        self.store.archive_subject(subject_id)
+
+        with self.assertRaises(ValueError):
+            self.store.record_session(999, _TestConfig(), _jump_report())
+        with self.assertRaises(ValueError):
+            self.store.record_session(subject_id, _TestConfig(), _jump_report())
+        with self.assertRaises(ValueError):
+            self.store.record_session(
+                subject_id,
+                _TestConfig(),
+                _jump_report(),
+                team_id=alpha_id,
+                team_snapshot={"id": alpha_id, "name": "Alpha"},
+            )
+
+        temporary_id = self.store.record_session(
+            None, _TestConfig(), _jump_report()
+        )
+        self.assertTrue(self.store.get_session(temporary_id).is_temporary)
+
+    def test_record_session_starts_write_transaction_before_identity_validation(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        observed_transaction_states = []
+        original = self.store._validate_session_identity
+
+        def probe(conn, *args, **kwargs):
+            observed_transaction_states.append(conn.in_transaction)
+            return original(conn, *args, **kwargs)
+
+        self.store._validate_session_identity = probe
+        self.store.record_session(subject_id, _TestConfig(), _jump_report())
+
+        self.assertEqual(observed_transaction_states, [True])
+
     def test_team_session_requires_an_active_membership_and_saved_snapshot(self):
         subject_id = self.store.create_subject("Alice", 1990)
         alpha_id = self.store.create_team("Alpha")
@@ -740,6 +778,7 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertIn("team_memberships", tables)
         self.assertIn("team_id", session_columns)
         self.assertIn("team_snapshot_json", session_columns)
+        self.assertIn("is_temporary", session_columns)
         self.assertEqual(version, 1)
 
     def test_subject_can_join_multiple_teams_and_leave_one(self):
@@ -884,13 +923,20 @@ class SubjectStoreTest(unittest.TestCase):
 
         self.assertEqual(migrated.get_session(7).subject_id, 1)
         self.assertIsNone(migrated.get_session(7).team_id)
+        self.assertFalse(migrated.get_session(7).is_temporary)
         with migrated._connect() as conn:
             subject_column = next(
                 row
                 for row in conn.execute("PRAGMA table_info(test_sessions)")
                 if row["name"] == "subject_id"
             )
+            temporary_column = next(
+                row
+                for row in conn.execute("PRAGMA table_info(test_sessions)")
+                if row["name"] == "is_temporary"
+            )
         self.assertEqual(subject_column["notnull"], 0)
+        self.assertEqual(temporary_column["notnull"], 1)
 
 
 if __name__ == "__main__":
