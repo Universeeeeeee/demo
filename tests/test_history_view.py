@@ -1,6 +1,7 @@
 """Tests for the read-only history view."""
 
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -211,6 +212,59 @@ class HistoryViewTest(unittest.TestCase):
         self.assertEqual(view._session_table.rowCount(), 1)
         self.assertIn("团队: Alpha", view._subject_label.text())
         self.assertEqual(view._session_table.item(0, 1).text(), "Alpha")
+
+    def test_migration_marks_legacy_temporary_session_before_later_linking(self):
+        legacy_path = Path(self.tmpdir.name) / "legacy-temporary.sqlite3"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE subjects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    display_name TEXT NOT NULL,
+                    sex TEXT NOT NULL DEFAULT '',
+                    birth_year INTEGER NOT NULL,
+                    height_cm REAL,
+                    weight_kg REAL,
+                    level TEXT NOT NULL DEFAULT 'intermediate',
+                    focus_side TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE test_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject_id INTEGER REFERENCES subjects(id),
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    test_type TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    height_cm REAL,
+                    weight_kg REAL,
+                    total_jumps INTEGER,
+                    finish_reason TEXT,
+                    report_summary_json TEXT,
+                    export_path TEXT
+                );
+                INSERT INTO subjects (
+                    id, display_name, birth_year, created_at, updated_at
+                ) VALUES (1, 'Alice', 1990, '2026-01-01', '2026-01-01');
+                INSERT INTO test_sessions (
+                    id, subject_id, started_at, test_type, config_json
+                ) VALUES (7, NULL, '2026-01-02 10:00:00', 'Jump Test',
+                    '{"test_type":"Jump Test"}');
+                """
+            )
+
+        store = SubjectStore(legacy_path)
+        self.assertTrue(store.get_session(7).is_temporary)
+        store.link_session_to_subject(7, 1)
+        view = HistoryView(store)
+
+        view.load_all()
+
+        self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
+        self.assertEqual(view._session_table.item(0, 1).text(), "临时测试")
 
 
 if __name__ == "__main__":

@@ -845,12 +845,16 @@ class SubjectStore:
             _ensure_column(
                 conn, "test_sessions", "team_snapshot_json", "team_snapshot_json TEXT"
             )
-            _ensure_column(
+            added_temporary_marker = _ensure_column(
                 conn,
                 "test_sessions",
                 "is_temporary",
                 "is_temporary INTEGER NOT NULL DEFAULT 0",
             )
+            if added_temporary_marker:
+                conn.execute(
+                    "UPDATE test_sessions SET is_temporary = 1 WHERE subject_id IS NULL"
+                )
             self._backfill_normalized_subject_names(conn)
             _migrate_test_sessions_subject_nullable(conn)
             conn.execute(
@@ -1249,10 +1253,14 @@ def _metric_summary_map(values: dict[str, Any]) -> dict[str, MetricSummary]:
     }
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, ddl: str
+) -> bool:
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+        return True
+    return False
 
 
 def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
