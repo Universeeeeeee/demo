@@ -7,7 +7,7 @@ import traceback
 from html import escape
 
 from markdown_it import MarkdownIt
-from qtpy.QtCore import Qt, Signal, QThread, QTimer
+from qtpy.QtCore import Qt, QSignalBlocker, Signal, QThread, QTimer
 from qtpy.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox, QTextEdit,
@@ -184,6 +184,7 @@ class AgentConfigPanel(QWidget):
     """智能配置面板：生成建议配置，确认后交给 SetupView。"""
 
     config_confirmed = Signal(object)  # AnyTestConfig
+    profile_changed = Signal()
 
     def __init__(
         self,
@@ -223,26 +224,38 @@ class AgentConfigPanel(QWidget):
         self._active_request_id += 1
         self._clear_pending_config()
         self._history = []
-        if result is None or self._subject_store is None:
+        if result is None:
             self._fill_athlete_fields(
                 AthleteProfile(age=30, weight=70, height=170, level="intermediate")
             )
+            self._age_spin.setEnabled(True)
             self._profile_note.setText("未选择受试者，请填写基础信息。仅用于本次配置。")
             self._history_label.setText("历史记录：暂无")
             return
 
-        try:
-            self._history = self._subject_store.get_recent_history(result.subject.id)
-            profile = self._subject_store.subject_to_athlete_profile(
-                result.subject, self._history,
-            )
-        except Exception:
-            log.exception("Failed to load subject profile for agent panel")
-            profile = AthleteProfile(age=30, weight=70, height=170)
+        if self._subject_store is None:
             self._history = []
+            profile = AthleteProfile(
+                age=30,
+                weight=float(result.subject.weight_kg or 0.0),
+                height=float(result.subject.height_cm or 0.0),
+                level=result.subject.level,
+                focus_side=result.subject.focus_side,
+            )
+        else:
+            try:
+                self._history = self._subject_store.get_recent_history(result.subject.id)
+                profile = self._subject_store.subject_to_athlete_profile(
+                    result.subject, self._history,
+                )
+            except Exception:
+                log.exception("Failed to load subject profile for agent panel")
+                profile = AthleteProfile(age=30, weight=70, height=170)
+                self._history = []
 
         self._fill_athlete_fields(profile)
-        self._profile_note.setText("已从受试者档案自动填入，可修改。仅用于本次配置。")
+        self._age_spin.setEnabled(False)
+        self._profile_note.setText("已从受试者档案自动填入。年龄仅可在运动员管理中修改。")
         count_text = f"最近 {len(self._history)} 次已加载" if self._history else "暂无"
         self._history_label.setText(f"历史记录：{count_text}")
 
@@ -424,10 +437,10 @@ class AgentConfigPanel(QWidget):
         self._reset_btn.clicked.connect(self._on_reset_chat)
         self._confirm_btn.clicked.connect(self._on_confirm_clicked)
         self._age_spin.valueChanged.connect(self._clear_pending_config)
-        self._weight_spin.valueChanged.connect(self._clear_pending_config)
-        self._height_spin.valueChanged.connect(self._clear_pending_config)
-        self._level_combo.currentIndexChanged.connect(self._clear_pending_config)
-        self._focus_combo.currentIndexChanged.connect(self._clear_pending_config)
+        self._weight_spin.valueChanged.connect(self._on_profile_input_changed)
+        self._height_spin.valueChanged.connect(self._on_profile_input_changed)
+        self._level_combo.currentIndexChanged.connect(self._on_profile_input_changed)
+        self._focus_combo.currentIndexChanged.connect(self._on_profile_input_changed)
 
     def _create_card(self) -> QFrame:
         frame = QFrame()
@@ -530,14 +543,29 @@ class AgentConfigPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _fill_athlete_fields(self, profile: AthleteProfile) -> None:
-        self._age_spin.setValue(profile.age)
-        self._weight_spin.setValue(float(profile.weight or 0.0))
-        self._height_spin.setValue(float(profile.height or 0.0))
-        index = self._level_combo.findText(profile.level)
-        if index >= 0:
-            self._level_combo.setCurrentIndex(index)
-        focus_index = self._focus_combo.findData(profile.focus_side)
-        self._focus_combo.setCurrentIndex(max(focus_index, 0))
+        widgets = (
+            self._age_spin,
+            self._weight_spin,
+            self._height_spin,
+            self._level_combo,
+            self._focus_combo,
+        )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        try:
+            self._age_spin.setValue(profile.age)
+            self._weight_spin.setValue(float(profile.weight or 0.0))
+            self._height_spin.setValue(float(profile.height or 0.0))
+            index = self._level_combo.findText(profile.level)
+            if index >= 0:
+                self._level_combo.setCurrentIndex(index)
+            focus_index = self._focus_combo.findData(profile.focus_side)
+            self._focus_combo.setCurrentIndex(max(focus_index, 0))
+        finally:
+            del blockers
+
+    def _on_profile_input_changed(self, *_args) -> None:
+        self._clear_pending_config()
+        self.profile_changed.emit()
 
     def _current_athlete_profile(self) -> AthleteProfile:
         return AthleteProfile(

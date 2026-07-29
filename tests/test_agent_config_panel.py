@@ -329,6 +329,41 @@ class AgentConfigPanelRequestLifecycleTest(unittest.TestCase):
         ):
             self.assertTrue(self.panel.rect().contains(card.geometry()))
 
+    def test_registered_age_is_read_only_but_temporary_age_is_editable(self):
+        import tempfile
+
+        from data.subject_store import SubjectStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SubjectStore(Path(directory) / "subjects.sqlite3")
+            subject_id = store.create_subject("Alice", 1990)
+            result = store.search_subjects("Alice")[0]
+            panel = AgentConfigPanel(subject_store=store)
+
+            panel.set_subject_result(result)
+
+            self.assertEqual(result.subject.id, subject_id)
+            self.assertFalse(panel._age_spin.isEnabled())
+
+            panel.set_subject_result(None)
+
+            self.assertTrue(panel._age_spin.isEnabled())
+
+    def test_registered_age_is_read_only_without_a_profile_store(self):
+        import tempfile
+
+        from data.subject_store import SubjectStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SubjectStore(Path(directory) / "subjects.sqlite3")
+            store.create_subject("Alice", 1990)
+            result = store.search_subjects("Alice")[0]
+            panel = AgentConfigPanel()
+
+            panel.set_subject_result(result)
+
+            self.assertFalse(panel._age_spin.isEnabled())
+
 
 if __name__ == "__main__":
     unittest.main()

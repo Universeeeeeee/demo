@@ -23,12 +23,20 @@ from dayu_widgets.push_button import MPushButton
 
 from config.config_validation import validate_runtime_config
 from config.test_config import AnyTestConfig
-from data.subject_store import SubjectProfile, SubjectSearchResult, SubjectStore
+from data.subject_store import (
+    SubjectProfile,
+    SubjectSearchResult,
+    SubjectStore,
+    TeamProfile,
+)
 from ui.views.agent_config_panel import AgentConfigPanel
 from ui.param_panel import ParamPanel
 
 
 log = logging.getLogger(__name__)
+
+_TEAM_IDENTITY_PLACEHOLDER = "team_identity_placeholder"
+_TEAM_IDENTITY_PERSONAL = "team_identity_personal"
 
 
 SETUP_QSS = """
@@ -258,6 +266,8 @@ class SessionSetup:
     subject_id: int | None = None
     subject: SubjectProfile | None = None
     subject_snapshot: dict | None = None
+    team_id: int | None = None
+    team_snapshot: dict | None = None
     config_source: str | None = None
 
 
@@ -274,6 +284,9 @@ class SetupView(QWidget):
         self._subject_store = subject_store
         self._subject_search = None
         self._subject_combo = None
+        self._team_identity_combo = None
+        self._profile_update_baseline: SubjectProfile | None = None
+        self._update_subject_profile_btn = None
         self._action_load_last_config = None
         self._action_history = None
         self._current_config: AnyTestConfig | None = None
@@ -438,6 +451,7 @@ class SetupView(QWidget):
 
         # ===== 连接参数变更 → 更新摘要 =====
         self._agent_panel.config_confirmed.connect(self._on_agent_config_confirmed)
+        self._agent_panel.profile_changed.connect(self._sync_profile_update_action)
         self.param_panel.config_changed.connect(self._on_param_panel_changed)
         self._update_mode_status()
         self._update_summary()
@@ -463,6 +477,17 @@ class SetupView(QWidget):
         self._subject_combo.setMinimumWidth(260)
         self._subject_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        identity_label = QLabel("测试身份")
+        identity_label.setMinimumWidth(64)
+        identity_label.setStyleSheet(
+            "font-size: 12px; font-weight: 700; color: #eef2f8;"
+        )
+        self._team_identity_combo = QComboBox()
+        self._team_identity_combo.setMinimumWidth(180)
+
+        self._update_subject_profile_btn = QPushButton("更新运动员档案")
+        self._update_subject_profile_btn.hide()
+
         btn_new = MPushButton("新建")
         btn_new.setObjectName("SubjectPrimaryButton")
         btn_new.setMinimumWidth(80)
@@ -477,11 +502,18 @@ class SetupView(QWidget):
         layout.addWidget(label)
         layout.addWidget(self._subject_search)
         layout.addWidget(self._subject_combo, 1)
+        layout.addWidget(identity_label)
+        layout.addWidget(self._team_identity_combo)
+        layout.addWidget(self._update_subject_profile_btn)
         layout.addWidget(btn_new)
         layout.addWidget(btn_more)
 
         self._subject_search.textChanged.connect(self._refresh_subject_results)
         self._subject_combo.currentIndexChanged.connect(self._sync_subject_to_agent)
+        self._team_identity_combo.currentIndexChanged.connect(self._on_team_identity_changed)
+        self._update_subject_profile_btn.clicked.connect(
+            self._on_update_subject_profile_clicked
+        )
         btn_new.clicked.connect(self._on_new_subject_clicked)
         self._action_load_last_config.triggered.connect(self._on_load_last_config_clicked)
         self._action_history.triggered.connect(self._on_history_clicked)
@@ -654,15 +686,133 @@ class SetupView(QWidget):
         self._subject_combo.setCurrentIndex(self._subject_combo.count() - 1)
 
     def _sync_subject_to_agent(self, *_args) -> None:
+        result = self._current_subject_result()
+        self._profile_update_baseline = result.subject if result else None
         if hasattr(self, "_agent_panel"):
-            self._agent_panel.set_subject_result(self._current_subject_result())
-        selected = self._current_subject_result() is not None
+            self._agent_panel.set_subject_result(result)
+        self._populate_team_identity_choices(result)
+        self._sync_profile_update_action()
+        selected = result is not None
         if self._action_history is not None:
             self._action_history.setEnabled(selected)
         if self._action_load_last_config is not None:
             self._action_load_last_config.setEnabled(selected)
         if hasattr(self, "_summary_label"):
             self._update_summary()
+
+    def _populate_team_identity_choices(
+        self, result: SubjectSearchResult | None
+    ) -> None:
+        if self._team_identity_combo is None:
+            return
+        self._team_identity_combo.blockSignals(True)
+        try:
+            self._team_identity_combo.clear()
+            if result is None:
+                self._team_identity_combo.addItem(
+                    "不以团队身份测试", _TEAM_IDENTITY_PERSONAL
+                )
+                self._team_identity_combo.setCurrentIndex(0)
+                self._team_identity_combo.setEnabled(False)
+                return
+            self._team_identity_combo.addItem(
+                "请选择本次测试身份", _TEAM_IDENTITY_PLACEHOLDER
+            )
+            try:
+                teams = self._subject_store.get_subject_teams(result.subject.id)
+            except Exception:
+                log.exception("Failed to load subject teams")
+                teams = []
+            for team in teams:
+                self._team_identity_combo.addItem(team.name, team)
+            self._team_identity_combo.addItem(
+                "不以团队身份测试", _TEAM_IDENTITY_PERSONAL
+            )
+            self._team_identity_combo.setCurrentIndex(0)
+            self._team_identity_combo.setEnabled(True)
+        finally:
+            self._team_identity_combo.blockSignals(False)
+
+    def _on_team_identity_changed(self, *_args) -> None:
+        self._sync_ready_button()
+
+    def _selected_team_identity(self) -> tuple[int | None, dict | None] | None:
+        result = self._current_subject_result()
+        if result is None:
+            return None, None
+        if self._team_identity_combo is None:
+            return None
+        choice = self._team_identity_combo.currentData(Qt.UserRole)
+        if isinstance(choice, TeamProfile):
+            return choice.id, {"id": choice.id, "name": choice.name}
+        if choice == _TEAM_IDENTITY_PERSONAL:
+            return None, None
+        return None
+
+    def _current_safe_profile_values(self) -> dict[str, object] | None:
+        if self._profile_update_baseline is None:
+            return None
+        snapshot = self._agent_panel.current_profile_snapshot()
+        return {
+            "height_cm": snapshot["height_cm"],
+            "weight_kg": snapshot["weight_kg"],
+            "level": snapshot["level"],
+            "focus_side": snapshot["focus_side"],
+        }
+
+    def _sync_profile_update_action(self, *_args) -> None:
+        if self._update_subject_profile_btn is None:
+            return
+        baseline = self._profile_update_baseline
+        values = self._current_safe_profile_values()
+        changed = values is not None and any(
+            values[name] != getattr(baseline, name)
+            for name in values
+        )
+        self._update_subject_profile_btn.setHidden(not changed)
+
+    def _on_update_subject_profile_clicked(self) -> None:
+        baseline = self._profile_update_baseline
+        values = self._current_safe_profile_values()
+        if baseline is None or values is None or self._subject_store is None:
+            return
+        changes = [
+            ("身高", baseline.height_cm, values["height_cm"]),
+            ("体重", baseline.weight_kg, values["weight_kg"]),
+            ("训练水平", baseline.level, values["level"]),
+            ("侧重训练", baseline.focus_side, values["focus_side"]),
+        ]
+        changed_lines = [
+            f"{label}：{old} → {new}"
+            for label, old, new in changes
+            if old != new
+        ]
+        if not changed_lines:
+            return
+        answer = QMessageBox.question(
+            self,
+            "更新运动员档案",
+            "将整体更新运动员档案（不包含出生年份）：\n\n"
+            + "\n".join(changed_lines),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self._subject_store.update_subject_from_session_profile(
+                baseline.id,
+                height_cm=values["height_cm"],
+                weight_kg=values["weight_kg"],
+                level=values["level"],
+                focus_side=values["focus_side"],
+            )
+            self._profile_update_baseline = self._subject_store.get_subject(baseline.id)
+        except Exception as exc:
+            log.exception("Failed to update subject profile from test setup")
+            QMessageBox.warning(self, "更新运动员档案", f"更新失败：{exc}")
+            return
+        self._sync_profile_update_action()
 
     def _on_history_clicked(self) -> None:
         result = self._current_subject_result()
@@ -798,8 +948,13 @@ class SetupView(QWidget):
         else:
             self._summary_state_label.setText("配置已确认")
         self._sync_summary_label_height()
-        if hasattr(self, "btn_ready"):
-            self.btn_ready.setEnabled(not self._config_errors)
+        self._sync_ready_button()
+
+    def _sync_ready_button(self) -> None:
+        if not hasattr(self, "btn_ready"):
+            return
+        identity = self._selected_team_identity()
+        self.btn_ready.setEnabled(not self._config_errors and identity is not None)
 
     def _update_filter_summary(self, config: AnyTestConfig) -> None:
         changed = self._changed_filter_values(config)
@@ -910,6 +1065,12 @@ class SetupView(QWidget):
             return
         config = self._current_config
         result = self._current_subject_result()
+        identity = self._selected_team_identity()
+        if identity is None:
+            QMessageBox.information(self, "准备就绪", "请选择本次测试身份。")
+            self._sync_ready_button()
+            return
+        team_id, team_snapshot = identity
         snapshot = self._agent_panel.current_profile_snapshot()
         snapshot["display_name"] = (
             result.subject.display_name if result else "临时测试"
@@ -920,6 +1081,8 @@ class SetupView(QWidget):
                 subject_id=result.subject.id if result else None,
                 subject=result.subject if result else None,
                 subject_snapshot=snapshot,
+                team_id=team_id,
+                team_snapshot=team_snapshot,
                 config_source=self._config_source,
             )
         )

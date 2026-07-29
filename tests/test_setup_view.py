@@ -13,10 +13,12 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QMessageBox,
 )
 
 from config.treadmill_config import TreadmillGaitConfig
 from config.test_config import TestConfig as RuntimeTestConfig
+from data.subject_store import SubjectStore
 from ui.views.setup_view import SetupView
 
 
@@ -203,3 +205,101 @@ def test_manual_config_scrollbar_stays_dark_at_minimum_window_size(qtbot):
     assert scrollbar.isVisible()
     background = scrollbar.grab().toImage().pixelColor(2, 2)
     assert background.lightness() < 80
+
+
+def test_registered_profile_changes_require_explicit_update(tmp_path, monkeypatch):
+    store = SubjectStore(tmp_path / "subjects.sqlite3")
+    subject_id = store.create_subject(
+        "Alice", 1990, height_cm=170.0, weight_kg=60.0,
+        level="beginner", focus_side="left",
+    )
+    view = SetupView(subject_store=store)
+
+    assert view.select_subject(subject_id)
+    view._agent_panel._height_spin.setValue(180.0)
+    view._agent_panel._weight_spin.setValue(70.0)
+    view._agent_panel._level_combo.setCurrentText("advanced")
+    view._agent_panel._focus_combo.setCurrentIndex(
+        view._agent_panel._focus_combo.findData("right")
+    )
+
+    assert not view._update_subject_profile_btn.isHidden()
+    unchanged = store.get_subject(subject_id)
+    assert unchanged.height_cm == 170.0
+    assert unchanged.birth_year == 1990
+
+    monkeypatch.setattr(
+        "ui.views.setup_view.QMessageBox.question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    view._on_update_subject_profile_clicked()
+
+    updated = store.get_subject(subject_id)
+    assert updated.height_cm == 180.0
+    assert updated.weight_kg == 70.0
+    assert updated.level == "advanced"
+    assert updated.focus_side == "right"
+    assert updated.birth_year == 1990
+
+
+def test_registered_test_requires_selected_team_or_personal_identity(tmp_path, monkeypatch):
+    store = SubjectStore(tmp_path / "subjects.sqlite3")
+    subject_id = store.create_subject("Alice", 1990)
+    alpha_id = store.create_team("Alpha")
+    beta_id = store.create_team("Beta")
+    inactive_id = store.create_team("Inactive")
+    archived_id = store.create_team("Archived")
+    store.add_subject_to_team(subject_id, alpha_id)
+    store.add_subject_to_team(subject_id, beta_id)
+    store.add_subject_to_team(subject_id, inactive_id)
+    store.add_subject_to_team(subject_id, archived_id)
+    store.remove_subject_from_team(subject_id, inactive_id)
+    with store._connect() as conn:
+        conn.execute("UPDATE teams SET archived = 1 WHERE id = ?", (archived_id,))
+    view = SetupView(subject_store=store)
+    ready = []
+    view.ready_signal.connect(ready.append)
+
+    assert view.select_subject(subject_id)
+    view._set_current_config(
+        RuntimeTestConfig(
+            start_type="Status change", stop_type="Status change",
+            finish_position="Inside area", number_of_jumps=3,
+        ),
+        "manual",
+    )
+
+    assert [
+        view._team_identity_combo.itemText(index)
+        for index in range(view._team_identity_combo.count())
+    ] == ["请选择本次测试身份", "Alpha", "Beta", "不以团队身份测试"]
+    assert not view.btn_ready.isEnabled()
+
+    monkeypatch.setattr(
+        "ui.views.setup_view.QMessageBox.information", lambda *_args, **_kwargs: None,
+    )
+    view._on_ready_clicked()
+    assert ready == []
+
+    view._team_identity_combo.setCurrentIndex(1)
+    assert view.btn_ready.isEnabled()
+    view._on_ready_clicked()
+    assert ready[-1].team_id == alpha_id
+    assert ready[-1].team_snapshot == {"id": alpha_id, "name": "Alpha"}
+
+    view._team_identity_combo.setCurrentIndex(3)
+    view._on_ready_clicked()
+    assert ready[-1].team_id is None
+    assert ready[-1].team_snapshot is None
+
+    view._subject_combo.setCurrentIndex(0)
+    assert [
+        view._team_identity_combo.itemText(index)
+        for index in range(view._team_identity_combo.count())
+    ] == ["不以团队身份测试"]
+    assert not view._team_identity_combo.isEnabled()
+    assert view.btn_ready.isEnabled()
+    view._on_ready_clicked()
+    assert ready[-1].subject_id is None
+    assert ready[-1].team_id is None
+    assert ready[-1].team_snapshot is None
