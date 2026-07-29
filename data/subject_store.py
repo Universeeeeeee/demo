@@ -47,10 +47,29 @@ class SubjectProfile:
 
 
 @dataclass(frozen=True)
+class TeamProfile:
+    id: int
+    name: str
+    archived: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
+class TeamMembership:
+    subject_id: int
+    team_id: int
+    active: bool
+    joined_at: str
+    left_at: str | None = None
+
+
+@dataclass(frozen=True)
 class SubjectSearchResult:
     subject: SubjectProfile
     display_labels: dict[str, str]
     last_session_at: str | None = None
+    team_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +89,8 @@ class SessionRecord:
     subject_snapshot_json: str | None = None
     config_source: str | None = None
     export_path: str | None = None
+    team_id: int | None = None
+    team_snapshot_json: str | None = None
 
     @property
     def config(self) -> AnyTestConfig:
@@ -92,6 +113,12 @@ class SessionRecord:
         if not self.subject_snapshot_json:
             return {}
         return json.loads(self.subject_snapshot_json)
+
+    @property
+    def team_snapshot(self) -> dict[str, Any]:
+        if not self.team_snapshot_json:
+            return {}
+        return json.loads(self.team_snapshot_json)
 
     @property
     def report(self) -> TestReport:
@@ -119,6 +146,7 @@ class SubjectStore:
         level: str = "intermediate",
         focus_side: str = "",
         notes: str = "",
+        team_id: int | None = None,
     ) -> int:
         self._validate_subject_values(display_name, birth_year, level, focus_side)
         now = _now()
@@ -127,9 +155,9 @@ class SubjectStore:
                 """
                 INSERT INTO subjects (
                     display_name, sex, birth_year, height_cm, weight_kg,
-                    level, focus_side, notes, created_at, updated_at
+                    level, focus_side, notes, normalized_name, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     display_name.strip(),
@@ -140,11 +168,15 @@ class SubjectStore:
                     level,
                     focus_side,
                     notes,
+                    _normalize_name(display_name),
                     now,
                     now,
                 ),
             )
-            return int(cur.lastrowid)
+            subject_id = int(cur.lastrowid)
+            if team_id is not None:
+                self._add_subject_to_team(conn, subject_id, team_id)
+            return subject_id
 
     def update_subject(self, subject_id: int, **fields: Any) -> None:
         allowed = {
@@ -176,6 +208,11 @@ class SubjectStore:
 
         assignments = [f"{name} = ?" for name in fields]
         values = [_db_value(fields[name]) for name in fields]
+        if "display_name" in fields:
+            index = list(fields).index("display_name")
+            values[index] = display_name.strip()
+            assignments.append("normalized_name = ?")
+            values.append(_normalize_name(display_name))
         assignments.append("updated_at = ?")
         values.append(_now())
         values.append(subject_id)
@@ -184,6 +221,79 @@ class SubjectStore:
             conn.execute(
                 f"UPDATE subjects SET {', '.join(assignments)} WHERE id = ?",
                 values,
+            )
+
+    def create_team(self, name: str) -> int:
+        display_name = name.strip()
+        normalized_name = _normalize_name(name)
+        if not normalized_name:
+            raise ValueError("team name is required")
+
+        now = _now()
+        with self._connect() as conn:
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO teams (name, normalized_name, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (display_name, normalized_name, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Team already exists: {display_name}") from exc
+            return int(cur.lastrowid)
+
+    def search_teams(
+        self, query: str = "", *, include_archived: bool = False
+    ) -> list[TeamProfile]:
+        sql = "SELECT * FROM teams"
+        where: list[str] = []
+        params: list[Any] = []
+        normalized_query = _normalize_name(query)
+        if normalized_query:
+            where.append("normalized_name LIKE ?")
+            params.append(f"%{normalized_query}%")
+        if not include_archived:
+            where.append("archived = 0")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY normalized_name, id"
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_team_from_row(row) for row in rows]
+
+    def get_subject_teams(
+        self, subject_id: int, *, active_only: bool = True
+    ) -> list[TeamProfile]:
+        sql = """
+            SELECT t.*
+            FROM teams t
+            JOIN team_memberships tm ON tm.team_id = t.id
+            WHERE tm.subject_id = ? AND t.archived = 0
+        """
+        params: list[Any] = [subject_id]
+        if active_only:
+            sql += " AND tm.active = 1"
+        sql += " ORDER BY t.normalized_name, t.id"
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_team_from_row(row) for row in rows]
+
+    def add_subject_to_team(self, subject_id: int, team_id: int) -> None:
+        with self._connect() as conn:
+            self._add_subject_to_team(conn, subject_id, team_id)
+
+    def remove_subject_from_team(self, subject_id: int, team_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE team_memberships
+                SET active = 0, left_at = ?
+                WHERE subject_id = ? AND team_id = ? AND active = 1
+                """,
+                (_now(), subject_id, team_id),
             )
 
     def archive_subject(self, subject_id: int) -> None:
@@ -232,11 +342,44 @@ class SubjectStore:
 
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
+            team_names = self._active_team_names(conn, [row["id"] for row in rows])
         return [
             SubjectSearchResult(
                 subject=_subject_from_row(row),
                 display_labels=self._display_labels(row),
                 last_session_at=row["last_session_at"],
+                team_names=team_names.get(row["id"], ()),
+            )
+            for row in rows
+        ]
+
+    def find_duplicate_subjects(
+        self, display_name: str, birth_year: int
+    ) -> list[SubjectSearchResult]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.*,
+                    latest.last_session_at
+                FROM subjects s
+                LEFT JOIN (
+                    SELECT subject_id, MAX(started_at) AS last_session_at
+                    FROM test_sessions
+                    GROUP BY subject_id
+                ) latest ON latest.subject_id = s.id
+                WHERE s.normalized_name = ? AND s.birth_year = ?
+                ORDER BY s.updated_at DESC, s.id DESC
+                """,
+                (_normalize_name(display_name), birth_year),
+            ).fetchall()
+            team_names = self._active_team_names(conn, [row["id"] for row in rows])
+        return [
+            SubjectSearchResult(
+                subject=_subject_from_row(row),
+                display_labels=self._display_labels(row),
+                last_session_at=row["last_session_at"],
+                team_names=team_names.get(row["id"], ()),
             )
             for row in rows
         ]
@@ -414,6 +557,7 @@ class SubjectStore:
                 CREATE TABLE IF NOT EXISTS subjects (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     display_name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL DEFAULT '',
                     sex TEXT NOT NULL DEFAULT '',
                     birth_year INTEGER NOT NULL,
                     height_cm REAL,
@@ -444,16 +588,44 @@ class SubjectStore:
                     report_detail_json TEXT,
                     subject_snapshot_json TEXT,
                     config_source TEXT,
-                    export_path TEXT
+                    export_path TEXT,
+                    team_id INTEGER REFERENCES teams(id),
+                    team_snapshot_json TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS teams (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL UNIQUE,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS team_memberships (
+                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    team_id INTEGER NOT NULL REFERENCES teams(id),
+                    active INTEGER NOT NULL DEFAULT 1,
+                    joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    left_at TEXT,
+                    PRIMARY KEY (subject_id, team_id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_subjects_name_archived
                     ON subjects(display_name, archived);
                 CREATE INDEX IF NOT EXISTS idx_sessions_subject_started
                     ON test_sessions(subject_id, started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_team_memberships_active
+                    ON team_memberships(subject_id, active, team_id);
                 """
             )
 
+            _ensure_column(
+                conn,
+                "subjects",
+                "normalized_name",
+                "normalized_name TEXT NOT NULL DEFAULT ''",
+            )
             _ensure_column(
                 conn, "subjects", "measured_foot_length_cm", "measured_foot_length_cm REAL"
             )
@@ -469,7 +641,27 @@ class SubjectStore:
             _ensure_column(
                 conn, "test_sessions", "config_source", "config_source TEXT"
             )
+            _ensure_column(
+                conn, "test_sessions", "team_id", "team_id INTEGER REFERENCES teams(id)"
+            )
+            _ensure_column(
+                conn, "test_sessions", "team_snapshot_json", "team_snapshot_json TEXT"
+            )
+            self._backfill_normalized_subject_names(conn)
             _migrate_test_sessions_subject_nullable(conn)
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_subjects_normalized_birth_year
+                ON subjects(normalized_name, birth_year)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sessions_team_started
+                ON test_sessions(team_id, started_at DESC)
+                """
+            )
+            conn.execute("PRAGMA user_version = 1")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -495,6 +687,63 @@ class SubjectStore:
         if row["last_session_at"]:
             labels["Last test"] = row["last_session_at"][:10]
         return labels
+
+    @staticmethod
+    def _active_team_names(
+        conn: sqlite3.Connection, subject_ids: list[int]
+    ) -> dict[int, tuple[str, ...]]:
+        if not subject_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in subject_ids)
+        rows = conn.execute(
+            f"""
+            SELECT tm.subject_id, t.name
+            FROM team_memberships tm
+            JOIN teams t ON t.id = tm.team_id
+            WHERE tm.subject_id IN ({placeholders})
+                AND tm.active = 1 AND t.archived = 0
+            ORDER BY tm.subject_id, t.normalized_name, t.id
+            """,
+            subject_ids,
+        ).fetchall()
+        team_names: dict[int, list[str]] = {}
+        for row in rows:
+            team_names.setdefault(row["subject_id"], []).append(row["name"])
+        return {subject_id: tuple(names) for subject_id, names in team_names.items()}
+
+    @staticmethod
+    def _backfill_normalized_subject_names(conn: sqlite3.Connection) -> None:
+        rows = conn.execute("SELECT id, display_name FROM subjects").fetchall()
+        conn.executemany(
+            "UPDATE subjects SET normalized_name = ? WHERE id = ?",
+            [(_normalize_name(row["display_name"]), row["id"]) for row in rows],
+        )
+
+    @staticmethod
+    def _add_subject_to_team(
+        conn: sqlite3.Connection, subject_id: int, team_id: int
+    ) -> None:
+        team = conn.execute(
+            "SELECT archived FROM teams WHERE id = ?", (team_id,)
+        ).fetchone()
+        if team is None or team["archived"]:
+            raise KeyError(f"Active team not found: {team_id}")
+        subject = conn.execute(
+            "SELECT id FROM subjects WHERE id = ?", (subject_id,)
+        ).fetchone()
+        if subject is None:
+            raise KeyError(f"Subject not found: {subject_id}")
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO team_memberships (
+                subject_id, team_id, active, joined_at, left_at
+            ) VALUES (?, ?, 1, ?, NULL)
+            ON CONFLICT(subject_id, team_id) DO UPDATE SET
+                active = 1, joined_at = excluded.joined_at, left_at = NULL
+            """,
+            (subject_id, team_id, now),
+        )
 
     def _update_subject_measurements(
         self,
@@ -579,6 +828,18 @@ def _session_from_row(row: sqlite3.Row) -> SessionRecord:
         ),
         config_source=_optional_row_value(row, "config_source"),
         export_path=row["export_path"],
+        team_id=_optional_row_value(row, "team_id"),
+        team_snapshot_json=_optional_row_value(row, "team_snapshot_json"),
+    )
+
+
+def _team_from_row(row: sqlite3.Row) -> TeamProfile:
+    return TeamProfile(
+        id=int(row["id"]),
+        name=row["name"],
+        archived=bool(row["archived"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -784,7 +1045,9 @@ def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
             report_detail_json TEXT,
             subject_snapshot_json TEXT,
             config_source TEXT,
-            export_path TEXT
+            export_path TEXT,
+            team_id INTEGER REFERENCES teams(id),
+            team_snapshot_json TEXT
         )
         """
     )
@@ -794,13 +1057,13 @@ def _migrate_test_sessions_subject_nullable(conn: sqlite3.Connection) -> None:
             id, subject_id, started_at, finished_at, test_type, config_json,
             height_cm, weight_kg, total_jumps, finish_reason,
             report_summary_json, report_detail_json, subject_snapshot_json,
-            config_source, export_path
+            config_source, export_path, team_id, team_snapshot_json
         )
         SELECT
             id, subject_id, started_at, finished_at, test_type, config_json,
             height_cm, weight_kg, total_jumps, finish_reason,
             report_summary_json, report_detail_json, subject_snapshot_json,
-            config_source, export_path
+            config_source, export_path, team_id, team_snapshot_json
         FROM test_sessions
         """
     )
@@ -908,6 +1171,10 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
 
 def _normalize_finish_reason(reason: str) -> str:
     return reason if reason in FINISH_REASONS else "error"
+
+
+def _normalize_name(name: str) -> str:
+    return " ".join(name.split()).casefold()
 
 
 def _now() -> str:

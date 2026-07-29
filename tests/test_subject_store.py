@@ -461,6 +461,111 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertIn("subject_snapshot_json", columns)
         self.assertIn("config_source", columns)
 
+    def test_schema_v1_adds_team_tables_and_nullable_session_team(self):
+        with self.store._connect() as conn:
+            tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            session_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(test_sessions)")
+            }
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        self.assertIn("teams", tables)
+        self.assertIn("team_memberships", tables)
+        self.assertIn("team_id", session_columns)
+        self.assertIn("team_snapshot_json", session_columns)
+        self.assertEqual(version, 1)
+
+    def test_subject_can_join_multiple_teams_and_leave_one(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        team_a = self.store.create_team("Alpha")
+        team_b = self.store.create_team("Beta")
+
+        self.store.add_subject_to_team(subject_id, team_a)
+        self.store.add_subject_to_team(subject_id, team_b)
+        self.assertEqual(
+            [team.name for team in self.store.get_subject_teams(subject_id)],
+            ["Alpha", "Beta"],
+        )
+
+        self.store.remove_subject_from_team(subject_id, team_a)
+        self.assertEqual(
+            [team.name for team in self.store.get_subject_teams(subject_id)],
+            ["Beta"],
+        )
+
+    def test_team_names_are_trimmed_and_normalized_for_uniqueness(self):
+        team_id = self.store.create_team("  Alpha  Team  ")
+
+        self.assertEqual(self.store.search_teams()[0].id, team_id)
+        self.assertEqual(self.store.search_teams()[0].name, "Alpha  Team")
+        with self.assertRaises(ValueError):
+            self.store.create_team("alpha team")
+
+    def test_readding_inactive_membership_reactivates_it(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        team_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, team_id)
+        self.store.remove_subject_from_team(subject_id, team_id)
+
+        self.store.add_subject_to_team(subject_id, team_id)
+
+        self.assertEqual(
+            [team.id for team in self.store.get_subject_teams(subject_id)], [team_id]
+        )
+        with self.store._connect() as conn:
+            membership = conn.execute(
+                "SELECT active, left_at FROM team_memberships"
+            ).fetchone()
+        self.assertEqual(membership["active"], 1)
+        self.assertIsNone(membership["left_at"])
+
+    def test_missing_or_archived_team_cannot_receive_new_membership(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        with self.assertRaises(KeyError):
+            self.store.add_subject_to_team(subject_id, 999)
+
+        team_id = self.store.create_team("Alpha")
+        with self.store._connect() as conn:
+            conn.execute("UPDATE teams SET archived = 1 WHERE id = ?", (team_id,))
+        with self.assertRaises(KeyError):
+            self.store.add_subject_to_team(subject_id, team_id)
+
+    def test_create_subject_with_team_creates_membership_atomically(self):
+        team_id = self.store.create_team("Alpha")
+        subject_id = self.store.create_subject("Alice", 1990, team_id=team_id)
+
+        self.assertEqual(
+            [team.id for team in self.store.get_subject_teams(subject_id)], [team_id]
+        )
+        with self.assertRaises(KeyError):
+            self.store.create_subject("Bob", 1991, team_id=999)
+        self.assertEqual(self.store.search_subjects("Bob"), [])
+
+    def test_duplicate_lookup_matches_normalized_name_and_birth_year(self):
+        subject_id = self.store.create_subject("  Alice  Smith ", 1990)
+        self.store.create_subject("Alice Smith", 1991)
+
+        matches = self.store.find_duplicate_subjects("alice   smith", 1990)
+
+        self.assertEqual([item.subject.id for item in matches], [subject_id])
+
+    def test_subject_search_result_includes_active_team_names(self):
+        subject_id = self.store.create_subject("Alice", 1990)
+        beta_id = self.store.create_team("Beta")
+        alpha_id = self.store.create_team("Alpha")
+        self.store.add_subject_to_team(subject_id, beta_id)
+        self.store.add_subject_to_team(subject_id, alpha_id)
+
+        result = self.store.search_subjects("Alice")[0]
+
+        self.assertEqual(result.team_names, ("Alpha", "Beta"))
+
     def test_existing_required_subject_schema_is_migrated_without_data_loss(self):
         legacy_path = Path(self.tmpdir.name) / "legacy.sqlite3"
         with sqlite3.connect(legacy_path) as conn:
@@ -517,6 +622,7 @@ class SubjectStoreTest(unittest.TestCase):
         migrated = SubjectStore(legacy_path)
 
         self.assertEqual(migrated.get_session(7).subject_id, 1)
+        self.assertIsNone(migrated.get_session(7).team_id)
         with migrated._connect() as conn:
             subject_column = next(
                 row
