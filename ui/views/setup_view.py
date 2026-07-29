@@ -750,12 +750,20 @@ class SetupView(QWidget):
         return None
 
     def _current_safe_profile_values(self) -> dict[str, object] | None:
-        if self._profile_update_baseline is None:
+        baseline = self._profile_update_baseline
+        if baseline is None:
             return None
         snapshot = self._agent_panel.current_profile_snapshot()
+
+        def measurement_value(value: object, original: float | None) -> float | None:
+            numeric = float(value)
+            if original is None and numeric == 0.0:
+                return None
+            return numeric
+
         return {
-            "height_cm": snapshot["height_cm"],
-            "weight_kg": snapshot["weight_kg"],
+            "height_cm": measurement_value(snapshot["height_cm"], baseline.height_cm),
+            "weight_kg": measurement_value(snapshot["weight_kg"], baseline.weight_kg),
             "level": snapshot["level"],
             "focus_side": snapshot["focus_side"],
         }
@@ -954,7 +962,11 @@ class SetupView(QWidget):
         if not hasattr(self, "btn_ready"):
             return
         identity = self._selected_team_identity()
-        self.btn_ready.setEnabled(not self._config_errors and identity is not None)
+        self.btn_ready.setEnabled(
+            self._current_config is not None
+            and not self._config_errors
+            and identity is not None
+        )
 
     def _update_filter_summary(self, config: AnyTestConfig) -> None:
         changed = self._changed_filter_values(config)

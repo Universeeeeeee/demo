@@ -303,3 +303,31 @@ def test_registered_test_requires_selected_team_or_personal_identity(tmp_path, m
     assert ready[-1].subject_id is None
     assert ready[-1].team_id is None
     assert ready[-1].team_snapshot is None
+
+
+def test_selected_team_stays_disabled_until_config_is_confirmed(tmp_path):
+    _app()
+    store = SubjectStore(tmp_path / "subjects.sqlite3")
+    subject_id = store.create_subject("Alice", 1990)
+    team_id = store.create_team("Alpha")
+    store.add_subject_to_team(subject_id, team_id)
+    view = SetupView(subject_store=store)
+
+    assert view.select_subject(subject_id)
+    view._team_identity_combo.setCurrentIndex(1)
+
+    assert not view.btn_ready.isEnabled()
+
+
+def test_empty_measurements_do_not_look_like_profile_edits(tmp_path):
+    _app()
+    store = SubjectStore(tmp_path / "subjects.sqlite3")
+    subject_id = store.create_subject("Alice", 1990)
+    view = SetupView(subject_store=store)
+
+    assert view.select_subject(subject_id)
+    assert view._update_subject_profile_btn.isHidden()
+
+    view._agent_panel._height_spin.setValue(180.0)
+
+    assert not view._update_subject_profile_btn.isHidden()
