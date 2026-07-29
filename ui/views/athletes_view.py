@@ -310,10 +310,9 @@ class AthletesView(QWidget):
                 if action == "cancel":
                     return
                 if action == "reuse" and candidate is not None:
-                    if team_id is not None:
-                        self._subject_store.add_subject_to_team(
-                            candidate.subject.id, team_id
-                        )
+                    self._subject_store.restore_subject_and_add_to_team(
+                        candidate.subject.id, team_id
+                    )
                     self._search.clear()
                     self.refresh()
                     return
@@ -345,15 +344,9 @@ class AthletesView(QWidget):
             return
         try:
             team_ids = values.pop("team_ids", [])
-            self._subject_store.update_subject(result.subject.id, **values)
-            active_team_ids = {
-                team.id for team in self._subject_store.get_subject_teams(result.subject.id)
-            }
-            selected_team_ids = set(team_ids)
-            for team_id in selected_team_ids - active_team_ids:
-                self._subject_store.add_subject_to_team(result.subject.id, team_id)
-            for team_id in active_team_ids - selected_team_ids:
-                self._subject_store.remove_subject_from_team(result.subject.id, team_id)
+            self._subject_store.update_subject_and_sync_teams(
+                result.subject.id, team_ids=team_ids, **values
+            )
         except Exception as exc:
             QMessageBox.warning(self, "编辑运动员", f"保存失败：{exc}")
             return

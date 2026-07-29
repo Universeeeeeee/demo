@@ -181,6 +181,56 @@ class SubjectStore:
             return subject_id
 
     def update_subject(self, subject_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        with self._connect() as conn:
+            self._update_subject_in_connection(conn, subject_id, fields)
+
+    def update_subject_and_sync_teams(
+        self, subject_id: int, *, team_ids: list[int], **fields: Any
+    ) -> None:
+        selected_team_ids = set(team_ids)
+        with self._connect() as conn:
+            self._update_subject_in_connection(conn, subject_id, fields)
+            rows = conn.execute(
+                """
+                SELECT team_id FROM team_memberships
+                WHERE subject_id = ? AND active = 1
+                """,
+                (subject_id,),
+            ).fetchall()
+            active_team_ids = {row["team_id"] for row in rows}
+            for team_id in selected_team_ids - active_team_ids:
+                self._add_subject_to_team(conn, subject_id, team_id)
+            for team_id in active_team_ids - selected_team_ids:
+                conn.execute(
+                    """
+                    UPDATE team_memberships
+                    SET active = 0, left_at = ?
+                    WHERE subject_id = ? AND team_id = ? AND active = 1
+                    """,
+                    (_now(), subject_id, team_id),
+                )
+
+    def restore_subject_and_add_to_team(
+        self, subject_id: int, team_id: int | None = None
+    ) -> None:
+        with self._connect() as conn:
+            subject = conn.execute(
+                "SELECT id FROM subjects WHERE id = ?", (subject_id,)
+            ).fetchone()
+            if subject is None:
+                raise KeyError(f"Subject not found: {subject_id}")
+            if team_id is not None:
+                self._add_subject_to_team(conn, subject_id, team_id)
+            conn.execute(
+                "UPDATE subjects SET archived = 0, updated_at = ? WHERE id = ?",
+                (_now(), subject_id),
+            )
+
+    def _update_subject_in_connection(
+        self, conn: sqlite3.Connection, subject_id: int, fields: dict[str, Any]
+    ) -> None:
         allowed = {
             "display_name",
             "sex",
@@ -198,9 +248,12 @@ class SubjectStore:
         if not fields:
             return
 
-        current = self.get_subject(subject_id)
-        if current is None:
+        row = conn.execute(
+            "SELECT * FROM subjects WHERE id = ?", (subject_id,)
+        ).fetchone()
+        if row is None:
             raise KeyError(f"Subject not found: {subject_id}")
+        current = _subject_from_row(row)
 
         display_name = fields.get("display_name", current.display_name)
         birth_year = fields.get("birth_year", current.birth_year)
@@ -223,11 +276,10 @@ class SubjectStore:
         values.append(_now())
         values.append(subject_id)
 
-        with self._connect() as conn:
-            conn.execute(
-                f"UPDATE subjects SET {', '.join(assignments)} WHERE id = ?",
-                values,
-            )
+        conn.execute(
+            f"UPDATE subjects SET {', '.join(assignments)} WHERE id = ?",
+            values,
+        )
 
     def create_team(self, name: str) -> int:
         display_name = name.strip()

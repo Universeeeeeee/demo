@@ -152,6 +152,7 @@ def test_create_duplicate_flow_reuses_selected_profile_and_membership(qtbot, tmp
     alpha_id = store.create_team("Alpha")
     beta_id = store.create_team("Beta")
     subject_id = store.create_subject("Alice", 1990, team_id=alpha_id)
+    store.archive_subject(subject_id)
     view = AthletesView(store)
     qtbot.addWidget(view)
     monkeypatch.setattr(

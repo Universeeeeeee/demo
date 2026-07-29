@@ -337,6 +337,41 @@ class SubjectStoreTest(unittest.TestCase):
             ).fetchone()
         self.assertIsNone(membership)
 
+    def test_reusing_archived_subject_restores_it_and_adds_target_team(self):
+        alpha_id = self.store.create_team("Alpha")
+        beta_id = self.store.create_team("Beta")
+        subject_id = self.store.create_subject("Alice", 1990, team_id=alpha_id)
+        self.store.archive_subject(subject_id)
+
+        candidate = self.store.find_duplicate_subjects("Alice", 1990)[0]
+        self.store.restore_subject_and_add_to_team(candidate.subject.id, beta_id)
+
+        visible = self.store.search_subjects("Alice")
+        self.assertEqual([item.subject.id for item in visible], [subject_id])
+        self.assertFalse(visible[0].subject.archived)
+        self.assertEqual(
+            [team.name for team in self.store.get_subject_teams(subject_id)],
+            ["Alpha", "Beta"],
+        )
+
+    def test_subject_edit_and_team_sync_roll_back_together_on_invalid_team(self):
+        alpha_id = self.store.create_team("Alpha")
+        beta_id = self.store.create_team("Beta")
+        subject_id = self.store.create_subject("Alice", 1990, team_id=alpha_id)
+
+        with self.assertRaises(KeyError):
+            self.store.update_subject_and_sync_teams(
+                subject_id,
+                team_ids=[beta_id, 999],
+                display_name="Changed Alice",
+            )
+
+        subject = self.store.get_subject(subject_id)
+        self.assertEqual(subject.display_name, "Alice")
+        self.assertEqual(
+            [team.name for team in self.store.get_subject_teams(subject_id)], ["Alpha"]
+        )
+
 
     def test_subject_store_persists_measured_foot_length_and_treadmill_detail(self):
         subject_id = self.store.create_subject(
