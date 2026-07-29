@@ -30,7 +30,12 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from data.subject_store import SubjectProfile, SubjectSearchResult, SubjectStore
+from data.subject_store import (
+    SubjectProfile,
+    SubjectSearchResult,
+    SubjectStore,
+    TeamProfile,
+)
 
 
 log = logging.getLogger(__name__)
@@ -105,6 +110,7 @@ class AthletesView(QWidget):
 
     test_requested = Signal(object)  # SubjectSearchResult
     results_requested = Signal(object)  # SubjectSearchResult
+    team_results_requested = Signal(object)  # TeamProfile
     ALL_TEAMS = "all-teams"
     WITHOUT_TEAM = "without-team"
 
@@ -148,6 +154,10 @@ class AthletesView(QWidget):
         self._btn_new.setObjectName("PrimaryButton")
         self._btn_new.clicked.connect(self._create_subject)
         toolbar_layout.addWidget(self._btn_new)
+
+        self._btn_team_results = QPushButton("查看团队结果")
+        self._btn_team_results.clicked.connect(self._show_filtered_team_results)
+        toolbar_layout.addWidget(self._btn_team_results)
 
         self._btn_edit = QPushButton("编辑")
         self._btn_edit.clicked.connect(self._edit_selected)
@@ -286,6 +296,9 @@ class AthletesView(QWidget):
         self._btn_archive.setEnabled(enabled)
         self._btn_results.setEnabled(enabled)
         self._btn_test.setEnabled(enabled)
+        self._btn_team_results.setEnabled(
+            isinstance(self._team_filter.currentData(), int)
+        )
 
     def _create_subject(self) -> None:
         if self._subject_store is None:
@@ -379,6 +392,19 @@ class AthletesView(QWidget):
         result = self._selected_result()
         if result is not None:
             self.results_requested.emit(result)
+
+    def _show_filtered_team_results(self) -> None:
+        if self._subject_store is None:
+            return
+        team_id = self._team_filter.currentData()
+        if not isinstance(team_id, int):
+            return
+        team = next(
+            (item for item in self._subject_store.search_teams() if item.id == team_id),
+            None,
+        )
+        if isinstance(team, TeamProfile):
+            self.team_results_requested.emit(team)
 
 
 class _SubjectDialog(QDialog):

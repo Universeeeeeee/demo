@@ -30,6 +30,7 @@ from data.subject_store import (
     TeamProfile,
 )
 from ui.views.agent_config_panel import AgentConfigPanel
+from ui.views.athletes_view import _DuplicateSubjectDialog, _SubjectDialog
 from ui.param_panel import ParamPanel
 
 
@@ -595,23 +596,37 @@ class SetupView(QWidget):
         if self._subject_store is None:
             return
 
-        dialog, name_edit, birth_year_spin, level_combo = (
-            self._build_new_subject_dialog()
-        )
-        if dialog.exec_() != QDialog.Accepted:
+        values = _SubjectDialog.get_values(self, store=self._subject_store)
+        if values is None:
             return
 
-        display_name = name_edit.text().strip()
-        if not display_name:
-            QMessageBox.warning(self, "新建受试者", "姓名不能为空。")
-            return
+        subject_values = dict(values)
+        team_ids = subject_values.pop("team_ids", [])
+        team_id = team_ids[0] if team_ids else None
+        display_name = subject_values["display_name"]
 
         try:
-            subject_id = self._subject_store.create_subject(
-                display_name=display_name,
-                birth_year=birth_year_spin.value(),
-                level=level_combo.currentText(),
+            matches = self._subject_store.find_duplicate_subjects(
+                display_name, subject_values["birth_year"]
             )
+            if matches:
+                duplicate_dialog = _DuplicateSubjectDialog(matches, self)
+                if duplicate_dialog.exec_() != QDialog.Accepted:
+                    return
+                candidate = duplicate_dialog.selected_result()
+                if duplicate_dialog.action == "reuse" and candidate is not None:
+                    self._subject_store.restore_subject_and_add_to_team(
+                        candidate.subject.id, team_id
+                    )
+                    subject_id = candidate.subject.id
+                else:
+                    subject_id = self._subject_store.create_subject(
+                        **subject_values, team_id=team_id
+                    )
+            else:
+                subject_id = self._subject_store.create_subject(
+                    **subject_values, team_id=team_id
+                )
         except Exception as exc:
             log.exception("Failed to create subject")
             QMessageBox.warning(self, "新建受试者", f"创建失败：{exc}")
@@ -816,6 +831,15 @@ class SetupView(QWidget):
                 focus_side=values["focus_side"],
             )
             self._profile_update_baseline = self._subject_store.get_subject(baseline.id)
+            updated = self._profile_update_baseline
+            if updated is not None and self._subject_combo is not None:
+                refreshed = self._find_subject_result(updated.display_name, updated.id)
+                if refreshed is not None:
+                    index = self._subject_combo.currentIndex()
+                    self._subject_combo.setItemData(index, refreshed, Qt.UserRole)
+                    self._subject_combo.setItemText(
+                        index, self._format_subject_result(refreshed)
+                    )
         except Exception as exc:
             log.exception("Failed to update subject profile from test setup")
             QMessageBox.warning(self, "更新运动员档案", f"更新失败：{exc}")

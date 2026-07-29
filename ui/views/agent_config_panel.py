@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from datetime import datetime
 from html import escape
 
 from markdown_it import MarkdownIt
@@ -236,7 +237,7 @@ class AgentConfigPanel(QWidget):
         if self._subject_store is None:
             self._history = []
             profile = AthleteProfile(
-                age=30,
+                age=max(0, datetime.now().year - result.subject.birth_year),
                 weight=float(result.subject.weight_kg or 0.0),
                 height=float(result.subject.height_cm or 0.0),
                 level=result.subject.level,

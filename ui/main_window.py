@@ -225,6 +225,9 @@ class MainWindow(QMainWindow):
         # AthletesView → test/results modules
         self._athletes_view.test_requested.connect(self._on_athlete_test_requested)
         self._athletes_view.results_requested.connect(self._on_history_requested)
+        self._athletes_view.team_results_requested.connect(
+            self._on_team_history_requested
+        )
 
         # SetupView → MainWindow
         self._setup_view.ready_signal.connect(self._on_ready)
@@ -392,6 +395,10 @@ class MainWindow(QMainWindow):
 
     def _on_history_requested(self, subject_result):
         self._history_view.load_subject(subject_result)
+        self._go_to_history()
+
+    def _on_team_history_requested(self, team):
+        self._history_view.load_team(team)
         self._go_to_history()
 
     def _on_athlete_test_requested(self, subject_result):

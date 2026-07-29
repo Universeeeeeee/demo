@@ -173,6 +173,35 @@ class HistoryViewTest(unittest.TestCase):
         self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
         self.assertEqual(view._session_table.item(0, 1).text(), "临时测试")
 
+    def test_link_temporary_session_disambiguates_same_name_subjects(self):
+        first_id = self.store.create_subject("Alice", 1990)
+        second_id = self.store.create_subject("Alice", 1995)
+        session_id = self.store.record_session(
+            None,
+            _TestConfig(number_of_jumps=3),
+            _jump_report(touch_count=3),
+            subject_snapshot={"display_name": "临时测试", "age": 30},
+        )
+        view = HistoryView(self.store)
+        view.load_all()
+        view._session_table.selectRow(0)
+
+        original = QInputDialog.getItem
+
+        def choose_second(*args, **kwargs):
+            labels = args[3]
+            assert all(" · " in label for label in labels)
+            return (next(label for label in labels if "1995" in label), True)
+
+        QInputDialog.getItem = staticmethod(choose_second)
+        try:
+            view._on_link_subject_clicked()
+        finally:
+            QInputDialog.getItem = original
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(self.store.get_session(session_id).subject_id, second_id)
+
     def test_history_shows_test_identity_and_can_load_one_team(self):
         subject_id = self.store.create_subject("Alice", 1990)
         alpha_id = self.store.create_team("Alpha")

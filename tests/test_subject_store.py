@@ -996,6 +996,23 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertEqual(subject_column["notnull"], 0)
         self.assertEqual(temporary_column["notnull"], 1)
 
+    def test_existing_temporary_marker_is_repaired_for_unlinked_sessions(self):
+        session_id = self.store.record_session(
+            None,
+            _TestConfig(),
+            _jump_report(),
+            subject_snapshot={"display_name": "临时测试"},
+        )
+        with self.store._connect() as conn:
+            conn.execute(
+                "UPDATE test_sessions SET is_temporary = 0 WHERE id = ?",
+                (session_id,),
+            )
+
+        reopened = SubjectStore(self.db_path)
+
+        self.assertTrue(reopened.get_session(session_id).is_temporary)
+
 
 if __name__ == "__main__":
     unittest.main()

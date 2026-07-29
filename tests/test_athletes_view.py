@@ -75,6 +75,21 @@ def test_athletes_view_displays_and_filters_active_team_memberships(qtbot, tmp_p
     assert alpha_only_id != multi_team_id
 
 
+def test_team_filter_can_open_that_team_results(qtbot, tmp_path):
+    store = SubjectStore(tmp_path / "subjects.sqlite3")
+    alpha_id = store.create_team("Alpha")
+    view = AthletesView(store)
+    qtbot.addWidget(view)
+    spy = QSignalSpy(view.team_results_requested)
+
+    assert not view._btn_team_results.isEnabled()
+    view._team_filter.setCurrentIndex(view._team_filter.findData(alpha_id))
+    qtbot.mouseClick(view._btn_team_results, Qt.LeftButton)
+
+    assert spy.count() == 1
+    assert spy.at(0)[0].id == alpha_id
+
+
 def test_subject_dialog_offers_initial_team_or_multi_team_memberships(qtbot, tmp_path):
     store = SubjectStore(tmp_path / "subjects.sqlite3")
     alpha_id = store.create_team("Alpha")

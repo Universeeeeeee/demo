@@ -399,7 +399,14 @@ class HistoryView(QWidget):
                 self, "关联运动员", "请先在“运动员”模块创建运动员。"
             )
             return
-        labels = [result.subject.display_name for result in results]
+        labels = [
+            (
+                f"{result.subject.display_name} · {result.subject.birth_year} · "
+                f"{'、'.join(result.team_names) if result.team_names else '未加入团队'}"
+                f" · 候选 {index + 1}"
+            )
+            for index, result in enumerate(results)
+        ]
         selected, accepted = QInputDialog.getItem(
             self,
             "关联运动员",
@@ -410,9 +417,17 @@ class HistoryView(QWidget):
         )
         if not accepted:
             return
-        match = next(
-            result for result in results if result.subject.display_name == selected
-        )
+        try:
+            match = results[labels.index(selected)]
+        except ValueError:
+            name_matches = [
+                result
+                for result in results
+                if result.subject.display_name == selected
+            ]
+            if len(name_matches) != 1:
+                return
+            match = name_matches[0]
         try:
             self._subject_store.link_session_to_subject(
                 session.id, match.subject.id

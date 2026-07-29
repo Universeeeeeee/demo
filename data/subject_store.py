@@ -845,18 +845,17 @@ class SubjectStore:
             _ensure_column(
                 conn, "test_sessions", "team_snapshot_json", "team_snapshot_json TEXT"
             )
-            added_temporary_marker = _ensure_column(
+            _ensure_column(
                 conn,
                 "test_sessions",
                 "is_temporary",
                 "is_temporary INTEGER NOT NULL DEFAULT 0",
             )
-            if added_temporary_marker:
-                conn.execute(
-                    "UPDATE test_sessions SET is_temporary = 1 WHERE subject_id IS NULL"
-                )
             self._backfill_normalized_subject_names(conn)
             _migrate_test_sessions_subject_nullable(conn)
+            conn.execute(
+                "UPDATE test_sessions SET is_temporary = 1 WHERE subject_id IS NULL"
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_subjects_normalized_birth_year
