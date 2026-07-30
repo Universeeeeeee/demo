@@ -27,7 +27,11 @@ def test_shell_has_fixed_application_navigation(qtbot):
         MODULE_RESULTS,
         MODULE_SETTINGS,
     ]
-    assert shell.sidebar.brand_name.text() == "IronJump"
+    assert shell.sidebar.brand_logo.accessibleName() == "映衡"
+    assert shell.sidebar.brand_logo.text() == ""
+    assert not shell.sidebar.brand_logo.pixmap().isNull()
+    assert shell.sidebar.findChild(QLabel, "BrandInitials") is None
+    assert shell.sidebar.findChild(QLabel, "BrandName") is None
     assert shell.sidebar.buttons[MODULE_TEST].isChecked()
 
 

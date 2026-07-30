@@ -10,6 +10,7 @@ from config.test_config import default_jump_config
 from config.test_report import JumpTestReport
 from data.subject_store import SubjectStore
 from ui.app_shell import MODULE_ATHLETES, MODULE_SETTINGS, MODULE_TEST
+import ui.main_window as main_window_module
 from ui.main_window import MainWindow
 from ui.views.athletes_view import _SubjectDialog
 from ui.views.setup_view import SessionSetup
@@ -91,6 +92,29 @@ def test_application_navigation_routes_four_modules(qtbot, tmp_path):
     window._request_module(MODULE_SETTINGS)
     assert window._stack.currentWidget() is window._settings_view
     assert window._shell.sidebar.buttons[MODULE_SETTINGS].isChecked()
+
+
+def test_main_window_requests_native_dark_title_bar(qtbot, tmp_path, monkeypatch):
+    styled = []
+    monkeypatch.setattr(
+        main_window_module,
+        "_apply_windows_dark_title_bar",
+        lambda window: styled.append(window) or True,
+    )
+
+    window, _controller = _window(qtbot, tmp_path)
+
+    assert styled == [window]
+    assert window.windowTitle() == ""
+
+
+def test_main_window_sets_brand_icon_for_window_and_application(qtbot, tmp_path):
+    window, _controller = _window(qtbot, tmp_path)
+    app_icon = QApplication.instance().windowIcon()
+
+    assert not window.windowIcon().isNull()
+    assert not app_icon.isNull()
+    assert window.windowIcon().cacheKey() == app_icon.cacheKey()
 
 
 def test_application_dialogs_use_dark_theme(qtbot, tmp_path):

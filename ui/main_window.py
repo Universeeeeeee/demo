@@ -22,8 +22,9 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
-    QMainWindow, QStackedWidget, QMessageBox,
+    QApplication, QMainWindow, QStackedWidget, QMessageBox,
 )
 from dayu_widgets import dayu_theme
 from dayu_widgets.qt import application
@@ -31,6 +32,7 @@ from dayu_widgets.qt import application
 from config.test_config import TestConfig
 from config.test_report import TestReport
 from data.subject_store import SubjectProfile, SubjectStore
+from path_utils import get_base_dir
 from ui.app_shell import (
     APP_DIALOG_QSS,
     MODULE_ATHLETES,
@@ -186,6 +188,15 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
 
         self.setStyleSheet(APP_DIALOG_QSS)
+        app_icon = QIcon(
+            os.path.join(
+                get_base_dir(), "ui", "assets", "yingheng_app_icon.png"
+            )
+        )
+        self.setWindowIcon(app_icon)
+        qt_app = QApplication.instance()
+        if qt_app is not None:
+            qt_app.setWindowIcon(app_icon)
         self.setWindowTitle("")
         _apply_windows_dark_title_bar(self)
         self.setMinimumSize(1180, 720)
