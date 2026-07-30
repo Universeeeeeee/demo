@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
 from qtpy.QtCore import Signal, Qt
+from qtpy.QtGui import QPixmap
 from qtpy.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -13,6 +16,8 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from path_utils import get_base_dir
 
 
 MODULE_ATHLETES = "athletes"
@@ -44,20 +49,9 @@ QFrame#ApplicationSidebar {
     background: #0e141d;
     border-right: 1px solid #26303d;
 }
-QFrame#BrandMark {
-    background: #ff7a00;
+QLabel#BrandLogo {
+    background: transparent;
     border: none;
-    border-radius: 8px;
-}
-QLabel#BrandInitials {
-    color: white;
-    font-size: 15px;
-    font-weight: 800;
-}
-QLabel#BrandName {
-    color: #f5f7fb;
-    font-size: 14px;
-    font-weight: 700;
 }
 QPushButton#ModuleButton {
     min-height: 54px;
@@ -189,23 +183,25 @@ class ApplicationSidebar(QFrame):
         layout.setSpacing(10)
 
         brand_row = QHBoxLayout()
-        brand_row.setContentsMargins(8, 0, 4, 22)
-        brand_row.setSpacing(10)
+        brand_row.setContentsMargins(8, 0, 4, 20)
 
-        brand_mark = QFrame()
-        brand_mark.setObjectName("BrandMark")
-        brand_mark.setFixedSize(38, 38)
-        mark_layout = QVBoxLayout(brand_mark)
-        mark_layout.setContentsMargins(0, 0, 0, 0)
-        initials = QLabel("IJ")
-        initials.setObjectName("BrandInitials")
-        initials.setAlignment(Qt.AlignCenter)
-        mark_layout.addWidget(initials)
-        brand_row.addWidget(brand_mark)
-
-        self.brand_name = QLabel("IronJump")
-        self.brand_name.setObjectName("BrandName")
-        brand_row.addWidget(self.brand_name)
+        self.brand_logo = QLabel()
+        self.brand_logo.setObjectName("BrandLogo")
+        self.brand_logo.setAccessibleName("映衡")
+        self.brand_logo.setFixedSize(146, 52)
+        self.brand_logo.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        logo_path = os.path.join(
+            get_base_dir(), "ui", "assets", "yingheng_brand.png"
+        )
+        logo = QPixmap(logo_path)
+        self.brand_logo.setPixmap(
+            logo.scaled(
+                self.brand_logo.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
+        brand_row.addWidget(self.brand_logo)
         brand_row.addStretch()
         layout.addLayout(brand_row)
 
