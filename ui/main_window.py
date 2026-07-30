@@ -83,6 +83,58 @@ def _wallclock_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat(sep=" ")
 
 
+def _apply_windows_dark_title_bar(
+    window, *, platform_name: str | None = None, dwmapi=None
+) -> bool:
+    """Match the native Windows title bar to the application's dark UI."""
+    if (platform_name or sys.platform) != "win32":
+        return False
+
+    try:
+        import ctypes
+
+        using_system_api = dwmapi is None
+        if using_system_api:
+            from ctypes import wintypes
+
+            dwmapi = ctypes.windll.dwmapi
+
+        setter = dwmapi.DwmSetWindowAttribute
+        if using_system_api:
+            setter.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+            ]
+            setter.restype = wintypes.HRESULT
+
+        hwnd = int(window.winId())
+
+        def set_attribute(attribute: int, value: int) -> bool:
+            native_value = ctypes.c_int(value)
+            return (
+                setter(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(native_value),
+                    ctypes.sizeof(native_value),
+                )
+                == 0
+            )
+
+        dark_enabled = set_attribute(20, 1)
+        if not dark_enabled:
+            dark_enabled = set_attribute(19, 1)
+
+        caption_colored = set_attribute(35, 0x0019110C)  # #0c1119
+        set_attribute(36, 0x00FBF7F5)  # #f5f7fb
+        return dark_enabled or caption_colored
+    except Exception:
+        log.debug("Windows dark title bar is unavailable", exc_info=True)
+        return False
+
+
 def _detect_tinyse_camera() -> bool:
     if TinySeCameraControl is not None:
         ctl = None
@@ -134,7 +186,8 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
 
         self.setStyleSheet(APP_DIALOG_QSS)
-        self.setWindowTitle("IronJump")
+        self.setWindowTitle("")
+        _apply_windows_dark_title_bar(self)
         self.setMinimumSize(1180, 720)
         self.resize(1400, 820)
         self._enable_background_checks = enable_background_checks
