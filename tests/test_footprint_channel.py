@@ -31,6 +31,19 @@ def test_channel_widget_maps_opposite_side_zero_to_bottom():
     assert widget._y_for_index(95, 10, 90) == 10
 
 
+def test_channel_widget_uses_uniform_subpixel_led_spacing_for_any_height():
+    _app()
+    widget = FootprintChannelWidget()
+
+    markers = widget._rail_marker_rects(rail_x=30.0, top=34.0, height=486.0)
+    centers = [marker.center().y() for marker in markers]
+    gaps = [abs(right - left) for left, right in zip(centers, centers[1:])]
+
+    assert len(markers) == 96
+    assert gaps == pytest.approx([486.0 / 95.0] * 95)
+    assert any(center != int(center) for center in centers)
+
+
 def test_replay_panel_applies_direction_to_channel():
     _app()
     panel = FootprintReplayPanel()

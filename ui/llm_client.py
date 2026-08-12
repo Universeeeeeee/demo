@@ -1,8 +1,8 @@
 """
-llm_client.py — LLM Worker HTTP 客户端
+llm_client.py — Agent Worker HTTP 客户端
 
-主进程通过此模块与 agent/llm_worker.py 通信。
-不 import 任何 agent 模块（AthleteProfile 除外，它是纯 dataclass）。
+主进程通过此模块与 agent/worker.py 通信。
+不 import 任何 Agent 业务模块。
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import requests
 PORT_FILE = Path(tempfile.gettempdir()) / "ironjump_llm_port.txt"
 
 
-class LLMWorkerClient:
-    """LLM Worker HTTP 客户端。
+class AgentWorkerClient:
+    """Agent Worker HTTP 客户端。
 
     管理 worker 进程的启动、健康检查、请求转发。
     """
@@ -153,13 +153,13 @@ class LLMWorkerClient:
         return self.worker_status(timeout=timeout) == "ready"
 
     def chat(self, message: str, athlete: dict, agent_mode: str = "jump") -> dict:
-        """POST /chat, 返回 {"reply": "...", "config": {...}|null} 或 {"error": "..."}"""
+        """POST /config/chat，返回配置结果或稳定错误。"""
         url = self._base_url()
         if url is None:
             return {"error": "worker 未启动"}
         if not self.health_check(timeout=0.5):
             return {"error": "worker 未就绪"}
-        r = requests.post(f"{url}/chat", json={
+        r = requests.post(f"{url}/config/chat", json={
             "message": message,
             "athlete": athlete,
             "agent_mode": agent_mode,
@@ -171,6 +171,57 @@ class LLMWorkerClient:
         if url is None:
             return
         try:
-            requests.post(f"{url}/reset", timeout=5)
+            requests.post(f"{url}/config/reset", timeout=5)
         except Exception:
             pass
+
+    def analyze_report(
+        self,
+        session_id: int,
+        scope: dict,
+        timeout: float = 120,
+    ) -> dict:
+        url = self._base_url()
+        if url is None:
+            return {"error_code": "worker_not_started"}
+        if not self.health_check(timeout=0.5):
+            return {"error_code": "worker_not_ready"}
+        try:
+            response = requests.post(
+                f"{url}/report/analyze",
+                json={
+                    "session_id": session_id,
+                    "data_access_scope": scope,
+                },
+                timeout=timeout,
+            )
+            return response.json()
+        except requests.RequestException:
+            return {"error_code": "worker_unreachable"}
+
+    def get_latest_analysis(
+        self,
+        session_id: int,
+        scope: dict,
+        timeout: float = 5,
+    ) -> dict | None:
+        url = self._base_url()
+        if url is None or not self.health_check(timeout=0.5):
+            return None
+        try:
+            response = requests.post(
+                f"{url}/report/latest",
+                json={
+                    "session_id": session_id,
+                    "data_access_scope": scope,
+                },
+                timeout=timeout,
+            )
+            payload = response.json()
+            return payload.get("analysis") if response.status_code == 200 else None
+        except requests.RequestException:
+            return None
+
+
+# Compatibility name retained while callers migrate to the business-neutral name.
+LLMWorkerClient = AgentWorkerClient

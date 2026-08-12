@@ -277,6 +277,7 @@ class SetupView(QWidget):
 
     ready_signal = Signal(object)  # SessionSetup
     history_requested = Signal(object)  # SubjectSearchResult | None
+    led_health_refresh_requested = Signal()
 
     def __init__(self, subject_store: SubjectStore | None = None,
                  llm_client=None, parent=None):
@@ -296,6 +297,8 @@ class SetupView(QWidget):
         self._config_mode_index = 0
         self._syncing_config_to_panel = False
         self._device_state = "disconnected"
+        self._device_state_message = ""
+        self._led_health_result: dict | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -428,9 +431,20 @@ class SetupView(QWidget):
         device_layout = QVBoxLayout(device_card)
         device_layout.setContentsMargins(0, 2, 0, 0)
         device_layout.setSpacing(7)
+        device_state_row = QHBoxLayout()
+        device_state_row.setContentsMargins(0, 0, 0, 0)
         self._device_state_label = QLabel("")
         self._device_state_label.setObjectName("DeviceState")
-        device_layout.addWidget(self._device_state_label)
+        device_state_row.addWidget(self._device_state_label)
+        device_state_row.addStretch(1)
+        self.btn_refresh_led_health = QPushButton("刷新")
+        self.btn_refresh_led_health.setObjectName("DeviceRefreshButton")
+        self.btn_refresh_led_health.setFixedWidth(72)
+        self.btn_refresh_led_health.clicked.connect(
+            self.led_health_refresh_requested.emit
+        )
+        device_state_row.addWidget(self.btn_refresh_led_health)
+        device_layout.addLayout(device_state_row)
         self._device_meta_label = QLabel("")
         self._device_meta_label.setObjectName("DeviceMeta")
         self._device_meta_label.setWordWrap(True)
@@ -1032,6 +1046,7 @@ class SetupView(QWidget):
             "min_contact_time": "接触阈值",
             "min_flight_time": "腾空阈值",
             "max_flight_time": "最大腾空时间",
+            "flight_time_review_threshold": "腾空复核阈值",
             "step_length_calculation": "步长计算方式",
             "min_step_length": "最小步长",
             "min_gap_between_feet": "两脚最小间距",
@@ -1043,7 +1058,12 @@ class SetupView(QWidget):
 
     @staticmethod
     def _format_filter_value(name: str, value: object) -> str:
-        if name in {"min_contact_time", "min_flight_time", "max_flight_time"}:
+        if name in {
+            "min_contact_time",
+            "min_flight_time",
+            "max_flight_time",
+            "flight_time_review_threshold",
+        }:
             return f"{value} ms"
         if name in {"min_step_length", "min_gap_between_feet", "min_foot_length"}:
             return f"{value:g} cm"
@@ -1056,6 +1076,25 @@ class SetupView(QWidget):
     def on_device_state(self, state: str, message: str = "") -> None:
         """Show device information without gating entry to test preparation."""
         self._device_state = state
+        self._device_state_message = message
+        if state not in {"connected", "streaming"}:
+            self._led_health_result = None
+        self._render_device_status()
+
+    def on_led_health(self, result: dict) -> None:
+        self._led_health_result = dict(result)
+        self._render_device_status()
+
+    @staticmethod
+    def _format_led_indices(indices: list[int]) -> str:
+        values = [str(value) for value in indices[:16]]
+        if len(indices) > 16:
+            values.append(f"等{len(indices)}个")
+        return "、".join(values)
+
+    def _render_device_status(self) -> None:
+        state = self._device_state
+        message = self._device_state_message
         labels = {
             "disconnected": ("● 设备未连接", "#8f9bad", "未连接"),
             "connecting": ("● 正在连接设备", "#f0a24a", "连接中"),
@@ -1066,12 +1105,36 @@ class SetupView(QWidget):
         text, color, communication = labels.get(
             state, (message or state, "#8f9bad", message or state)
         )
+        health_lines: list[str] = []
+        health_status = (self._led_health_result or {}).get("status")
+        self.btn_refresh_led_health.setEnabled(
+            state not in {"connecting", "streaming"}
+            and health_status != "checking"
+        )
+        if health_status == "checking":
+            health_lines.append("LED状态：检测中…")
+        elif health_status == "warning":
+            color = "#f06a6a"
+            text = "● 设备已连接 · LED异常"
+            disconnected = self._led_health_result.get("disconnected_leds", [])
+            flickering = self._led_health_result.get("flickering_leds", [])
+            if disconnected:
+                health_lines.append(
+                    "未联通/持续遮挡 LED："
+                    + self._format_led_indices(disconnected)
+                )
+            if flickering:
+                health_lines.append(
+                    "闪烁 LED：" + self._format_led_indices(flickering)
+                )
+        elif health_status == "insufficient":
+            health_lines.append("LED状态：未获取到足够数据，请刷新")
         self._device_state_label.setText(text)
         self._device_state_label.setToolTip(message)
         self._device_state_label.setStyleSheet(f"color: {color};")
-        self._device_meta_label.setText(
-            f"通信状态：{communication}\n标称采样率：1000 Hz"
-        )
+        meta_lines = [f"通信状态：{communication}", "标称采样率：1000 Hz"]
+        meta_lines.extend(health_lines)
+        self._device_meta_label.setText("\n".join(meta_lines))
 
     def _sync_summary_label_height(self) -> None:
         self._summary_label.ensurePolished()

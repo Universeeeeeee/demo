@@ -158,7 +158,8 @@ class HistoryViewTest(unittest.TestCase):
 
         self.assertEqual(view._session_table.rowCount(), 1)
         self.assertEqual(view._session_table.item(0, 0).text(), "临时测试")
-        self.assertIsInstance(opened[0], JumpTestReport)
+        self.assertEqual(opened[0].id, session_id)
+        self.assertIsInstance(opened[0].report, JumpTestReport)
 
         original = QInputDialog.getItem
         QInputDialog.getItem = staticmethod(

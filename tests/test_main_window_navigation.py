@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qtpy.QtCore import QObject, Signal
+from qtpy.QtCore import QObject, Signal, Qt
 from qtpy.QtTest import QSignalSpy
 from qtpy.QtWidgets import QApplication, QInputDialog, QMessageBox
 
@@ -36,18 +36,26 @@ class _FakeController(QObject):
     footprint_visual_frame = Signal(dict)
     device_message = Signal(str)
     device_state_changed = Signal(str, str)
+    led_health_changed = Signal(dict)
     session_started = Signal()
     session_finished = Signal(object)
 
     def __init__(self):
         super().__init__()
         self.is_running = False
-        self.device_state = "connected"
+        self.device_state = "disconnected"
         self.engine = None
         self.prepared = []
+        self.device_connects = 0
         self.starts = 0
         self.stops = 0
         self.discards = 0
+        self.health_refreshes = 0
+
+    def ensure_device_connected(self):
+        self.device_connects += 1
+        self.device_state = "connected"
+        self.device_state_changed.emit("connected", "设备已连接")
 
     def prepare(self, config):
         self.prepared.append(config)
@@ -57,6 +65,9 @@ class _FakeController(QObject):
 
     def retry_device(self):
         self.device_state = "connecting"
+
+    def refresh_led_health(self):
+        self.health_refreshes += 1
 
     def stop(self, reason=None):
         self.stops += 1
@@ -161,10 +172,21 @@ def test_setup_device_status_tracks_controller_without_blocking_navigation(
     window, controller = _window(qtbot, tmp_path)
     window._setup_view._set_current_config(default_jump_config(), "manual")
 
+    assert controller.device_connects == 1
+    assert "设备已连接" in window._setup_view._device_state_label.text()
+
     controller.device_state_changed.emit("disconnected", "设备未连接")
 
     assert "设备未连接" in window._setup_view._device_state_label.text()
     assert window._setup_view.btn_ready.isEnabled()
+
+
+def test_setup_device_refresh_routes_to_controller(qtbot, tmp_path):
+    window, controller = _window(qtbot, tmp_path)
+
+    qtbot.mouseClick(window._setup_view.btn_refresh_led_health, Qt.LeftButton)
+
+    assert controller.health_refreshes == 1
 
 
 def test_prepared_session_can_return_to_config_without_report(qtbot, tmp_path):
@@ -259,6 +281,7 @@ def test_temporary_session_is_persisted_with_snapshot(qtbot, tmp_path):
 
     sessions = window._subject_store.get_all_sessions()
     assert len(sessions) == 1
+    assert window._report_view._session_id == sessions[0].id
     assert sessions[0].subject_id is None
     assert sessions[0].team_id is None
     assert sessions[0].team_snapshot == {}

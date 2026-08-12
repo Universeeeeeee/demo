@@ -21,7 +21,7 @@ from typing import Optional
 
 from openpyxl import Workbook
 
-from qtpy.QtCore import Signal, Qt
+from qtpy.QtCore import QThread, Signal, Qt
 from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -62,6 +62,11 @@ REPORT_QSS = """
 QWidget#ReportViewRoot {
     background-color: #0c1119;
     color: #e7ebf2;
+}
+QFrame#ReportAnalysisPanel {
+    background-color: #151d28;
+    border: 1px solid #354151;
+    border-radius: 8px;
 }
 QTabWidget#ReportTabs,
 QWidget#ReportOverviewPage {
@@ -556,6 +561,50 @@ class CyclePhaseBar(QWidget):
         )
 
 
+class _ReportAnalysisWorker(QThread):
+    completed = Signal(int, str, object)
+    failed = Signal(int, str, str)
+
+    def __init__(self, client, session_id: int, action: str, parent=None):
+        super().__init__(parent)
+        self._client = client
+        self._session_id = session_id
+        self._action = action
+
+    def run(self):
+        scope = {
+            "current_session": True,
+            "longitudinal": False,
+            "cohort": False,
+        }
+        try:
+            if self._action == "latest":
+                payload = self._client.get_latest_analysis(
+                    self._session_id,
+                    scope,
+                )
+            else:
+                response = self._client.analyze_report(
+                    self._session_id,
+                    scope,
+                )
+                if response.get("error_code"):
+                    self.failed.emit(
+                        self._session_id,
+                        self._action,
+                        response["error_code"],
+                    )
+                    return
+                payload = response.get("analysis")
+            self.completed.emit(self._session_id, self._action, payload)
+        except Exception:
+            self.failed.emit(
+                self._session_id,
+                self._action,
+                "analysis_unavailable",
+            )
+
+
 # ======================================================================
 #  ReportView
 # ======================================================================
@@ -566,9 +615,15 @@ class ReportView(QWidget):
     return_home = Signal()
     export_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, llm_client=None):
         super().__init__(parent)
         self._report: Optional[TestReport] = None
+        self._session_id: int | None = None
+        self._llm_client = llm_client
+        self._analysis_available = False
+        self._latest_requested_for: int | None = None
+        self._analysis_workers: set[_ReportAnalysisWorker] = set()
+        self._finished_analysis_workers: list[_ReportAnalysisWorker] = []
         self._dynamic_widgets: list[QWidget] = []
         self._build_ui()
 
@@ -739,6 +794,33 @@ class ReportView(QWidget):
 
         main_layout.addWidget(self._tabs, 1)
 
+        self._analysis_panel = QFrame()
+        self._analysis_panel.setObjectName("ReportAnalysisPanel")
+        analysis_layout = QVBoxLayout(self._analysis_panel)
+        analysis_layout.setContentsMargins(14, 10, 14, 10)
+        analysis_layout.setSpacing(8)
+        analysis_header = QHBoxLayout()
+        self._analysis_title = QLabel("智能分析")
+        self._analysis_title.setObjectName("ReportSectionTitle")
+        analysis_header.addWidget(self._analysis_title)
+        analysis_header.addStretch()
+        self._analysis_button = MPushButton("开始智能分析").primary()
+        self._analysis_button.setObjectName("ReportAnalysisButton")
+        self._analysis_button.clicked.connect(self._on_analysis_clicked)
+        analysis_header.addWidget(self._analysis_button)
+        analysis_layout.addLayout(analysis_header)
+        self._analysis_status = QLabel("")
+        self._analysis_status.setWordWrap(True)
+        self._analysis_status.hide()
+        analysis_layout.addWidget(self._analysis_status)
+        self._analysis_result = QLabel("")
+        self._analysis_result.setWordWrap(True)
+        self._analysis_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._analysis_result.hide()
+        analysis_layout.addWidget(self._analysis_result)
+        self._analysis_panel.hide()
+        main_layout.addWidget(self._analysis_panel)
+
         # ===== 底部按钮 =====
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(15)
@@ -765,9 +847,13 @@ class ReportView(QWidget):
     #  公共接口
     # ------------------------------------------------------------------
 
-    def load_report(self, report: TestReport):
+    def load_report(self, report: TestReport, session_id: int | None = None):
         """填充统计卡片和图表。"""
         self._report = report
+        self._session_id = session_id
+        self._latest_requested_for = None
+        self.clear_analysis()
+        self._refresh_analysis_visibility()
 
         # 结束原因
         reason_map = {
@@ -796,6 +882,136 @@ class ReportView(QWidget):
             self._load_gait_report(report)
         elif isinstance(report, (TreadmillGaitReport, TreadmillRunningReport)):
             self._load_treadmill_report(report)
+
+        self._request_latest_if_available()
+
+    def set_analysis_availability(self, available: bool) -> None:
+        self._analysis_available = available
+        self._refresh_analysis_visibility()
+        self._request_latest_if_available()
+
+    def set_analysis_loading(self, loading: bool) -> None:
+        self._analysis_button.setEnabled(not loading)
+        self._analysis_status.setText("正在分析本次测试记录…" if loading else "")
+        self._analysis_status.setVisible(loading)
+
+    def show_validated_analysis(self, analysis: dict) -> None:
+        claims = analysis.get("claims", [])
+        lines = []
+        for claim in claims:
+            text = claim.get("text", "").strip()
+            if not text:
+                continue
+            claim_limitations = claim.get("limitations", [])
+            if claim_limitations:
+                text += "\n证据限制：" + "；".join(
+                    str(item) for item in claim_limitations
+                )
+            lines.append(text)
+        limitations = analysis.get("overall_limitations", [])
+        if limitations:
+            lines.append("限制：" + "；".join(str(item) for item in limitations))
+        self._analysis_result.setText(
+            "\n\n".join(lines) if lines else "未形成可验证的分析结论。"
+        )
+        self._analysis_result.show()
+        self._analysis_button.setText("重新分析")
+
+    def clear_analysis(self) -> None:
+        self.set_analysis_loading(False)
+        self._analysis_result.clear()
+        self._analysis_result.hide()
+        self._analysis_button.setText("开始智能分析")
+
+    def _refresh_analysis_visibility(self) -> None:
+        supported = isinstance(
+            self._report,
+            (JumpTestReport, TreadmillGaitReport, TreadmillRunningReport),
+        )
+        visible = (
+            self._analysis_available
+            and self._llm_client is not None
+            and self._session_id is not None
+            and supported
+        )
+        self._analysis_panel.setVisible(visible)
+        if not visible:
+            self.clear_analysis()
+
+    def _on_analysis_clicked(self) -> None:
+        if self._analysis_panel.isHidden() or self._session_id is None:
+            return
+        if any(worker.isRunning() for worker in self._analysis_workers):
+            return
+        self._start_analysis_request("analyze")
+
+    def _start_analysis_request(self, action: str) -> None:
+        if self._llm_client is None or self._session_id is None:
+            return
+        worker = _ReportAnalysisWorker(
+            self._llm_client,
+            self._session_id,
+            action,
+            self,
+        )
+        self._analysis_workers.add(worker)
+        worker.completed.connect(self._on_analysis_completed)
+        worker.failed.connect(self._on_analysis_failed)
+        worker.finished.connect(
+            lambda worker=worker: self._release_analysis_worker(worker)
+        )
+        if action == "analyze":
+            self.set_analysis_loading(True)
+        worker.start()
+
+    def _request_latest_if_available(self) -> None:
+        if (
+            self._session_id is None
+            or self._analysis_panel.isHidden()
+            or self._latest_requested_for == self._session_id
+        ):
+            return
+        self._latest_requested_for = self._session_id
+        self._start_analysis_request("latest")
+
+    def _release_analysis_worker(self, worker: _ReportAnalysisWorker) -> None:
+        self._analysis_workers.discard(worker)
+        # Keep the finished QThread wrapper alive until this view is destroyed.
+        # Deleting it from its own ``finished`` delivery can leave queued Qt
+        # events targeting a partially destroyed Python subclass.
+        self._finished_analysis_workers.append(worker)
+
+    def _on_analysis_completed(
+        self,
+        session_id: int,
+        action: str,
+        analysis: object,
+    ) -> None:
+        if session_id != self._session_id or not self._analysis_available:
+            return
+        self.set_analysis_loading(False)
+        if isinstance(analysis, dict):
+            self.show_validated_analysis(analysis)
+
+    def _on_analysis_failed(
+        self,
+        session_id: int,
+        action: str,
+        error_code: str,
+    ) -> None:
+        if session_id != self._session_id or not self._analysis_available:
+            return
+        self.set_analysis_loading(False)
+        if action == "analyze":
+            messages = {
+                "worker_not_ready": "智能分析服务尚未就绪。",
+                "external_scope_not_implemented": "当前版本仅支持本次记录分析。",
+                "analysis_unavailable": "暂时无法读取智能分析结果。",
+            }
+            self._analysis_status.setText(
+                messages.get(error_code, "智能分析未能生成通过验证的结果。")
+            )
+            self._analysis_status.show()
 
     # ------------------------------------------------------------------
     #  纵跳报告
@@ -848,6 +1064,18 @@ class ReportView(QWidget):
                     "平均跳跃节奏",
                     f"{r.avg_cadence:.1f} jumps/min",
                     "按完整跳跃周期计算的平均每分钟跳跃次数。",
+                )
+            )
+        excluded_count = sum(
+            not row.is_included_in_statistics for row in r.jump_results
+        )
+        flagged_count = sum(bool(row.quality_flags) for row in r.jump_results)
+        if excluded_count or flagged_count or r.quality_notices:
+            stats.append(
+                (
+                    "质量提示",
+                    f"{excluded_count} 条排除 / {flagged_count + len(r.quality_notices)} 条标记",
+                    "异常配对、超长腾空、帧间隔或超限遮挡的复核摘要。",
                 )
             )
         reason = {
@@ -1408,10 +1636,29 @@ class ReportView(QWidget):
                         "cycle_time_s",
                         "jump_height_m",
                         "cadence_jumps_per_min",
+                        "lift_time_s",
+                        "touch_time_s",
+                        "is_included_in_statistics",
+                        "statistics_exclusion_reason",
+                        "quality_flags",
                     ]
                 )
                 for row in _jump_metric_rows(self._report):
                     ws.append(row)
+                if self._report.quality_notices:
+                    notice_ws = wb.create_sheet("Jump Quality Notices")
+                    notice_ws.append(
+                        ["kind", "time_s", "cluster_length", "ratio"]
+                    )
+                    for notice in self._report.quality_notices:
+                        notice_ws.append(
+                            [
+                                notice.kind,
+                                notice.time_s,
+                                notice.cluster_length,
+                                notice.ratio,
+                            ]
+                        )
 
             if isinstance(self._report, (TreadmillGaitReport, TreadmillRunningReport)):
                 # Sheet 2: Treadmill Steps
@@ -1538,31 +1785,59 @@ GAIT_CYCLE_METRIC_LABELS = {
 
 
 def _jump_metric_rows(report: JumpTestReport) -> list[list[object]]:
+    if report.jump_results:
+        return [
+            [
+                record.index,
+                _optional_excel_value(record.air_time_s),
+                _optional_excel_value(record.contact_time_s),
+                _optional_excel_value(record.cycle_time_s),
+                _optional_excel_value(record.jump_height_m),
+                _optional_excel_value(record.cadence_jumps_per_min),
+                _optional_excel_value(record.lift_time_s),
+                _optional_excel_value(record.touch_time_s),
+                record.is_included_in_statistics,
+                record.statistics_exclusion_reason or "",
+                ",".join(record.quality_flags),
+            ]
+            for record in report.jump_results
+        ]
+
     max_len = max(
         len(report.air_times),
-        len(report.contact_times),
-        len(report.cycle_times),
         len(report.jump_heights),
-        len(report.cadences),
+        len(report.contact_times) + (1 if report.contact_times else 0),
+        len(report.cycle_times) + (1 if report.cycle_times else 0),
+        len(report.cadences) + (1 if report.cadences else 0),
         0,
     )
     rows = []
     for index in range(max_len):
+        prior_index = index - 1
         rows.append(
             [
                 index + 1,
                 _value_at(report.air_times, index),
-                _value_at(report.contact_times, index),
-                _value_at(report.cycle_times, index),
+                _value_at(report.contact_times, prior_index),
+                _value_at(report.cycle_times, prior_index),
                 _value_at(report.jump_heights, index),
-                _value_at(report.cadences, index),
+                _value_at(report.cadences, prior_index),
+                "",
+                "",
+                True,
+                "",
+                "",
             ]
         )
     return rows
 
 
 def _value_at(values: tuple, index: int):
-    return values[index] if index < len(values) else ""
+    return values[index] if 0 <= index < len(values) else ""
+
+
+def _optional_excel_value(value):
+    return value if value is not None else ""
 
 
 def _fmt(value: float | None) -> str:

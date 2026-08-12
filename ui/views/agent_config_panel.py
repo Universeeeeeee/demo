@@ -20,11 +20,11 @@ from dayu_widgets.line_edit import MLineEdit
 from dayu_widgets.push_button import MPushButton
 from dayu_widgets.spin_box import MDoubleSpinBox, MSpinBox
 
-from agent.models import AthleteProfile
-from agent.rule_engine import RuleEngine
+from agent.config.models import AthleteProfile
+from agent.config.rule_engine import RuleEngine
 from config.test_config import AnyTestConfig, config_from_dict
 from data.subject_store import SubjectSearchResult, SubjectStore
-from ui.llm_client import LLMWorkerClient
+from ui.llm_client import AgentWorkerClient
 
 
 log = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ class _LLMHttpWorker(QThread):
     finished = Signal(object, str)  # (AnyTestConfig | None, reply_text)
     error = Signal(str)
 
-    def __init__(self, client: LLMWorkerClient, message: str, athlete: AthleteProfile,
+    def __init__(self, client: AgentWorkerClient, message: str, athlete: AthleteProfile,
                  request_id: int = 0, agent_mode: str = "jump"):
         super().__init__()
         self._client = client
@@ -190,7 +190,7 @@ class AgentConfigPanel(QWidget):
     def __init__(
         self,
         subject_store: SubjectStore | None = None,
-        llm_client: LLMWorkerClient | None = None,
+        llm_client: AgentWorkerClient | None = None,
         parent=None,
     ):
         super().__init__(parent)

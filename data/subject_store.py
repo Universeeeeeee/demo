@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from config.test_config import AnyTestConfig, TestConfig, config_from_dict
-from config.test_report import GaitTestReport, JumpTestReport, TestReport
+from config.test_report import (
+    GaitTestReport,
+    JumpQualityNoticeRecord,
+    JumpResultRecord,
+    JumpTestReport,
+    TestReport,
+)
 from config.treadmill_report import (
     GaitBoundaryPartial,
     GaitCycleRecord,
@@ -543,6 +549,51 @@ class SubjectStore:
                 (team_id, limit),
             ).fetchall()
         return [_session_from_row(row) for row in rows]
+
+    def count_subject_session_candidates(
+        self,
+        subject_id: int,
+        test_type: str,
+        *,
+        exclude_session_id: int,
+    ) -> int:
+        """Count longitudinal candidates without loading report details."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM test_sessions
+                WHERE subject_id = ? AND test_type = ? AND id != ?
+                  AND report_detail_json IS NOT NULL
+                  AND report_detail_json != ''
+                """,
+                (subject_id, test_type, exclude_session_id),
+            ).fetchone()
+        return int(row["count"])
+
+    def count_team_session_candidates(
+        self,
+        team_id: int,
+        test_type: str,
+        *,
+        exclude_session_id: int,
+        exclude_subject_id: int | None = None,
+    ) -> int:
+        """Count cohort candidates without loading report details."""
+        sql = """
+            SELECT COUNT(*) AS count
+            FROM test_sessions
+            WHERE team_id = ? AND test_type = ? AND id != ?
+              AND report_detail_json IS NOT NULL
+              AND report_detail_json != ''
+        """
+        params: list[Any] = [team_id, test_type, exclude_session_id]
+        if exclude_subject_id is not None:
+            sql += " AND (subject_id IS NULL OR subject_id != ?)"
+            params.append(exclude_subject_id)
+        with self._connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row["count"])
 
     def get_recent_history(
         self, subject_id: int, *, limit: int = 3
@@ -1109,7 +1160,7 @@ def _report_detail(report: TestReport) -> dict[str, Any]:
         detail.pop("export_timestamps", None)
         return {
             "report_type": "jump",
-            "report_schema_version": 1,
+            "report_schema_version": 2,
             **detail,
         }
     if isinstance(report, GaitTestReport):
@@ -1179,6 +1230,21 @@ def _report_from_detail(detail: dict[str, Any]) -> TestReport:
         ):
             if key in values:
                 values[key] = tuple(values[key])
+        values["jump_results"] = tuple(
+            JumpResultRecord(
+                **{
+                    **item,
+                    "quality_flags": tuple(item.get("quality_flags", ())),
+                }
+            )
+            for item in values.get("jump_results", ())
+        )
+        values["quality_notices"] = tuple(
+            JumpQualityNoticeRecord(**item)
+            for item in values.get("quality_notices", ())
+        )
+        if not values["jump_results"]:
+            values["jump_results"] = _legacy_jump_results(values)
         return JumpTestReport(**values)
 
     if report_type == "gait":
@@ -1342,7 +1408,7 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
         base.update(
             {
                 "report_type": "jump",
-                "total_jumps": report.touch_count,
+                "total_jumps": len(report.jump_heights),
                 "avg_jump_height": report.avg_jump_height,
                 "max_jump_height": report.max_jump_height,
                 "min_jump_height": report.min_jump_height,
@@ -1413,6 +1479,45 @@ def _report_summary(report: TestReport) -> dict[str, Any]:
             }
         )
     return base
+
+
+def _legacy_jump_results(values: dict[str, Any]) -> tuple[JumpResultRecord, ...]:
+    """Reconstruct physical jump rows for schema-v1 reports."""
+    air = tuple(values.get("air_times", ()))
+    heights = tuple(values.get("jump_heights", ()))
+    contacts = tuple(values.get("contact_times", ()))
+    cycles = tuple(values.get("cycle_times", ()))
+    cadences = tuple(values.get("cadences", ()))
+    count = max(
+        len(air),
+        len(heights),
+        len(contacts) + (1 if contacts else 0),
+        len(cycles) + (1 if cycles else 0),
+        len(cadences) + (1 if cadences else 0),
+        0,
+    )
+    records = []
+    for index in range(count):
+        offset = index - 1
+        air_time = air[index] if index < len(air) else None
+        cycle_time = cycles[offset] if 0 <= offset < len(cycles) else None
+        cadence = cadences[offset] if 0 <= offset < len(cadences) else None
+        records.append(
+            JumpResultRecord(
+                index=index + 1,
+                lift_time_s=None,
+                touch_time_s=None,
+                air_time_s=air_time,
+                jump_height_m=heights[index] if index < len(heights) else None,
+                contact_time_s=(
+                    contacts[offset] if 0 <= offset < len(contacts) else None
+                ),
+                cycle_time_s=cycle_time,
+                cadence_jumps_per_min=cadence,
+                is_included_in_statistics=air_time is not None,
+            )
+        )
+    return tuple(records)
 
 
 def _normalize_finish_reason(reason: str) -> str:

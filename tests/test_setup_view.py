@@ -111,12 +111,30 @@ def test_config_summary_is_readable_and_structured():
     view.show()
     app.processEvents()
 
-    assert view._summary_label.font().pixelSize() >= 13
+    assert view._summary_label.font().pixelSize() >= 14
     assert "配置方式：手动配置" in view._summary_label.text()
     assert "测试模式：纵跳" in view._summary_label.text()
     assert "启动：Status change" in view._summary_label.text()
     assert "\n" in view._summary_label.text()
     assert view._summary_label.height() >= view._summary_label.sizeHint().height()
+
+
+def test_fullscreen_summary_is_narrower_larger_and_flat(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+    view.resize(1660, 900)
+    view.show()
+    QApplication.processEvents()
+
+    status_title = view.findChild(QLabel, "SummaryTitle")
+    device_card = view.findChild(QFrame, "DeviceStatusCard")
+
+    assert view._status_bar.width() == 320
+    assert status_title.font().pixelSize() >= 18
+    assert view._device_state_label.font().pixelSize() >= 14
+    assert "QFrame#ConfigWorkArea {\n  background: transparent;\n  border: none;" in view.styleSheet()
+    assert "QFrame#DeviceStatusCard {\n  background: transparent;\n  border: none;" in view.styleSheet()
+    assert device_card is not None
 
 
 def test_all_config_sources_use_final_validation():
@@ -189,6 +207,56 @@ def test_device_state_is_informational_and_does_not_block_preparation():
     assert "设备未连接" in view._device_state_label.text()
     assert "标称采样率：1000 Hz" in view._device_meta_label.text()
     assert view.btn_ready.isEnabled()
+
+
+def test_device_status_shows_exact_led_faults_and_refreshes_on_request(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+    refreshes = []
+    view.led_health_refresh_requested.connect(lambda: refreshes.append(True))
+    view.on_device_state("connected", "设备已连接")
+
+    view.on_led_health(
+        {
+            "status": "warning",
+            "sample_count": 64,
+            "disconnected_leds": [3, 12],
+            "flickering_leds": [7],
+        }
+    )
+
+    assert "LED异常" in view._device_state_label.text()
+    assert "未联通/持续遮挡 LED：3、12" in view._device_meta_label.text()
+    assert "闪烁 LED：7" in view._device_meta_label.text()
+    qtbot.mouseClick(view.btn_refresh_led_health, Qt.LeftButton)
+    assert refreshes == [True]
+
+
+def test_normal_led_health_does_not_add_a_user_reminder(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+    view.on_device_state("connected", "设备已连接")
+
+    view.on_led_health(
+        {
+            "status": "normal",
+            "sample_count": 64,
+            "disconnected_leds": [],
+            "flickering_leds": [],
+        }
+    )
+
+    assert view._device_state_label.text() == "● 设备已连接"
+    assert "LED状态" not in view._device_meta_label.text()
+
+
+def test_led_health_refresh_is_disabled_while_streaming(qtbot):
+    view = SetupView()
+    qtbot.addWidget(view)
+
+    view.on_device_state("streaming", "设备正在采集")
+
+    assert not view.btn_refresh_led_health.isEnabled()
 
 
 def test_manual_config_scrollbar_stays_dark_at_minimum_window_size(qtbot):

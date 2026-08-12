@@ -43,11 +43,13 @@ class SessionController(QObject):
 
     # ---- 转发给 ExecutionView 的实时数据信号 ----
     hop_event = Signal(object)              # FootEvent (纵跳)
+    jump_quality_notice = Signal(dict)      # 纵跳质量提示
     gait_step_event = Signal(object)        # GaitStepEvent (步态)
     gait_snapshot = Signal(dict)            # 步态状态快照 (~10Hz)
     footprint_visual_frame = Signal(dict)   # canonical footprint frame
     device_message = Signal(str)            # 设备消息 (节流)
     device_state_changed = Signal(str, str)  # state, user-facing detail
+    led_health_changed = Signal(dict)        # LED 通断/闪烁诊断
 
     # ---- queued commands into the worker thread ----
     connect_device_requested = Signal()
@@ -55,6 +57,7 @@ class SessionController(QObject):
     engine_start_requested = Signal(float)
     engine_pause_requested = Signal()
     engine_resume_requested = Signal()
+    refresh_led_health_requested = Signal()
 
     # ---- 生命周期信号 → MainWindow ----
     session_started = Signal()
@@ -110,6 +113,12 @@ class SessionController(QObject):
         self._worker.moveToThread(self._thread)
         self._worker.data_received.connect(self._on_device_message)
         self._worker.device_state_changed.connect(self._on_device_state)
+        if hasattr(self._worker, "led_health_changed"):
+            self._worker.led_health_changed.connect(self._on_led_health)
+        if hasattr(self._worker, "refresh_led_health"):
+            self.refresh_led_health_requested.connect(
+                self._worker.refresh_led_health
+            )
         self.connect_device_requested.connect(self._worker.connect_device)
         self._thread.started.connect(self._worker.connect_device)
         self._thread.finished.connect(self._worker.deleteLater)
@@ -156,6 +165,7 @@ class SessionController(QObject):
 
         # 5. 连接 L2 → Controller (跨线程 QueuedConnection, 低频)
         self._engine.hop_event.connect(self._on_hop_event)
+        self._engine.jump_quality_notice.connect(self._on_jump_quality_notice)
         self._engine.gait_step_event.connect(self._on_gait_step_event)
         self._engine.gait_status_snapshot.connect(self._on_gait_snapshot)
         self._engine.footprint_visual_frame.connect(self._on_footprint_visual_frame)
@@ -164,6 +174,12 @@ class SessionController(QObject):
         # 6. 连接 L1 → Controller (设备消息, 节流)
         self._worker.data_received.connect(self._on_device_message)
         self._worker.device_state_changed.connect(self._on_device_state)
+        if hasattr(self._worker, "led_health_changed"):
+            self._worker.led_health_changed.connect(self._on_led_health)
+        if hasattr(self._worker, "refresh_led_health"):
+            self.refresh_led_health_requested.connect(
+                self._worker.refresh_led_health
+            )
 
         # 7. 准备阶段只连接设备；采集由用户点击后单独触发
         self.connect_device_requested.connect(self._worker.connect_device)
@@ -209,6 +225,16 @@ class SessionController(QObject):
         self._device_state = "connecting"
         self.device_state_changed.emit("connecting", "正在重新连接设备...")
         self.connect_device_requested.emit()
+
+    def refresh_led_health(self):
+        """Refresh the lightweight LED health sample without starting a test."""
+        if self._worker is None:
+            self.ensure_device_connected()
+            return
+        if self._device_state == "connected":
+            self.refresh_led_health_requested.emit()
+        elif self._device_state in {"disconnected", "error"}:
+            self.ensure_device_connected()
 
     def pause(self):
         """Pause processing and the active test clock."""
@@ -280,6 +306,10 @@ class SessionController(QObject):
     def _on_hop_event(self, ev):
         self.hop_event.emit(ev)
 
+    @Slot(dict)
+    def _on_jump_quality_notice(self, notice: dict):
+        self.jump_quality_notice.emit(notice)
+
     @Slot(object)
     def _on_gait_step_event(self, ev):
         self.gait_step_event.emit(ev)
@@ -310,15 +340,19 @@ class SessionController(QObject):
             if self._engine is not None:
                 self._engine.paused = True
         self.device_state_changed.emit(state, message)
+        if state == "connected" and not self._is_running and not self._start_pending:
+            self.refresh_led_health()
+
+    @Slot(dict)
+    def _on_led_health(self, result: dict):
+        self.led_health_changed.emit(result)
 
     @Slot(str)
     def _on_engine_finished(self, reason: str):
         """GaitEngine 自动停止回调（跳跃次数达标 / 时间到）。"""
         log.info("Engine auto-stop: %s", reason)
         self._finish_reason = reason
-        # 延迟执行 stop，确保最后一个事件处理完毕
-        from qtpy.QtCore import QTimer
-        QTimer.singleShot(200, self.stop)
+        self.stop(reason)
 
     # ------------------------------------------------------------------
     #  内部实现

@@ -354,6 +354,11 @@ def test_report_view_shows_replay_panel_for_treadmill_report(qtbot):
     assert isinstance(view._replay_panel, FootprintReplayPanel)
     assert view._replay_panel.isVisible()
     assert view._replay_panel._timeline[0]["timestamp_s"] == 0.0
+    assert len(
+        view._replay_panel._channel._rail_marker_rects(
+            rail_x=30.0, top=34.0, height=486.0
+        )
+    ) == 96
 
 
 def test_report_view_clears_treadmill_dynamic_widgets_when_loading_jump_report(qtbot):

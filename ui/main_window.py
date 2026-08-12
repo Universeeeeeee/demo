@@ -31,7 +31,7 @@ from dayu_widgets.qt import application
 
 from config.test_config import TestConfig
 from config.test_report import TestReport
-from data.subject_store import SubjectProfile, SubjectStore
+from data.subject_store import SessionRecord, SubjectProfile, SubjectStore
 from path_utils import get_base_dir
 from ui.app_shell import (
     APP_DIALOG_QSS,
@@ -48,7 +48,7 @@ from ui.views.execution_view import ExecutionView
 from ui.views.history_view import HistoryView
 from ui.views.report_view import ReportView
 from ui.views.settings_view import SettingsView
-from ui.llm_client import LLMWorkerClient
+from ui.llm_client import AgentWorkerClient
 
 # Camera (可选)
 try:
@@ -232,9 +232,9 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
 
         if llm_client is _UNSET:
-            self._llm_client = LLMWorkerClient(
+            self._llm_client = AgentWorkerClient(
                 python_exe=sys.executable,
-                worker_script=os.path.join(_project_root, "agent", "llm_worker.py"),
+                worker_script=os.path.join(_project_root, "agent", "worker.py"),
             )
         else:
             self._llm_client = llm_client
@@ -242,7 +242,7 @@ class MainWindow(QMainWindow):
         self._athletes_view = AthletesView(self._subject_store)
         self._setup_view = SetupView(subject_store=self._subject_store, llm_client=self._llm_client)
         self._exec_view = ExecutionView()
-        self._report_view = ReportView()
+        self._report_view = ReportView(llm_client=self._llm_client)
         self._history_view = HistoryView(self._subject_store)
         self._settings_view = SettingsView(self._subject_store)
 
@@ -296,6 +296,13 @@ class MainWindow(QMainWindow):
         # SetupView → MainWindow
         self._setup_view.ready_signal.connect(self._on_ready)
         self._setup_view.history_requested.connect(self._on_history_requested)
+        refresh_led_health = getattr(
+            self._controller, "refresh_led_health", None
+        )
+        if callable(refresh_led_health):
+            self._setup_view.led_health_refresh_requested.connect(
+                refresh_led_health
+            )
 
         # ExecutionView 控制 → MainWindow / Controller
         self._exec_view.start_requested.connect(self._on_start)
@@ -308,6 +315,10 @@ class MainWindow(QMainWindow):
 
         # Controller 实时数据 → ExecutionView (直连)
         self._controller.hop_event.connect(self._exec_view.on_hop_event)
+        if hasattr(self._controller, "jump_quality_notice"):
+            self._controller.jump_quality_notice.connect(
+                self._exec_view.on_jump_quality_notice
+            )
         self._controller.gait_step_event.connect(self._exec_view.on_gait_step_event)
         self._controller.gait_snapshot.connect(self._exec_view.on_gait_snapshot)
         self._controller.footprint_visual_frame.connect(
@@ -320,6 +331,10 @@ class MainWindow(QMainWindow):
         self._controller.device_state_changed.connect(
             self._setup_view.on_device_state
         )
+        if hasattr(self._controller, "led_health_changed"):
+            self._controller.led_health_changed.connect(
+                self._setup_view.on_led_health
+            )
         self._setup_view.on_device_state(
             getattr(self._controller, "device_state", "disconnected"),
             "",
@@ -368,6 +383,10 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._exec_view)
 
     def _go_to_report(self):
+        if not self._llm_client.is_running:
+            self._llm_client.start()
+        status = self._llm_client.worker_status(timeout=0.25)
+        self._report_view.set_analysis_availability(status == "ready")
         self._set_active_module(MODULE_RESULTS)
         self._stack.setCurrentWidget(self._report_view)
 
@@ -452,6 +471,7 @@ class MainWindow(QMainWindow):
         self._team_snapshot = setup.team_snapshot
         self._config_source = setup.config_source
         self._session_started_at = None
+        self._last_session_id = None
         self._exec_view.reset()
         self._exec_view.configure(config)
         self._controller.prepare(config)
@@ -473,8 +493,8 @@ class MainWindow(QMainWindow):
         self._setup_view.load_config_from_history(config)
         self._go_to_setup()
 
-    def _on_history_open_report(self, report: TestReport) -> None:
-        self._report_view.load_report(report)
+    def _on_history_open_report(self, session: SessionRecord) -> None:
+        self._report_view.load_report(session.report, session.id)
         self._go_to_report()
 
     def _on_start(self):
@@ -503,6 +523,7 @@ class MainWindow(QMainWindow):
 
     def _on_session_finished(self, report: TestReport):
         """Controller 发来 TestReport → 切到 ReportView"""
+        self._last_session_id = None
         if (
             self._subject_store is not None
             and self._active_config is not None
@@ -527,7 +548,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 log.exception("Failed to record subject session")
 
-        self._report_view.load_report(report)
+        self._report_view.load_report(report, self._last_session_id)
         self._go_to_report()
 
     @staticmethod
@@ -556,8 +577,10 @@ class MainWindow(QMainWindow):
 
     def _check_llm_health(self):
         if not self._llm_client.is_running:
+            self._report_view.set_analysis_availability(False)
             return
         status = self._llm_client.worker_status(timeout=0.25)
+        self._report_view.set_analysis_availability(status == "ready")
         if status == "ready":
             self._health_fail_count = 0
         elif status in {"starting", "warming"}:
@@ -646,6 +669,7 @@ class MainWindow(QMainWindow):
                     discard()
                 except Exception:
                     log.exception("Failed to discard prepared session on close")
+        self._exec_view.reset()
 
         # 关闭相机
         try:

@@ -144,6 +144,11 @@ class ExecutionView(QWidget):
         self._jump_target: Optional[int] = None
         self._countdown_remaining = 0
         self._countdown_timer: Optional[QTimer] = None
+        self._camera_start_timer = QTimer(self)
+        self._camera_start_timer.setSingleShot(True)
+        self._camera_start_timer.timeout.connect(
+            self._start_camera_preview_if_visible
+        )
 
         # 暂停状态
         self._paused = False
@@ -259,6 +264,7 @@ class ExecutionView(QWidget):
             self._cadence_bar = pg.BarGraphItem(x=[], height=[], width=0.65, brush='#52c41a')
             self._plot_cadence.addItem(self._cadence_bar)
             charts_layout.addWidget(self._plot_cadence, 1)
+            self._plot_cadence.hide()
         else:
             placeholder = QLabel("未安装 pyqtgraph — 图表不可用")
             placeholder.setAlignment(Qt.AlignCenter)
@@ -267,7 +273,6 @@ class ExecutionView(QWidget):
 
         self._chart_container = QWidget()
         self._chart_container.setLayout(charts_layout)
-        main_layout.addWidget(self._chart_container, 1)
 
         self._lower_split = QWidget()
         lower_layout = QGridLayout(self._lower_split)
@@ -335,6 +340,8 @@ class ExecutionView(QWidget):
         self._footprint_channel = FootprintChannelWidget()
         lower_layout.addWidget(self._footprint_channel, 0, 2)
         self._footprint_channel.hide()
+        lower_layout.addWidget(self._chart_container, 0, 2)
+        self._chart_container.hide()
         self._lower_split.hide()
         main_layout.addWidget(self._lower_split, 1)
 
@@ -484,17 +491,14 @@ class ExecutionView(QWidget):
         for c in self._gait_cards:
             c.setVisible(not is_jump)
         self._chart_container.setVisible(is_jump)
-        self._lower_split.setVisible(not is_jump)
+        self._lower_split.show()
         self._footprint_channel.setVisible(not is_jump)
         self._cycle_panel.hide()
         self._card_imbalance._title.setText(
             "步态周期不对称率" if is_treadmill else "不平衡指数"
         )
         self._footprint_channel.set_direction(getattr(config, "direction", None))
-        if is_jump:
-            self._camera_panel.shutdown()
-        else:
-            self._camera_panel.start_preview()
+        self._camera_start_timer.start(0)
         if is_treadmill:
             QTimer.singleShot(0, self._update_cycle_panel_visibility)
 
@@ -562,6 +566,10 @@ class ExecutionView(QWidget):
         self._cycle_panel.setVisible(
             self._camera_column.height() >= required_height
         )
+
+    def _start_camera_preview_if_visible(self):
+        if self.isVisible() and self._lower_split.isVisible():
+            self._camera_panel.start_preview()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -644,6 +652,7 @@ class ExecutionView(QWidget):
             self._left_cycle_value.setText("左脚  --")
             self._right_cycle_value.setText("右脚  --")
         if hasattr(self, "_camera_panel"):
+            self._camera_start_timer.stop()
             self._camera_panel.shutdown()
 
         # 实时统计
@@ -697,6 +706,12 @@ class ExecutionView(QWidget):
         # 记录质心
         if ev.kind.lower() == "touch" and ev.centroid_cm:
             self._last_strike_centroid = ev.centroid_cm
+
+    def on_jump_quality_notice(self, notice: dict):
+        """显示不计入触地/跳跃的质量提示。"""
+        if notice.get("kind") == "contact_cluster_above_limit":
+            length = notice.get("cluster_length", "?")
+            self._device_label.setText(f"⚠ 遮挡范围超过触地上限（{length}列）")
 
     def on_gait_step_event(self, ev):
         """接收步态事件。足迹通道替代了步态柱状图。"""
@@ -799,34 +814,18 @@ class ExecutionView(QWidget):
     # ------------------------------------------------------------------
 
     def _arrange_execution_area(self, is_jump: bool):
-        if is_jump:
-            self._lower_layout.removeWidget(self._progress_container)
-            self._lower_layout.removeWidget(self._controls_container)
-            if self._main_layout.indexOf(self._progress_container) < 0:
-                self._main_layout.addWidget(self._progress_container)
-            if self._main_layout.indexOf(self._controls_container) < 0:
-                self._main_layout.addWidget(self._controls_container)
-            self._progress_container.setMinimumWidth(0)
-            self._progress_container.setMaximumWidth(16777215)
-            self._progress_container.setFixedHeight(28)
-            self._progress_bar.setOrientation(Qt.Horizontal)
-            self._progress_bar.setTextVisible(True)
-            self._progress_overlay.hide()
-            self._controls_layout.setDirection(QBoxLayout.LeftToRight)
-            self._controls_layout.setSpacing(12)
-        else:
-            self._main_layout.removeWidget(self._progress_container)
-            self._main_layout.removeWidget(self._controls_container)
-            self._lower_layout.addWidget(self._progress_container, 0, 1, 2, 1)
-            self._lower_layout.addWidget(self._controls_container, 1, 2)
-            self._progress_container.setFixedWidth(72)
-            self._progress_container.setMinimumHeight(0)
-            self._progress_container.setMaximumHeight(16777215)
-            self._progress_bar.setOrientation(Qt.Vertical)
-            self._progress_bar.setTextVisible(False)
-            self._progress_overlay.show()
-            self._controls_layout.setDirection(QBoxLayout.TopToBottom)
-            self._controls_layout.setSpacing(8)
+        self._main_layout.removeWidget(self._progress_container)
+        self._main_layout.removeWidget(self._controls_container)
+        self._lower_layout.addWidget(self._progress_container, 0, 1, 2, 1)
+        self._lower_layout.addWidget(self._controls_container, 1, 2)
+        self._progress_container.setFixedWidth(72)
+        self._progress_container.setMinimumHeight(0)
+        self._progress_container.setMaximumHeight(16777215)
+        self._progress_bar.setOrientation(Qt.Vertical)
+        self._progress_bar.setTextVisible(False)
+        self._progress_overlay.show()
+        self._controls_layout.setDirection(QBoxLayout.TopToBottom)
+        self._controls_layout.setSpacing(8)
 
     def _set_progress_visible(self, visible: bool):
         self._progress_container.setVisible(visible)

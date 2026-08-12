@@ -380,11 +380,11 @@ class HistoryView(QWidget):
             QMessageBox.information(self, "打开报告", "请先选择一条历史记录。")
             return
         try:
-            report = session.report
+            session.report
         except (TypeError, ValueError) as exc:
             QMessageBox.warning(self, "打开报告", f"该记录无法重建报告：{exc}")
             return
-        self.open_report_requested.emit(report)
+        self.open_report_requested.emit(session)
 
     def _on_link_subject_clicked(self) -> None:
         session = self._selected_session()

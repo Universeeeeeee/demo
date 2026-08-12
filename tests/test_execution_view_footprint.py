@@ -8,7 +8,7 @@ from qtpy.QtWidgets import QApplication, QBoxLayout, QGridLayout
 from config.test_config import TestConfig
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 from ui.footprint_channel import FootprintChannelWidget
-from ui.views.execution_view import ExecutionView, MetricCard
+from ui.views.execution_view import ExecutionView, MetricCard, _PG_AVAILABLE
 
 
 def _app():
@@ -65,6 +65,11 @@ def test_execution_view_shows_footprint_channel_for_treadmill(qtbot, config_type
 
     assert isinstance(view._footprint_channel, FootprintChannelWidget)
     assert view._footprint_channel.isVisible()
+    assert len(
+        view._footprint_channel._rail_marker_rects(
+            rail_x=30.0, top=34.0, height=486.0
+        )
+    ) == 96
     assert view._cycle_panel.isVisible()
     assert not view._chart_container.isVisible()
     layout = view._lower_split.layout()
@@ -145,18 +150,32 @@ def test_gait_running_controls_stack_in_right_column(qtbot):
     assert view._countdown_timer.isActive()
 
 
-def test_execution_view_keeps_jump_charts_for_jump(qtbot):
+def test_execution_view_reuses_camera_layout_and_only_shows_jump_height_chart(qtbot):
     view = ExecutionView()
     qtbot.addWidget(view)
+    view.resize(1690, 1050)
     view.show()
     config = TestConfig(test_type="Jump Test")
 
     view.configure(config)
+    QApplication.processEvents()
 
+    assert view._lower_split.isVisible()
+    assert view._camera_panel.isVisible()
     assert view._chart_container.isVisible()
     assert not view._footprint_channel.isVisible()
-    assert view._progress_bar.orientation() == Qt.Horizontal
-    assert view._controls_layout.direction() == QBoxLayout.LeftToRight
+    layout = view._lower_split.layout()
+    assert layout.getItemPosition(layout.indexOf(view._camera_column)) == (0, 0, 2, 1)
+    assert layout.getItemPosition(layout.indexOf(view._chart_container)) == (0, 2, 1, 1)
+    assert layout.getItemPosition(layout.indexOf(view._progress_container)) == (0, 1, 2, 1)
+    assert layout.getItemPosition(layout.indexOf(view._controls_container)) == (1, 2, 1, 1)
+    assert layout.columnStretch(0) == 3
+    assert layout.columnStretch(2) == 1
+    assert view._progress_bar.orientation() == Qt.Vertical
+    assert view._controls_layout.direction() == QBoxLayout.TopToBottom
+    if _PG_AVAILABLE:
+        assert view._plot_h.isVisible()
+        assert not view._plot_cadence.isVisible()
 
 
 def test_execution_view_shows_current_gait_cycle_without_completed_table(qtbot):

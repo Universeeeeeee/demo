@@ -140,7 +140,10 @@ class ParamPanel(QWidget):
 
     # 各测试类型 Layer3 滤波参数的创建顺序
     _LAYER3_ORDER: dict[str, list[str]] = {
-        "Jump Test": ["min_contact_time", "min_flight_time", "max_flight_time"],
+        "Jump Test": [
+            "min_contact_time", "min_flight_time", "max_flight_time",
+            "flight_time_review_threshold",
+        ],
         "Treadmill Gait Test": [
             "min_contact_time", "min_flight_time", "max_flight_time",
             "step_length_calculation", "min_step_length", "min_foot_length",

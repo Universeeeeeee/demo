@@ -13,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.models import AthleteProfile
 from config.test_config import TestConfig as _TestConfig
-from config.test_report import JumpTestReport
+from config.test_report import (
+    JumpQualityNoticeRecord,
+    JumpResultRecord,
+    JumpTestReport,
+)
 from config.treadmill_config import TreadmillGaitConfig
 from config.treadmill_report import (
     GaitBoundaryPartial,
@@ -143,8 +147,8 @@ class SubjectStoreTest(unittest.TestCase):
         self.assertEqual(session.id, session_id)
         self.assertEqual(session.config.number_of_jumps, 7)
         self.assertEqual(session.config.min_contact_time, 80)
-        self.assertEqual(session.total_jumps, 7)
-        self.assertEqual(session.report_summary["total_jumps"], 7)
+        self.assertEqual(session.total_jumps, 2)
+        self.assertEqual(session.report_summary["total_jumps"], 2)
         self.assertEqual(session.report_summary["min_jump_height"], report.min_jump_height)
         self.assertEqual(session.report_summary["std_jump_height"], report.std_jump_height)
         self.assertEqual(session.report_summary["min_air_time"], report.min_air_time)
@@ -722,15 +726,42 @@ class SubjectStoreTest(unittest.TestCase):
             )
 
     def test_session_reconstructs_saved_jump_and_treadmill_reports(self):
+        jump_record = JumpResultRecord(
+            index=1,
+            lift_time_s=0.1,
+            touch_time_s=0.5,
+            air_time_s=0.4,
+            jump_height_m=0.1962,
+            contact_time_s=None,
+            cycle_time_s=None,
+            cadence_jumps_per_min=None,
+            is_included_in_statistics=True,
+            quality_flags=("flight_time_above_review_threshold",),
+        )
+        jump_notice = JumpQualityNoticeRecord(
+            kind="contact_cluster_above_limit",
+            time_s=0.7,
+            cluster_length=51,
+            ratio=51 / 96,
+        )
         jump_id = self.store.record_session(
             None,
             _TestConfig(number_of_jumps=5),
-            _jump_report(),
+            _jump_report(
+                jump_results=(jump_record,),
+                quality_notices=(jump_notice,),
+                report_config_snapshot={"touch_max_cluster_length": 50},
+            ),
         )
-        jump = self.store.get_session(jump_id).report
+        jump_session = self.store.get_session(jump_id)
+        jump = jump_session.report
 
         self.assertIsInstance(jump, JumpTestReport)
         self.assertEqual(jump.jump_heights, (0.18, 0.22))
+        self.assertEqual(jump_session.report_detail["report_schema_version"], 2)
+        self.assertEqual(jump.jump_results[0].quality_flags, jump_record.quality_flags)
+        self.assertEqual(jump.quality_notices[0].cluster_length, 51)
+        self.assertEqual(jump.report_config_snapshot["touch_max_cluster_length"], 50)
 
         treadmill = TreadmillGaitReport(
             finish_reason="manual",
