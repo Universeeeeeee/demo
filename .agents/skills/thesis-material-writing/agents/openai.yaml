@@ -1,0 +1,4 @@
+interface:
+  display_name: "毕业论文素材写作"
+  short_description: "按 Iron_Jump 论文规范编辑素材并执行术语与证据检查"
+  default_prompt: "使用 $thesis-material-writing 按论文规范编辑 Iron_Jump 的素材.md。"

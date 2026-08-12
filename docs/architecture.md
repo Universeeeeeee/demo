@@ -1,6 +1,6 @@
 # Iron_Jump 系统架构文档
 
-> 最后更新: 2026-05-19
+> 最后更新: 2026-08-10
 
 ## 1. 项目概述
 
@@ -47,14 +47,21 @@ Iron_Jump/
 │   └── test_report.py        # TestReport frozen dataclass：不可变测试结果快照
 
 ├── data/                     # 数据持久化层
-│   └── subject_store.py      # SQLite 受试者管理：创建/搜索/历史记录/Session 归档
+│   └── subject_store.py      # SQLite 用户、团队、成员关系、Session 与分析运行记录
 
 ├── agent/                    # AI Agent 模块
-│   ├── models.py             # AthleteProfile(输入) + LLMTestConfig + ChatResponse
+│   ├── common/               # Config / Report 共用模型提供器和基础设施
+│   ├── config/               # 测试前智能配置、结构化模型和独立 prompts
+│   ├── report/               # 测试后分析 Agent、Kernel、Validator 与 Renderer
+│   ├── worker.py             # 单 Worker，多业务路由和状态隔离
 │   ├── rule_engine.py        # 离线模式：规则引擎 → TestConfig
-│   ├── llm_agent.py          # 在线模式：LLMConfigAgent (Fast Gate + Parallel Clarify)
-│   ├── gait_agent.py         # Facade 门面，统一两种模式对外接口 + 生命周期管理
-│   └── agent_test_ui.py      # Agent 独立测试窗口（不依赖硬件）
+│   └── gait_agent.py         # 兼容 Facade 和生命周期入口
+
+├── reporting/                # 面向 UI 与 Agent 的确定性报告语义层
+
+├── vision/                   # 可拒识左右脚参考、Session 录制、标注与 Replay
+├── tools/                    # 诊断、Benchmark、Vision 录制/标注/Replay CLI
+├── benchmark_results/        # Report Agent 固定合成案例结果与审计说明
 
 ├── ui/                       # UI 层
 │   ├── main_window.py        # 入口：多视图路由 (QStackedWidget)
@@ -83,7 +90,10 @@ Iron_Jump/
 ├── docs/
 │   └── architecture.md       # 本文档
 ├── path_utils.py             # DLL 路径查找工具
-├── CLAUDE.md                 # 代码编写行为准则
+├── vision_app.py             # Windows 视觉数据统一 QtPy 启动器
+├── IronJumpVisionTools.spec  # PyInstaller onedir 配置
+├── build_vision_app.bat      # Windows 一键构建入口
+├── AGENTS.md                 # 代码编写行为准则
 ├── plan.md                   # 开发计划
 ├── .env                      # DeepSeek API 配置
 └── requirements.txt          # Python 依赖
@@ -98,10 +108,11 @@ Iron_Jump/
 │  session_controller.py                   │
 ├─────────────────────────────────────────┤
 │ Agent 层                                 │
-│  gate_agent.py (Facade)                  │
-│  ├── llm_agent.py (在线: Fast Gate +     │
-│  │   Parallel Clarify)                   │
-│  └── rule_engine.py (离线: 规则引擎)      │
+│  Config Agent + Report Agent             │
+│  ├── common/ 共享模型连接                 │
+│  ├── config/ Fast Gate + Parallel Clarify│
+│  ├── report/ Plan + Kernel + Validator   │
+│  └── worker.py 单进程多路由                │
 ├─────────────────────────────────────────┤
 │ 配置层                                   │
 │  param_schema.py + test_config.py        │
@@ -178,6 +189,36 @@ Agent 生成配置 (AgentConfigPanel)
   → _update_summary()
 ```
 
+正式用户进入测试准备时还会冻结身份快照：
+
+```text
+subject_id + subject_snapshot
+  + 用户主动选择的 team_id / 无团队身份
+  + team_snapshot（仅团队身份测试）
+  → SessionSetup
+  → test_sessions 单条记录
+```
+
+### 5.4 Report Agent 分析流
+
+```text
+ReportView(session_id)
+  → 用户点击“智能分析”
+  → Worker report route
+  → ReportRepository 按 session_id 重建不可变报告与允许数据范围
+  → ReportDataPackageBuilder / AgentObservationBuilder
+  → Report Agent 每轮生成一个 AnalysisDecision
+  → ActionValidator
+  → AnalysisToolGateway 执行一个白名单 Tool 与确定性分析方法
+  → Evidence 状态归约与 Checkpoint
+  → 下一轮决策或停止并综合
+  → ClaimValidator + Numeric Binding
+  → AnalysisPackage 持久化
+  → ReportView 展示只读结果
+```
+
+正式报告先于智能分析生成；模型不可用、超时或 Claim 被拒绝都不会改变已有报告。当前 MVP 默认只分析本次 session，个人历史纵向和团队横向能力尚未开放。
+
 ## 6. 线程模型
 
 ```
@@ -244,26 +285,29 @@ Agent LLM 调用线程 (QThread):
 
 ## 8. Agent 模块设计
 
-### 8.1 整体架构
+### 8.1 两个业务域
 
+```text
+测试前：自然语言需求
+  → Config Agent
+  → LLMTestConfig
+  → TestConfig + ParamSchema 校验
+
+测试后：不可变 TestReport + session_id
+  → ReportDataPackage / AgentObservation
+  → Report Agent 生成单步 AnalysisDecision
+  → ActionValidator
+  → 确定性 Analysis Kernel
+  → Evidence 状态归约 / ClaimValidator
+  → AnalysisPackage
+  → 确定性 Renderer + 报告页智能分析区域
 ```
-用户/UI
-  ↓
-GaitAgent (Facade)
-  ├── 离线: RuleEngine.configure(test_type, AthleteProfile) → TestConfig
-  └── 在线: LLMConfigAgent.chat(user_msg, AthleteProfile)
-            → asyncio.run(_flow())
-              ├── _is_config_request() 关键词 gate
-              │     ├── 非配置 → 单次 agent.run() → ChatResponse
-              │     └── 配置 → _run_parallel_clarify()
-              │           → 3 次 agent.run() 真正并行 (同一快照)
-              │           → _resolve_parallel_samples() 聚类裁判
-              │           → .to_test_config() → TestConfig
-```
+
+Config Agent 与 Report Agent 业务状态隔离，但共用模型提供器和单一 Worker 进程。Report Agent 不复用 Config Agent 的对话历史，也不能修改测试配置或正式报告数值。
 
 ### 8.2 Fast Gate + Parallel Clarify
 
-**Fast Gate**：确定性关键词检测（`_is_config_request()`），三级词表（强配置短语 / 动作词 / 约束词）。闲聊"你好"、参数解释等不触发并行，走单次 LLM。
+**Fast Gate**：确定性关键词检测（`_is_config_request()`），三级词表（强配置短语 / 动作词 / 约束词）。它只选择调用成本路径，不拥有否决 AI 合法结构化配置的权力。Gate 漏判但首次模型返回配置时，复用首次结果并补两次采样，再按现有一致性规则裁决。
 
 **Parallel Clarify**：命中 gate 后，从同一个 `message_history` 快照并行发起 3 次 `agent.run()`，所有 sample 地位平等。用 `_cluster_configs()` 按关键字段值聚类：
 - 1 组一致 → 随机选代表，转 TestConfig，校验通过后输出
@@ -291,6 +335,28 @@ LLM 输出 JSON → Pydantic 校验 → LLMTestConfig (BaseModel)
 
 `PROFILE_RULES` 是 `list[tuple[Callable, dict]]`，数据驱动。多规则命中同一字段时取最保守值（`min_contact→MAX`, `number_of_jumps→MIN`, `max_flight→MIN(非零)`），与规则添加顺序无关。
 
+### 8.5 Report Agent 可信边界
+
+- `TestReport` 是不可变事实源；Builder 只能转换和补充稳定引用，不能改变正式结果。
+- Agent 只能从 `AnalysisToolRegistry` 选择已启用 Tool，并从 `AnalysisMethodRegistry` 选择该 Tool 所属的确定性分析方法；不能访问通用 SQL、任意 Python 或原始 1000Hz 数据。
+- PlanValidator 根据测试类型、数据可用范围、参数和预算校验计划。
+- Kernel 负责所有聚合、分组、趋势、敏感性和跨指标比较；模型不得自由计算正式数值。
+- 每个 Claim 必须绑定 Fact、Evidence Ref、Predicate 和 Numeric Binding。错误数字、无证据结论、越权范围、因果或医学语言由 Validator 拒绝。
+- 生产默认采用 AnalysisSketch + Compact Series，关闭 Screening Cues 和 Replan；两项能力保留为显式实验开关。
+
+### 8.6 用户、团队与分析数据范围
+
+```text
+subjects ↔ team_memberships ↔ teams
+   ↓
+test_sessions(subject_id, team_id, subject_snapshot, team_snapshot)
+   ↓
+个人历史按 subject_id 查询
+团队历史按测试时 team_id 查询
+```
+
+每次测试只保存一条 session。正式用户测试始终带有 `subject_id`；选择团队身份时额外保存 `team_id` 和测试时团队快照。个人历史与团队历史是同一条记录的不同查询视图，不复制报告。Report Agent 的历史或团队能力必须从当前 session 推导允许范围，不能把私人个人测试静默混入团队分析。
+
 ## 9. 关键设计决策
 
 | 决策 | 结论 | 原因 |
@@ -302,7 +368,10 @@ LLM 输出 JSON → Pydantic 校验 → LLMTestConfig (BaseModel)
 | **Python 版本** | 3.11 统一环境 | 消除 agent/ui 间的版本边界 |
 | **Agent 集成方式** | AgentConfigPanel 嵌入 SetupView | 从 agent_test_ui 独立测试工具 → 主 UI 配置组件 |
 | **LLM 调用模式** | Fast Gate + Parallel Clarify | 非配置请求不浪费并行采样，配置请求样本地位平等 |
-| **相机** | 独立 OpenCV 窗口 | 不嵌入 Qt，预览控制链窗口生命周期内复用 |
+| **相机** | TinySE 预览嵌入 ExecutionView；Vision 数据工具独立运行 | 主 UI 负责预览/录像，独立工具负责真值数据闭环，二者不同时占用设备 |
+| **Report Agent** | 单步序贯决策 + 确定性 Kernel + 强 Validator | 每轮只执行一个已校验动作，同时确保数字、证据和权限可复现 |
+| **Report Agent 默认配置** | Sketch + Compact Series；按需 Skill Reference；最多 5 次 Tool 调用 | 序贯合成 Benchmark 满足既定有效率、Recall 与 P95 门槛 |
+| **视觉输出** | `Left / Right / Unknown` | 允许拒识；双脚落地和纵跳不属于视觉模块目标 |
 | **旧 data_show.py** | 保留不动 | 回退方案 |
 | **dayu_widgets** | 本地源码，.gitignore 排除 | 不提交到 Git |
 

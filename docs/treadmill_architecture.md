@@ -1,13 +1,13 @@
 # 跑步机模式架构文档
 
 > 基于 Iron_Jump 系统架构，新增 Treadmill Gait Test 和 Treadmill Running Test 两类测试模式。
-> 最后更新: 2026-06-27
+> 最后更新: 2026-08-10
 
 ## 1. 模式概述
 
 跑步机模式下，OptoJump 光栅条安装在跑步机**两侧**。受试者总体位置相对光栅条固定，带速由操作者手动输入。
 
-与地面步态的关键差异：LED 位置数据仅用于判定触地/腾空时序和 toe/heel 方向，**所有距离和速度指标从跑步机设定带速反算**。
+与地面步态的关键差异：跑带速度提供测试期间的基础位移，但受试者会在光栅区域内前后漂移，因此距离不能只用带速反算。当前实现将跑带位移与相邻触地参考点的位置变化结合；LED 空间信息参与步长和步幅修正，也继续用于触地/腾空时序、toe/heel 方向、足长过滤和左右脚判定。
 
 支持两种测试类型：
 
@@ -62,7 +62,7 @@
 | 字段 | 单位 / 格式 | 使用约束 |
 |:---|:---|:---|
 | `test_length` | `mm:ss` 字符串 | 说明书范围 `00:01-59:59`；算法层通过 `get_test_length_seconds()` 转为秒。 |
-| `treadmill_speed` | `km/h` | 距离和速度指标的唯一速度输入；算法层用 `/ 3.6` 转为 `m/s`。 |
+| `treadmill_speed` | `km/h` | 跑带基础速度输入；算法层用 `/ 3.6` 转为 `m/s`，并结合足部参考点位置变化计算距离。 |
 | `min_contact_time` / `min_flight_time` / `max_flight_time` | `ms` | 与结果 `contact_time_s` / `flight_time_s` 比较前必须除以 `1000`。 |
 | `min_foot_length` / `min_step_length` / `min_gap_between_feet` | `cm` | 均为算法过滤阈值，不等于受试者足长快照。 |
 | `filter_gaitr_in` / `filter_gaitr_out` | LED 数 | GaitR 进入/离开接触状态的 LED 阈值。 |
@@ -236,16 +236,31 @@ TreadmillReportBase:
 ### 5.5 距离/速度计算
 
 ```text
-speed_m_s       = treadmill_speed / 3.6
-distance_cm     = speed_m_s * elapsed_time_s * 100
-step_length_cm  = speed_m_s * step_time_s * 100
-stride_length_cm ≈ speed_m_s * gait_cycle_s * 100
-cadence_steps_per_s = 1 / step_time_s
+speed_m_s = treadmill_speed / 3.6
+belt_displacement_cm = speed_m_s * interval_s * 100
+
+step_length_cm
+  = 相邻异侧触地间的跑带位移
+  + 按行进方向修正的前后参考点位置变化
+
+stride_length_cm
+  = 同侧两次触地间的跑带位移
+  + 按行进方向修正的同侧参考点位置变化
+
+cadence_steps_per_min = 有效触地步数 / 有效采集时长 * 60
 ```
 
-**LED 位置数据不参与距离计算**，仅用于触地/腾空时序、toe/heel 方向、足长过滤和左右脚判定。
+参考点由配置选择 `Tip-to-Tip` 或 `Heel-to-Heel`。步幅的权威记录来自同侧两次触地形成的完整 `GaitCycleRecord`，不能使用 `step_length × 2` 近似，也不能只用带速乘周期时间。缺少可靠参考点、完整同侧周期或方向语义时，不生成伪步幅；旧报告中的近似字段只用于兼容读取，不作为正式显示依据。
 
-### 5.6 起始脚解析
+### 5.6 报告统计与展示
+
+- 概览按模式选择约 9～12 个高优先级指标，不为填满布局展示空值。
+- 跑步机步态优先展示步长、步幅、步频、步态周期、接触时间、支撑相、摆动相和双支撑时间；样本满足门槛时再显示不对称性。
+- 明细页分为“统计汇总 / 周期明细 / 逐步数据”三个内部分页。
+- 周期与逐步表支持“已纳入 / 已排除 / 全部”筛选；Excel 仍导出完整数据和排除原因。
+- 时间类概览中步态周期使用秒，接触/腾空/双支撑时间使用毫秒，支撑相和摆动相使用周期百分比。
+
+### 5.7 起始脚解析
 
 ```text
 1. starting_foot_override 存在 → 采用人工覆盖 (source=manual_override)

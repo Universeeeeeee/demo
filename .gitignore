@@ -35,6 +35,8 @@ docs/步态参数相关/session5_manual_timing.csv
 .sessions/
 .worktrees/
 .claude/settings.local.json
+agents_talking.md
 
 # Local driver downloads/cache
 driver_temp/
+led_con_96led_windows.zip

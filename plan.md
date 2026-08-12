@@ -13,10 +13,10 @@
 
 ### 当前开发基线
 
-- 当前分支为 `vae/iron_jump`，已提交部分与 `origin/vae/iron_jump` 同步；最新提交为 `224b7ff feat: 更新映衡应用品牌图标`。
-- 2026-08-01 之后的 Report Agent、Vision Session 工具、纵跳阈值与 LED 健康检测等改动仍在工作区，尚未形成可追溯提交；提交前必须按功能拆分并复核归属。
-- 2026-08-10 使用 `/Users/vae/miniconda3/envs/Iron_Jump/bin/python` 和 `QT_QPA_PLATFORM=offscreen` 运行全量测试：`574 passed`、`1 failed`、`12 subtests passed`。
-- 唯一失败是 `tests/test_vision_package_boundary.py` 的公共 API 集合仍期待旧值；`vision.__all__` 已新增 `PoseInferenceRecord`、`VisionSessionRecorder` 和 `NullVisionSessionRecorder`。在明确这三个类型是否属于稳定公共 API 前，不以简单修改测试掩盖边界决策。
+- 当前分支为 `vae/iron_jump`。2026-08-12 已将此前工作区改动按 Report Agent、纵跳与 LED 健康检测、UI 和文档拆分为可追溯提交。
+- `vision.__all__` 保持小型稳定公共 API；`PoseInferenceRecord`、`VisionSessionRecorder` 和 `NullVisionSessionRecorder` 属于内部按需访问类型，不进入稳定导出集合。
+- 2026-08-12 使用 `/Users/vae/miniconda3/envs/Iron_Jump/bin/python` 和 `QT_QPA_PLATFORM=offscreen` 运行全量测试：`659 passed`、`12 subtests passed`。
+- 提交前审计未发现 `.env`、模型文件、真实受试者数据库或本地日志进入版本控制；本地对话记录和驱动压缩包已加入忽略规则。
 
 ## 1. 当前已完成能力
 
@@ -79,6 +79,7 @@
 - DirectShow 采集、录制和统计链路已实现并有测试。
 - 停止录制后的 DirectShow 收尾和 MJPEG→AVI 转换已放入后台线程；保存期间 UI 显示 `Saving...`，关闭路径会等待收尾完成。
 - Tiny SE 预览已嵌入执行页，采用 16:9 内容区、右上角齿轮参数入口以及与足迹/竖向剩余时间对齐的布局。
+- 纵跳执行页复用同一相机区和控制布局，右侧只保留跳跃高度图，不再显示步频柱状图。
 - 当前未完成的是：验证 UVC 实际输出是否达到 1920×1080@100fps，以及是否需要进一步的设备模式切换。
 
 ### 1.7 Report Agent 智能分析
@@ -103,14 +104,14 @@
 
 跑步机长度语义已经在当前实现中收敛：步长结合跑带位移与相邻落点位置修正，步幅由同侧两次触地形成的完整周期计算；不再使用 `step_length × 2` 作为正式结果，缺少可靠空间参考时不生成伪步幅。
 
-当前首要风险已经转为大量跨功能未提交变更：
+本轮工作区收敛已经完成：
 
-- [ ] 先确定 `vision.__all__` 的稳定公共 API，并消除当前唯一测试失败。
-- [ ] 按“Report Agent / Vision Session 工具 / 纵跳与 LED 健康检测 / 文档”拆分提交，避免把无关变化合成一个提交。
-- [ ] 每个提交分别运行聚焦测试；全部拆分完成后再次运行全量测试。
-- [ ] 检查 `.env`、模型文件、真实受试者数据和本地日志均未进入版本控制。
+- [x] 确定 `vision.__all__` 的稳定公共 API，并消除公共 API 边界测试失败。
+- [x] 按“Report Agent / Vision Session 工具 / 纵跳与 LED 健康检测 / UI 与文档”拆分提交。
+- [x] 每个功能组运行聚焦测试；全部拆分完成后再次运行全量测试。
+- [x] 检查 `.env`、模型文件、真实受试者数据和本地日志均未进入版本控制。
 
-完成标准：工作区不存在来源不明的功能改动；当前实现可以从提交历史恢复；全量自动化测试无失败。
+完成结果：工作区改动均有明确归属，当前实现可以从提交历史恢复；全量自动化测试为 `659 passed`、`12 subtests passed`。
 
 ### 2.2 Report Agent 序贯假设验证迁移（P0）
 
@@ -531,7 +532,7 @@ Vision: R → L
 ### 2.9 文档一致性（P1）
 
 - [x] 更新 `README.md` 中仍把 LED 足迹和相机嵌入写成未来工作的旧状态。
-- [ ] 更新 `docs/architecture.md` 中已经不存在的 `CLAUDE.md` 引用和过时模块树。
+- [x] 更新 `docs/architecture.md` 中已经不存在的 `CLAUDE.md` 引用和过时模块树。
 - [ ] 核对并处理 `docs/步态参数相关/步态周期定义.md` 的未提交修改，保持“不建立左右周期配对”和“无法拆分双支撑子阶段时使用 N/A”的语义一致。
 - [ ] 跑步机长度算法收敛后，同步 `docs/treadmill_architecture.md`、参数定义和算法说明，避免文档分别描述两套实现。
 

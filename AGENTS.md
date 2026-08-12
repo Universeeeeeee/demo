@@ -75,6 +75,17 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 6. Thesis Material Editing
+
+Before drafting, editing, reorganizing, or reviewing `素材.md`, or producing text intended to be pasted into it:
+
+1. Read `.agents/skills/thesis-material-writing/SKILL.md` completely and follow it as a mandatory project skill.
+2. Read `writing.md` completely.
+3. Read `素材.md` completely, or at minimum the full target chapter and the headings of the entire file.
+4. Do not begin the thesis-material task until the required reading is complete.
+
+This requirement applies even when the user does not explicitly name the skill.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
