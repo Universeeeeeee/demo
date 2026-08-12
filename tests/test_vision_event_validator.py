@@ -63,6 +63,25 @@ class VisionEventValidatorContractTests(unittest.TestCase):
         self.assertIn("camera_aligned_time_s", module.CSV_FIELDS)
         self.assertIn("alignment_delta_ms", module.CSV_FIELDS)
         self.assertIn("camera_event_delta_ms", module.CSV_FIELDS)
+        self.assertIn("raw_device_label", module.CSV_FIELDS)
+        self.assertIn("effective_device_label", module.CSV_FIELDS)
+        self.assertIn("final_label", module.CSV_FIELDS)
+        self.assertIn("left_evidence", module.CSV_FIELDS)
+        self.assertIn("right_evidence", module.CSV_FIELDS)
+        self.assertIn("phase_offset", module.CSV_FIELDS)
+        self.assertIn("phase_action", module.CSV_FIELDS)
+
+    def test_treadmill_axis_arguments_are_normalized_and_paired(self):
+        module = importlib.import_module("tools.vision_event_validator")
+        args = module.build_parser().parse_args(
+            [
+                "--model", "pose.task",
+                "--treadmill-rear", "0.1,0.8",
+                "--treadmill-front", "0.9,0.8",
+            ]
+        )
+        self.assertEqual(args.treadmill_rear, (0.1, 0.8))
+        self.assertEqual(args.treadmill_front, (0.9, 0.8))
 
     def test_validator_window_defaults_prioritize_pose_coverage(self):
         module = importlib.import_module("tools.vision_event_validator")

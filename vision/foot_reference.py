@@ -8,6 +8,10 @@ from statistics import median
 from typing import Iterable, Sequence
 
 
+LANDING_CLASSIFIER_VERSION = "landing_v1"
+LANDING_CLASSIFIER_ENTRYPOINT = "vision.foot_reference.classify_landing_event"
+
+
 class FootLabel(str, Enum):
     LEFT = "left"
     RIGHT = "right"
@@ -74,6 +78,10 @@ class FootPoseSample:
     right_ankle: Landmark
     right_heel: Landmark
     right_foot_index: Landmark
+    # Raw MediaPipe output is optional so the online classifier contract stays
+    # compatible with existing callers while diagnostics can persist all 33
+    # landmarks.
+    landmarks_33: tuple[Landmark, ...] | None = None
 
     def landmarks(self) -> tuple[Landmark, ...]:
         return (
@@ -132,6 +140,9 @@ class VisionDecision:
     decided_at_s: float | None = None
     candidate_label: FootLabel | None = None
     diagnostics: VisionWindowDiagnostics | None = None
+    left_evidence: float | None = None
+    right_evidence: float | None = None
+    classifier_diagnostics: dict[str, object] | None = None
 
 
 _BOTH_MARGIN = 0.04

@@ -102,6 +102,7 @@ class MediaPipePoseAdapter:
         points = result.pose_landmarks[0]
         if len(points) < 33:
             return None
+        all_landmarks = tuple(_landmark(point) for point in points[:33])
         return FootPoseSample(
             timestamp_s=timestamp_ms / 1000.0,
             left_hip=_landmark(points[23]),
@@ -114,6 +115,7 @@ class MediaPipePoseAdapter:
             right_ankle=_landmark(points[28]),
             right_heel=_landmark(points[30]),
             right_foot_index=_landmark(points[32]),
+            landmarks_33=all_landmarks,
         )
 
     def close(self) -> None:

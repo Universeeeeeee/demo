@@ -1,6 +1,6 @@
 # Iron_Jump 统一项目计划
 
-> 最后更新：2026-07-24
+> 最后更新：2026-08-12
 >
 > 本文件是项目唯一的计划类文档。已完成事项、当前实现状态和后续待办都集中在这里；具体参数定义、架构说明和实验诊断仍放在各自的参考文档中。
 
@@ -13,10 +13,10 @@
 
 ### 当前开发基线
 
-- 当前分支为 `vae/iron_jump`；本轮 UI 重构以 `ea2a518 fix: disable Tiny SE tracking by default` 为提交前基线。
-- 当前分支与 `origin/main` 自 `e30797b` 后分叉。当前分支包含后续足迹、相机嵌入、步态周期和视觉同步开发；`origin/main` 当前位于 `04f0be4`，其中包含 `caf7f17 Implement treadmill V2 length calculation` 及文档整理提交。两条开发线不能直接视为已经合并。
-- 工作区存在多项未提交内容，不能把当前 diff 全部归因于本计划或 UI 规格；提交时需按实际归属分别复核。
-- 本次 UI 重构使用 `/Users/vae/miniconda3/envs/Iron_Jump/bin/python` 完成验证：`tests/` 共 331 项通过，仍有 2 项与本轮无关的既有失败（报告卡片测试未显示父窗口、Tiny SE 测试以非 QWidget 伪对象调用消息框）；`git diff --check` 通过。
+- 当前分支为 `vae/iron_jump`，已提交部分与 `origin/vae/iron_jump` 同步；最新提交为 `224b7ff feat: 更新映衡应用品牌图标`。
+- 2026-08-01 之后的 Report Agent、Vision Session 工具、纵跳阈值与 LED 健康检测等改动仍在工作区，尚未形成可追溯提交；提交前必须按功能拆分并复核归属。
+- 2026-08-10 使用 `/Users/vae/miniconda3/envs/Iron_Jump/bin/python` 和 `QT_QPA_PLATFORM=offscreen` 运行全量测试：`574 passed`、`1 failed`、`12 subtests passed`。
+- 唯一失败是 `tests/test_vision_package_boundary.py` 的公共 API 集合仍期待旧值；`vision.__all__` 已新增 `PoseInferenceRecord`、`VisionSessionRecorder` 和 `NullVisionSessionRecorder`。在明确这三个类型是否属于稳定公共 API 前，不以简单修改测试掩盖边界决策。
 
 ## 1. 当前已完成能力
 
@@ -35,21 +35,24 @@
 - Agent 已嵌入 `SetupView`，不再只依赖独立测试窗口。
 - Windows 启动阶段不再加载项目未使用的 `logfire-plugin`；依赖已改为 `pydantic-ai-slim[openai]`，避免完整 Logfire 成为不必要的传递依赖。
 - Jump、Treadmill Gait、Treadmill Running 已分别使用独立 prompt：
-  - `agent/prompts/jump.md`
-  - `agent/prompts/treadmill_gait.md`
-  - `agent/prompts/treadmill_running.md`
+  - `agent/config/prompts/jump.md`
+  - `agent/config/prompts/treadmill_gait.md`
+  - `agent/config/prompts/treadmill_running.md`
 
 ### 1.3 受试者和历史记录
 
 - `SubjectStore` 已接入主 UI。
-- 已支持受试者搜索/新建、加载上次参数、测试结束自动存档和历史记录回填。
+- 已支持受试者搜索/新建、疑似重复提示、加载上次参数、测试结束自动存档和历史记录回填。
+- 已实现用户与团队的多对多成员关系；用户可以同时加入多个团队，也可以处于“未加入团队”状态。
+- 正式用户开始测试前必须选择已加入团队或“不以团队身份测试”。每次测试只保存一条 session：始终归属用户，选择团队时同时带有测试时团队身份快照。
+- 用户主档案与测试会话快照已经分离；测试页临时修改不会静默覆盖主档案。
 - 跑步机报告的配置快照、报告摘要和报告详情已接入存储。
 
 ### 1.4 跑步机模式
 
 - `Treadmill Gait Test` 和 `Treadmill Running Test` 已实现独立配置模型、processor、累积器和报告模型。
 - `GaitEngine` 已按 `test_type` 分发到 `TreadmillProcessor`。
-- 已实现跑步机速度反算距离/速度、起始脚、逐步结果、有效性和统计过滤。
+- 已实现跑带位移与触地参考点位置变化联合计算步长/步幅、起始脚、逐步结果、有效性和统计过滤。
 - 默认跑步机速度为 `3.0 km/h`，默认方向为 `Opposite side`。
 - 已实现同侧触地到同侧触地的步态周期、边界片段、周期阶段、左右独立统计和实时/报告显示；当前结论只覆盖合成事件和自动化验证，真实准确性仍待原始帧对照。
 - 已接入参数面板、Agent prompt、报告页、历史记录和测试覆盖。
@@ -78,34 +81,162 @@
 - Tiny SE 预览已嵌入执行页，采用 16:9 内容区、右上角齿轮参数入口以及与足迹/竖向剩余时间对齐的布局。
 - 当前未完成的是：验证 UVC 实际输出是否达到 1920×1080@100fps，以及是否需要进一步的设备模式切换。
 
+### 1.7 Report Agent 智能分析
+
+- 已实现独立的 Report Agent 数据层、Observation、三个受控分析 Tool、五种本次记录确定性分析方法、Analysis Kernel、Plan/Claim Validator、Renderer、持久化和报告页入口。
+- `AnalysisToolRegistry` 固定注册 `analyze_current_session`、`compare_longitudinal` 和 `compare_cohort`；当前只启用本次记录 Tool，纵向与团队 Tool 保持注册但禁用，且在查询历史或团队明细前拒绝请求。
+- `PlanValidator` 一次校验完整 DAG，`AnalysisToolGateway` 按稳定拓扑序串行执行节点，不按 Tool 分组；上游失败时终止计划，不返回部分分析。
+- Tool、确定性分析方法和 Analysis Kernel 使用独立版本，并分别写入 `ToolRunRecord`。Schema v2 只写入新字段；旧 `operator` 数据可兼容读取且不重算既有 `output_digest`。
+- 正式数值和比较结果只由确定性代码生成；Agent 负责提出小型分析计划、选择证据并组织结论，不能访问通用 SQL，也不能修改 `TestReport`。
+- 12 类固定合成案例的 A～D 消融已完成。生产默认采用 B：`AnalysisSketch + Compact Series`，关闭 Screening Cues 和 Replan；Cues 与 Replan 仅保留为实验开关。
+- 初始消融中的 B 组为 `35/36` 有效运行，Expected Predicate Recall 为 `0.879`。三工具边界迁移后使用 Prompt v2.0 重新执行 B 组，结果为 `34/36` 有效运行（`94.44%`）、Expected Predicate Recall `0.879`、P95 `29.004 s`；两次失败均发生在结构化输出或 Claim 占位符校验阶段。这些结果只属于 12 类固定合成案例的工程验收，不代表真实运动员分析准确率、训练效果或医学有效性。
+
+### 1.8 视觉数据闭环与 Windows 工具
+
+- 已实现可回放 Vision Session：保存视频、相机时间元数据、Pose 序列、光栅 contact、人工标注和 Replay 结果。
+- 已实现录制、标注、Replay 三个工具以及统一 QtPy 启动器 `vision_app.py`。
+- 已提供 PyInstaller `onedir` 配置和 `build_vision_app.bat`；Windows EXE 构建、TinySE 和 USB 实机验收仍未完成。
+
 ## 2. 当前仍需推进的工作
 
-### 2.1 分支与跑步机长度算法收敛（P0）
+### 2.1 工作区收敛与可追溯提交（P0）
 
-当前存在两套尚未统一的跑步机长度实现：
+跑步机长度语义已经在当前实现中收敛：步长结合跑带位移与相邻落点位置修正，步幅由同侧两次触地形成的完整周期计算；不再使用 `step_length × 2` 作为正式结果，缺少可靠空间参考时不生成伪步幅。
 
-- `vae/iron_jump`：带速距离叠加方向修正后的脚位置漂移，并使用左右交替偏置的 EWMA 抑制锯齿误差。
-- `origin/main` 的 `caf7f17`：独立 `treadmill_v2.py`，使用接触快照、参考点质量、同侧历史和速度回退计算步长/步幅。
+当前首要风险已经转为大量跨功能未提交变更：
 
-必须先比较语义再合并，不能只按提交时间选择：
+- [ ] 先确定 `vision.__all__` 的稳定公共 API，并消除当前唯一测试失败。
+- [ ] 按“Report Agent / Vision Session 工具 / 纵跳与 LED 健康检测 / 文档”拆分提交，避免把无关变化合成一个提交。
+- [ ] 每个提交分别运行聚焦测试；全部拆分完成后再次运行全量测试。
+- [ ] 检查 `.env`、模型文件、真实受试者数据和本地日志均未进入版本控制。
 
-- [ ] 统一 `Interface side` / `Opposite side` 的坐标正方向和符号测试。
-- [ ] 明确 Tip-to-Tip / Heel-to-Heel 参考点是否真正参与最终步长。
-- [ ] 使用同侧相邻触地计算步幅，取消未经验证的 `stride_length = step_length × 2` 近似。
-- [ ] 统一缺失参考点、未知脚、轨迹冲突时的速度回退和质量诊断字段。
-- [ ] 在保留当前步态周期、足迹、视觉和 UI 功能的前提下，只保留一套长度算法并完成回归。
+完成标准：工作区不存在来源不明的功能改动；当前实现可以从提交历史恢复；全量自动化测试无失败。
 
-完成标准：当前分支和 `main` 不再各自承载互斥的核心算法；同一组输入在方向、参考点、步长、步幅和回退质量上具有唯一且可测试的结果。
+### 2.2 Report Agent 序贯假设验证迁移（P0）
 
-### 2.2 论文主实验（P0）
+**目标**：将当前生产使用的“一次性 `SmallAnalysisPlan` + DAG执行 + 默认不Replan”迁移为渐进式领域Skill指导的单步序贯假设验证循环。Agent每轮只决定下一项最值得验证的分析命题；三个受控Analysis Tool继续作为数据权限边界，五种现有确定性分析方法及其Kernel数值逻辑保持不变。
+
+目标数据流：
+
+```text
+ReportDataPackage
+  → AgentObservation（默认B：AnalysisSketch + Compact Series）
+  → 系统按test_type加载唯一根领域Skill
+  → Agent输出一个AnalysisDecision
+      ├─ LoadSkillResource
+      ├─ NextAnalysisAction
+      └─ StopAnalysis
+  → ActionValidator
+  → AnalysisToolGateway.execute_action()
+  → Tool → Analysis Method → 现有Analysis Kernel
+  → Evidence / Typed Failure
+  → 确定性State Reducer
+  → Checkpoint
+  → 下一轮或Claim综合
+  → ClaimValidator → Renderer → 原子发布AnalysisPackage
+```
+
+**已确认的实施边界**：
+
+- [ ] 新分析运行完全切换为单步`NextAnalysisAction`循环；旧Plan/DAG只保留兼容读取和非生产测试入口，不再进入生产分析路径。
+- [ ] 根领域Skill由系统根据Jump、Treadmill Gait或Treadmill Running确定；Skill正文只提供分析方法论，细分`quality`、`side`、`temporal`、`cross-metric`和`exclusion`资料按需加载。
+- [ ] 权限、Tool预算、Evidence约束、禁止因果/诊断/处方和输出Schema继续由Always-on Prompt与确定性代码强制，不能依赖可选Skill。
+- [ ] 每次运行最多5次确定性Analysis Tool调用、3次Skill Reference加载和9个Agent决策步骤；重复语义请求拒绝，接近HTTP时限时必须停止调查并保留综合时间。
+- [ ] `AnalysisState`显式保存假设目标及`active`、`supported`、`not_supported`、`inconclusive`状态。样本不足或质量不允许比较时只能进入`inconclusive`，Tool执行失败不能作为假设不成立的证据。
+- [ ] 每个Predicate Evidence拥有稳定引用；新Claim绑定精确Predicate Evidence，而不是只按`increase`等Predicate名称匹配。指标、RecordSet、侧别或分段不一致时Validator必须拒绝。
+- [ ] 运行结果统一为`EvidenceProduced`、`ActionRejected`或`ToolExecutionFailed`；只有`EvidenceProduced`可以更新假设证据状态。
+- [ ] 在Skill加载、Action接受、Evidence生成和State更新后保存Checkpoint。相同session、scope、package digest与版本组合下遗留的`running`记录可在再次请求时恢复；终止运行不恢复。
+- [ ] 当前记录分析不得查询或向Agent暴露未授权的个人历史、团队候选数或明细。纵向与团队Tool继续注册但禁用。
+- [ ] 新分析写入Schema v3；旧Schema v1/v2只读兼容，不原地重写。五种现有确定性分析结果的数值、Predicate语义、Evidence内容与`output_digest`必须保持不变。
+- [ ] 最终报告只能描述实际检验范围；没有对应负向Evidence时，不得把“没有继续发现高价值假设”写成“本次测试没有异常”。
+
+**错误恢复默认策略**：
+
+- 模型传输瞬时错误和SQLite临时锁定执行有限重试；LLM结构化输出允许一次修正。
+- Agent生成的非法Action作为可修正拒绝返回，运行级最多允许两次Action修正。
+- 样本不足和质量限制返回结构化`inconclusive Evidence`，不是系统错误。
+- Kernel程序错误、快照损坏和版本不兼容属于硬错误，不交给Agent解释，不进行无意义的相同重试。
+- Claim校验失败时保留全部已验证Evidence，只允许修正Claim一次；最终报告仍然原子发布，不显示部分结果。
+
+**未来文献RAG与角标引用扩展**：
+
+RAG不进入当前MVP实现，但当前架构必须保留独立扩展边界。RAG用于给已由本次数据Evidence支持的结论补充指标定义、研究背景、常见解释和方法学限制，不得替代确定性Tool证明本次记录中的数值、趋势、侧别差异或跨指标关系。
+
+```text
+Analysis Evidence
+  → 证明本次记录中存在什么模式
+
+Literature Evidence
+  → 支撑如何理解该模式及其适用限制
+```
+
+- [ ] 后期新增独立`KnowledgeRetrievalGateway`与`RetrieveKnowledgeAction`，不把RAG塞入`analyze_current_session`、`compare_longitudinal`或`compare_cohort`。
+- [ ] RAG默认在确定性分析形成候选Claim之后按需执行，避免文献先验主导本次数据模式发现；检索预算与Analysis Tool预算分开。
+- [ ] 文献结果建模为独立`LiteratureEvidence`，至少保存文献ID、题名、作者、年份、DOI/来源URI、原文片段、页码或段落定位、片段Digest、语料库版本和检索方法版本。
+- [ ] Claim分别保存本次数据`evidence_refs`和文献`citation_refs`。Citation只能支撑定义、背景、解释或限制，不能支撑本次数据事实，也不能把相关性扩展为因果、诊断、伤病预测或训练处方。
+- [ ] Agent只输出`CitationBinding`占位引用，不自行编号。确定性Renderer按首次出现顺序去重并生成上标角标及报告末尾参考文献列表。
+- [ ] Citation Validator检查每个角标可解析到文献片段、来源定位完整、Claim片段与引用支持类型匹配；RAG失败时删除文献解释，不得使已经完成的本次记录分析失效。
+- [ ] Skill版本、RAG语料库快照、检索/重排版本和Citation Provenance进入运行审计；它们不进入Analysis Kernel的结果语义`output_digest`。
+
+**实施顺序与完成标准**：
+
+1. 冻结五种Kernel现有Fixture与`output_digest`；先修复Evidence四态语义和精确Predicate绑定。
+2. 建立渐进式Skill Registry、单步Action Schema、ActionValidator与确定性State Reducer。
+3. 将`AnalysisLoop`和Gateway生产路径切换为单步执行，保留旧DAG兼容入口。
+4. 增加Typed Failure、Checkpoint和透明恢复，再接入Service、Prompt与Schema v3 Renderer。
+5. 运行权限Spy、故障注入、旧Schema读取、HTTP/UI回归和联网多轮Benchmark。
+
+完成门槛：未授权外部数据读取为0；Evidence/Fact引用准确率100%；不受支持Claim放行率0；`inconclusive`误判为`not_supported`为0；Checkpoint关键恢复案例全部通过；五种Kernel旧`output_digest`逐字节不变；默认B合成Benchmark有效运行率不低于90%、Expected Predicate Recall不低于0.80、P95低于120秒。
+
+**2026-08-11 当前实施进展**：
+
+- [x] `EvidenceItem`已增加`conclusive / inconclusive`状态；当前Plan兼容循环不再把样本不足产生的false Predicate写入`rejected_predicates`。
+- [x] 每个新生成的Predicate Evidence已有稳定ID；新Claim使用精确ID加可读Predicate名称绑定，名称与精确引用不一致时Validator拒绝。
+- [x] 新增Predicate ID与Evidence状态明确排除在旧结果语义摘要外；五种Kernel固定`output_digest`回归保持通过。
+- [x] Renderer开始写`analysis-schema/3.0`；Schema v2旧Predicate Binding仍可只读解析，不修改历史JSON。
+- [x] 本轮Report Agent相关聚焦回归为`99 passed`；其中Qt测试使用`QT_QPA_PLATFORM=offscreen`。
+- [x] 已建立评测态`report-analysis-skill/0.2-eval`：根`SKILL.md`保持精简，Jump、Treadmill Gait、Treadmill Running与Evidence指南按引用文件拆分；Benchmark加载器根据`test_type`只披露一个领域文件并记录内容Digest，尚未接入生产Prompt。
+- [x] 已为12类固定合成案例保存无Skill决策轨迹，并增加单步边界、首项方法可接受性、首轮不得做排除稳健性、跨指标输入均应有变化四类断言。单次运行中，无Skill断言通过率为43.75%，Skill v0.2为91.67%；两者首项方法可接受率均为100%，主要改善来自抑制无价值的附加节点。该结果仅用于Skill工程迭代，样本量不足，不能作为稳定性或真实运动分析准确率结论。
+- [x] Skill v0.2仍有3/12案例输出两个节点，证明单步语义不能只靠提示词保证，必须由后续`NextAnalysisAction` Schema和Validator结构化约束。旧一次性循环下Skill组Expected Predicate Recall下降不解释为Skill发现能力下降，因为当前执行器没有在每个Evidence后继续下一轮。
+- [x] 已增加`HypothesisTarget`以及`NextAnalysisAction / LoadSkillResource / StopAnalysis`判别联合Schema；Agent动作中不存在`data_scope`、权限或版本字段。
+- [x] 已增加轻量`ActionValidator`：单动作适配为内部一问一节点计划，复用现有Tool启用状态、系统推导权限、Method归属、输入与成本校验；另外拒绝重复语义请求、耗尽的Tool/Skill预算、未知或重复Skill Reference，以及Hypothesis和Action指标不一致。
+- [x] `AnalysisToolGateway.execute_action()`通过旧DAG执行器兼容执行一个已验证动作；固定Fixture证明单动作入口与旧计划入口生成完全相同的Evidence和`output_digest`。该入口尚未切换到生产`AnalysisLoop`。
+- [x] `HypothesisTarget`已增加目标Predicate；五种Analysis Method在内部Registry声明各自可产生的Predicate集合，`ActionValidator`拒绝方法与目标Predicate不匹配。该目录暂不进入旧`AgentObservation`，避免改变当前生产Prompt输入。
+- [x] 已建立独立`SequentialAnalysisState`与确定性`AnalysisStateReducer`。动作开始时登记`active`假设并消耗决策/Tool预算；精确匹配Action、Hypothesis、Method、Predicate和指标的Evidence到达后，只能归约为`supported`、`not_supported`或`inconclusive`。重复假设ID、相同语义请求、重复Evidence消费和错配Evidence均被拒绝。
+- [x] 旧`AnalysisState`字段集合保持逐字不变；当前生产Agent发送给模型的State JSON没有因新状态实现而增加字段。Skill加载与Stop决策可以更新新状态但不消耗Tool调用。
+- [x] 已增加`EvidenceProduced / ActionRejected / ToolExecutionFailed`判别联合结果。动作校验失败在Tool执行前返回`ActionRejected`；`inconclusive`仍属于`EvidenceProduced`；Tool异常不会生成Evidence。
+- [x] 已建立`SequentialActionBoundary`：瞬时Tool错误最多自动重试一次，成功时在Outcome和State记录实际尝试次数；重试耗尽返回transient failure；其他程序错误返回hard failure且不重试。当前只有显式`TransientAnalysisToolError`进入瞬时路径，禁止把任意Kernel异常猜测为可重试错误。
+- [x] `SequentialAnalysisState`记录Action修正次数、Tool重试次数和失败审计。最多允许两次Action修正；耗尽后停止。Tool失败对应的Hypothesis保持`active`且不写入`not_supported`，硬错误或重试耗尽设置明确停止原因。
+- [x] 已增加只读生产级`ReportAnalysisSkillLoader`：初始阶段仅加载根`SKILL.md`和与`test_type`精确匹配的一个领域Reference；Evidence指南只能通过白名单按需加载，重复、跨领域或未知Reference均失败关闭；运行结果记录Skill版本与合并内容Digest。
+- [x] 已增加独立`SequentialAnalysisLoop`，由Fake Agent验证`Observation + Skill + State + Evidence → NextAnalysisAction / LoadSkillResource / Stop`的逐轮语义。每轮只验证并执行一个动作，继续复用现有Gateway、五种Kernel方法和Evidence结构；旧`AnalysisLoop`、Service、HTTP和UI尚未切换。
+- [x] 新循环已覆盖多轮假设验证、Skill渐进披露、无结论证据、最多两次Action修正、瞬时Tool失败自动重试一次、硬失败原子终止和五次Tool调用预算。硬失败和修正耗尽均不调用综合阶段，不返回部分草稿。
+- [x] 已增加`SequentialLoopCheckpoint`，保存运行阶段、State、累计Evidence、Skill与四层运行版本；`action_accepted`阶段额外保存系统已验证的`pending_action`。恢复该阶段时直接完成确定性Tool调用，不重新请求Agent规划；恢复`evidence_recorded`阶段时不会重复已完成Tool。
+- [x] Checkpoint按照Skill加载、Action接受、Evidence归约、Action拒绝状态更新和进入综合阶段等完整边界写入。Session、Scope、Package Digest、Skill内容或运行版本不匹配时拒绝恢复。
+- [x] `ReportRepository`已增加追加式Checkpoint表、写入身份校验和可恢复运行查询。只有仍为`running`且模型、Prompt、Scope、快照及全部版本完全匹配的运行可被发现；`validated / rejected / failed`运行保留审计记录但不能恢复。该查询尚未接入生产Service。
+- [x] Report Analysis Skill输出契约已从旧一问一节点Plan改为单步`NextAnalysisAction / LoadSkillResource / StopAnalysis`，并通过Skill Creator校验脚本。联网测试先后发现Agent可能在Stop前不主动加载综合所需Evidence指南，以及可能重复请求系统已经加载的领域Reference：前者由系统在综合阶段按需加载；后者进入与非法Action共享的两次结构化修正预算，不执行Tool也不越权。生产Skill版本相应提升至`report-analysis-skill/0.5`。
+- [x] 真实`ReportAgent`已增加`decide()`单步结构化输出，并使用独立`report-agent-sequential-system/3.0` Always-on Prompt。旧Plan Prompt v2继续独立保留，避免兼容入口被新指令污染；Agent初始化仍不发起网络请求。
+- [x] 序贯综合调用会重新显式注入当前完整Skill Context，避免无状态模型在调查阶段加载Evidence指南后，综合阶段实际看不到该指南。没有新接口的Fake/兼容Agent继续使用原三参数`synthesize()`。
+- [x] `ReportAnalysisService`对实现`decide()`的Agent启用新序贯循环、Checkpoint Sink和可恢复运行查询；旧Agent对象继续走旧Plan循环作为兼容入口。HTTP `/report/analyze`、`/report/latest`、Worker路由和UI协议未改变。
+- [x] Service已验证跨请求恢复：数据库预留`running + action_accepted`后，新请求复用同一Run ID，先执行待处理确定性动作，再继续决策与原子发布；不会创建第二条分析运行。
+- [x] Renderer保持AnalysisPackage对外字段不变，序贯Tool调用数兼容映射到现有`cycle_count`，`replan_count`为零。运行审计使用独立Sequential Prompt版本。
+- [x] 已完成一次真实模型首决策烟雾测试：对固定Jump合成记录返回`NextAnalysisAction`，选择`analyze_current_session + verify_temporal_change + contact_time_s + increase`，结构化联合Schema解析成功。
+- [x] 已完成一次真实模型完整序贯烟雾测试：3次Agent决策、2次确定性Tool调用，假设状态分别为`supported`和`not_supported`，以`no_high_value_hypothesis`正常停止，生成1条Draft Claim并通过ClaimValidator。该单案例只证明运行闭环，不代表Benchmark效果或领域准确率。
+- [x] Claim阶段Checkpoint已扩展到`draft_generated`与`claim_repair_pending`。中断恢复复用原State、Evidence和Draft，不重复Tool或首次综合；Validator引导修正仍最多一次，修正后的Draft再次Checkpoint后再验证。跨请求故障注入证明同一Run只综合一次、只修正一次并最终原子发布。
+- [x] 序贯Benchmark已迁移到v2：记录每轮判别联合决策及Draft/Repair轨迹，不再用旧`SmallAnalysisPlan`评分新循环。旧案例中的`comparison_supported`经Kernel能力核查后不再当作隐藏模式：均值相同但离散度变化当前无对应Method Predicate；排除前后反转只能得到`remains_after_exclusion=false`；质量标记案例改为期望实际的`increase`。这是可验证性修正，不是根据模型输出删减失败样本。
+- [x] B配置正式联网Benchmark完成12类固定合成案例×3次，结果保存于`benchmark_results/report_agent_sequential_b_12x3_20260811.json`：有效运行率`100% (36/36)`，Expected Predicate Recall `92.59% (25/27)`，决策断言通过率`96.53%`，P50 `17.875 s`，P95 `47.931 s`，满足既定三项发布门槛。`co_change`和排除稳健性各有一次未召回；存在一次`239.524 s`极端延迟，虽不改变P95结论，但需要独立的生产超时控制。
+- [x] 本阶段Report Agent、Service、Worker与UI聚焦回归为`147 passed`；Qt用例通过`QT_QPA_PLATFORM=offscreen`执行。
+- [ ] 仍需完成Repository权限Spy与组合故障验收、生产HTTP截止时间/综合保留时间控制，以及去标识化真实记录和专家标注实验；合成Benchmark不能解释为真实运动分析准确率。
+
+### 2.3 论文主实验（P0）
 
 - 设计步态参数准确性验证方案：参考标准、对照数据、评价指标。
-- 完成 10–30 条 Agent 典型指令，覆盖明确、缺参数、模糊、冲突和格式场景。
-- 实现 Agent 评估脚本：配置生成成功率、关键参数正确率、澄清有效率。
-- 论文中将 Agent 定位为系统交互/辅助模块，不把它夸大为唯一创新点。
+- Config Agent：完成 10–30 条典型指令，覆盖明确、缺参数、模糊、冲突和格式场景；评价配置生成成功率、关键参数正确率和澄清有效率。
+- Report Agent：在固定合成模式之外，设计去标识化真实记录与人工专家独立标注方案；评价发现率、数值与证据正确性、无支持声明率、稳定性和延迟。
+- 论文中明确两个 Agent 的不同角色：Config Agent 处理开放自然语言配置；Report Agent 主导受限分析计划和证据综合；确定性算法、Kernel 与 Validator 保证正式数值和结论边界。
+- 合成 Benchmark 只能作为架构与工程可行性实验，不能替代真实运动员结果分析实验。
 - `素材.md` 暂不修改；后续按 `writing.md` 的规则，在第四章记录系统设计、第五章记录关键实现与方案取舍、第六章记录可复现实验数据，并明确区分“已实现”“自动化验证”和“真实准确性验证”。
 
-### 2.3 纵跳算法验证
+### 2.4 纵跳算法验证
 
 - 按当前“统计边界时间与确认时间分离”的准则继续离线验证。
 - 三组人工标注数据的当前对比为：生产算法 contact MAE `94.4 ms`、air MAE `99.2 ms`；`associated` 为 `57.1 ms` / `42.1 ms`；`touch_associated` 为 `58.1 ms` / `43.2 ms`。
@@ -113,28 +244,29 @@
 - 至少覆盖多个独立 session 后，再决定是否修改 `SingleFootDetector` 的时间戳语义。
 - 当前诊断依据见 `docs/步态参数相关/纵跳计时误差诊断与方案验证.md`，该文档保留。
 
-### 2.4 硬件和设备扩展
+### 2.5 硬件和设备扩展
 
 - `External impulse`：补充 `E_STATUS_REPORT` 转发和自动停止链路。
 - 多米段级联：参数化 LED 数量、空间坐标、距离映射和聚类逻辑，替换单段 96 LED 假设。
 
-### 2.5 相机路线
+### 2.6 相机路线
 
 - 在 Windows 设备上完成 UVC 格式列表和实际帧率验证。
 - 根据验证结果决定是否继续 SDK 模式切换，或退回较低帧率方案。
 - 相机已经嵌入主分析界面；下一步验证长时间预览、录制、后台保存和关闭程序时的 Windows 稳定性。
 
-#### 2.5.1 左右脚视觉参考标签（P1）
+#### 2.6.1 左右脚视觉参考标签（P1）
 
-**目标**：使用视觉结果为光栅触地事件提供 `left`、`right`、`both` 或 `unknown` 参考标签。光栅继续负责精确的触地/离地时刻；视觉标签属于可拒识的参考结果，不作为绝对真值。
+**目标**：当前阶段只在 `Treadmill Gait Test` 和 `Treadmill Running Test` 中，使用视觉结果为单次光栅触地事件提供 `left`、`right` 或 `unknown` 参考标签。光栅继续负责精确的触地/离地时刻；视觉标签属于可拒识的参考结果，不作为绝对真值。双脚同时落地和纵跳分类不再属于本模块的正式目标。地面直线往返跑只保留后续设计，不进入本阶段开发。
 
 **当前状态**：
 
 - 核心层、MediaPipe 适配、独立 Worker、TinySE 时间映射、事件调度、诊断界面和真实光栅验证器均已实现；视觉同步主体对应 `d3dc711`，当前分支之后仍有其他修复提交。
 - 当前仍是独立验证模块，没有把视觉结果写回 `GaitEngine`、报告、历史记录或主 UI。
-- Windows 左脚会话已记录 10 次 `grid_touch`，10 次均输出 `left_foot_descended_and_settled`；同步就绪率 `100%`、暖机 `1185.461 ms`、不确定度 P95 `1.148 ms`、Pose 覆盖率 `100%`、决策延迟 P95 `294.94 ms`。
-- 上述左脚会话没有逐次人工标签，因而只能确认输出一致和同步指标通过，不能把 `LabelAccuracy = 0` 或预期的 `100%` 当作正式准确率结论。
-- 右脚 10 次和双脚跳 10 次尚未完成；多受试者、遮挡、交叉步和异常踩踏也尚未验证。
+- 受控单脚踩入已经得到人工已知动作结果：左脚 `10/10`、右脚 `10/10`。这只证明简单、清晰、单脚动作下可以工作。
+- TinySE 最近有效会话的同步状态为 `ready`，不确定度通常约 `1–10 ms`；当前主要瓶颈已经从时钟同步转为关键点质量、事件特征和真实数据覆盖。
+- 随机顺序、连续同脚、设备外移动、交叉腿、轻微踉跄、遮挡、多受试者和不同机位尚未形成独立真值验收，因此不能宣称算法已经稳定。
+- 录制、人工标注、离线 Replay 和统一 Windows 桌面工具已经实现；当前优先级是建立真实数据闭环，不继续凭单次演示手工调权重。
 
 **已确认方案**：
 
@@ -177,7 +309,7 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
   → 全局递增 VIDEO 推理 + 姿态结果缓存
   → 按 event_id 取回窗口内关键点序列
   → 质量门 + 时序一致性 + 事件级置信度
-  → left / right / both / unknown
+  → left / right / unknown
   → 独立参考标签输出
   → 后续薄适配器可做高置信融合；否则保留光栅判断
 ```
@@ -185,8 +317,101 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
 **模式约束**：
 
 - 跑步机/步态模式的左右交替只作为异常提示和拒识依据，不得反向覆盖高质量视觉结果。
-- `both` 在纵跳模式是有效标签；在跑步机/步态模式表示近同时多脚接触，不参与左右映射翻转。
-- 任一关键链路缺失、置信度不足、窗口结果矛盾、双脚无法分离或视觉延迟超标时输出 `unknown`。
+- Jump 模式继续使用原有光栅逻辑；视觉模块不承担双脚落地识别。
+- 任一关键链路缺失、置信度不足、窗口结果矛盾、左右身份有歧义或视觉延迟超标时输出 `unknown`。
+
+**当前开发阶段：Vision-assisted Foot Phase Resynchronization**：
+
+当前生产边界不再是“视觉独立决定并逐步覆盖左右脚”，而是“设备为主、视觉校验整体相位”。光栅继续提供唯一权威 `t_contact`，现有 A/B 交替状态机继续生成不可修改的 `raw_device_label`；视觉在每个触地窗口输出 `left/right/unknown` 与两侧 evidence，`FootPhaseManager` 仅在观察到覆盖两个相反设备标签的完整交叉反证后切换 `phase_offset`：
+
+```text
+Device: L → R
+Vision: R → L
+→ phase_offset toggle
+```
+
+`LL/RR`、同设备标签的两次 mismatch、单次视觉错误、设备间隔异常、Pose 低质量或只有 `unknown` 均不得自动翻转。第一次 mismatch 后允许跨最多 2 个连续 `unknown`，确认必须在从第一次 mismatch 起的 4 个 contact 内完成；一次高质量 agreement 立即取消 SUSPECT。确认后只回填短 pending 窗口，不修改更早的 Session 历史。所有事件分别保存 `raw_device_label`、`effective_device_label`、`final_label`、`phase_offset`、`phase_epoch` 与 flip 起止事件。
+
+首版只接入独立验证器与 Replay，不修改 `hardware/`、`GaitEngine`、报告或主程序。验证器提供会话级跑带后端/前端两点标定和“校正左右脚相位”手动按钮；`landing_v1` 完整保留。Replay 支持 `landing-v1`、`visual-evidence-v2`、`phase-resync-v1` 和 phase-slip injection。上线安全门仍是 frozen test 中 false automatic phase flip 为 0，至少 100 次可恢复注入的恢复率不低于 95%，且恢复所需 contact 数 P95 不超过 4。
+
+实现状态：
+
+- [x] 建立 `landing_v2` 图像平面非正交坐标、`peak_phase / velocity_turn / post_backward` 证据和保守拒识门。
+- [x] 实现严格 `NORMAL / SUSPECT` 状态机、相反设备标签双证据确认、TTL、短窗口回填、manual flip 和 phase epoch。
+- [x] 扩展 Session 原始/有效/最终标签、证据、异常、phase provenance 与 Replay diagnostics。
+- [x] 接入独立验证器的两点标定、手动phase校正和退出安全flush。
+- [x] 增加 V1/V2/phase Replay 与不修改原Session的 phase-slip injection。
+- [ ] 在 Windows TinySE 真机完成 tuning dataset、frozen test 与运行Gate验收；通过前自动phase flip不得进入主程序。
+
+**历史研究草案：逐事件 `landing_v2` 直接分类（已被上述phase重同步方案取代，不作为首版生产路径）**：
+
+当前 `landing_v1` 主要比较事件前后 `foot_y - hip_y` 的变化，并要求触地后足部下降和稳定。该特征没有利用跑步机前后方向，而且触地后的 200 ms 内，膝关节缓冲和跑带后移可能使腿部伸展量保持不变或减小。因此下一版保持模型、时间同步和事件调度不变，只替换事件级特征与左右身份质量判断。
+
+参考 [Automated Gait Analysis Based on a Marker-Free Pose Estimation Model](https://pmc.ncbi.nlm.nih.gov/articles/PMC10384445/) 及其开源复现 [gaitanalyzer](https://github.com/abishekmuthian/gaitanalyzer) 的“髋部—foot index 相对轨迹与步态相位”思路，但不直接复制其离线全视频峰值搜索、XYZ 欧氏距离、高阶滤波或 AGPL-3.0 源码。Iron_Jump 已由光栅提供 `t_contact`，只需判断事件附近哪一侧更符合触地相位。
+
+本阶段目标数据流：
+
+```text
+跑步机方向会话标定
+  → 将关键点投影到“跑步机纵向 + 人体垂直”二维坐标
+光栅触地事件 t_contact
+  → 读取 [t_contact - 250 ms, t_contact + 200 ms] Pose
+  → 左右身份连续性与观测质量检查
+  → 左右脚事件局部轨迹特征
+  → left_evidence / right_evidence
+  → left / right / unknown
+```
+
+跑步机方向标定规则：
+
+- 每次相机位置变化后，用户在预览中按固定顺序标记跑带后方和前方，得到二维跑步机纵向；首版不要求从人体动作中全自动猜测相机方向。
+- 受试者自然站立 1～2 秒，以骨盆中点到双踝中点的稳健中位方向估计人体垂直方向。计算方向时先把归一化坐标还原为像素坐标，避免 16:9 画面中 X/Y 比例不同造成角度失真。
+- 跑步机纵向与人体垂直方向构成二维非正交基，通过解线性方程得到纵向和垂直分量；不得直接假定画面 X 轴等于跑步机方向。
+- 质量门检查的是两个方向在**二维画面中的投影**是否可分。近侧视或斜侧视可接受；接近跑步机正前方/正后方、纵向投影过短、两个投影接近平行或双腿长期重叠时，视觉保持禁用并回退光栅。
+- 标定结果只在当前相机会话内使用；相机移动、重新打开或流重启后必须失效并重新标定。
+
+`landing_v2` 每侧特征：
+
+- 以 ankle 为核心观察点，foot index 和 heel 作为足部方向、贴近跑带及结果增强；任一增强点短暂低质量不应单独废掉整条腿。
+- 使用同侧脚相对骨盆/髋部的有方向纵向轨迹，不使用无方向的 XYZ 欧氏距离，也不再把触地后伸展量继续增大作为必要条件。
+- 触地前提取稳健的前摆速度和纵向位移；`t_contact` 附近计算前向局部极值接近程度；触地后用于检查相对速度下降、方向转变和进入支撑轨迹。
+- 垂直方向只作为接近跑带和运动一致性的辅助证据；膝角及其变化作为低权重辅助特征，不作为单独决定条件。
+- 当前窗口的成功 Pose 数较少，不直接采用论文或 `gaitanalyzer` 的 10 阶双向 Butterworth。首版优先使用中位数去异常和基于真实时间戳的低阶稳健斜率/局部拟合。
+
+判定与拒识规则：
+
+- 分开计算 `observation_quality`、`identity_quality` 和 `contact_evidence`，MediaPipe 的 visibility/presence 不能解释为“该腿解剖身份正确的概率”。
+- 一侧存在高质量、高身份可靠性的强正触地证据时，即使另一侧因遮挡缺少触地证据，也允许输出该侧。
+- 只有在“光栅确认本事件恰有一只新触地脚、A 侧观测与身份均可靠、A 侧得到强负证据”时，才能以排除法判为 B 侧；A 侧看不清或身份歧义不属于强负证据。
+- 通过踝、膝位置连续性、速度连续性和腿长突变检测疑似左右交换。首版检测到歧义直接输出 `unknown/identity_ambiguous`，不强制交换、不强制左右交替。
+- `confidence` 在完成真实数据校准前只作为 `raw_score` 使用，不解释为正确率概率；正式融合阈值必须依据独立真值的 risk-coverage 结果确定。
+
+`landing_v2` 开发顺序：
+
+- [ ] 定义会话级跑步机方向标定数据结构、失效条件和质量诊断，不修改相机预览与录制接口。
+- [ ] 在独立验证窗口中增加跑带后方/前方两点标定、站立垂直估计、方向箭头和可用性提示。
+- [ ] 为 Pose 样本生成纵向/垂直相对轨迹，并在 Session 数据中保存标定参数、原始坐标和变换后坐标，保证旧数据仍可 Replay。
+- [ ] 实现基于真实时间戳的局部稳健轨迹特征：触地前前摆、事件附近前向极值、触地前后速度转变、触地后支撑趋势和辅助垂直证据。
+- [ ] 分离左右侧观测质量、身份质量和触地证据，放宽 ankle 核心、heel/foot index 增强的质量门。
+- [ ] 实现轻量左右身份异常检测；身份歧义只拒识，不在首版自动交换 MediaPipe 标签。
+- [ ] 将新算法作为版本化 `landing_v2` 接入离线 Replay；保留 `landing_v1`，对同一 Session 输出逐事件差异和 reject reason，不直接替换在线默认值。
+- [ ] 在 Windows 上按正常交替、随机左右、连续同脚、设备外动作、交叉腿、轻微踉跄和短暂遮挡采集独立人工真值，分别统计 accepted accuracy、coverage、unknown rate、直接正证据错误率和排除法错误率。
+- [ ] 只有 `landing_v2` 的高置信错误率和覆盖率通过预先冻结的验收门槛后，才将其设为独立验证器默认分类器；主程序融合仍另行评审。
+
+**后续阶段：地面直线往返跑（暂不开发）**：
+
+地面布置时，运动员可沿同一直线双向通过设备。场地直线本身保持固定，但运动员的当前前进方向会在每一趟之间翻转，因此不能沿用跑步机的固定有向纵轴，也不能把画面左/右解释为解剖左/右。
+
+后续方案保留以下边界：
+
+- 会话开始时标定一条无方向的场地轴；沿轴的正负只用于坐标表达，不代表运动员当前朝向。
+- 对骨盆沿场地轴的位置序列做稳健斜率估计，得到每一趟的 `+1/-1` 运动方向，再用 `forward_position = travel_direction × relative_position` 把去程和返程统一为“身体前方为正”。
+- 使用 `FORWARD / TURNING / BACKWARD` 方向状态机，要求方向持续稳定后才切换；转身、停止、方向速度不足或状态不确定期间的事件输出 `unknown/direction_transition`。
+- 若运动员在设备外完成转身，下一趟方向稳定后重新启用视觉；若在检测区域内转身，不用普通触地相位规则强制分类。
+- 方向翻转后清空或重新初始化短期左右身份轨迹，等待若干高质量 Pose 后再恢复视觉，避免近侧腿变化和遮挡关系反转污染旧状态。
+- 该模式必须独立验证去程、返程、转身邻近事件、临时变向和踉跄；跑步机 `landing_v2` 的通过结果不能直接视为地面模式已经通过。
+
+启动地面模式开发的前置条件：跑步机 `landing_v2` 已完成真机验收，方向标定与轨迹变换接口稳定，并已取得包含去程、返程和转身的同步视频及人工事件真值。在此前不新增地面方向状态机，不修改普通 `Sprint and Gait Test`。
 
 **开发与验证任务**：
 
@@ -195,17 +420,18 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
 - [x] 实现 TinySE 会话级自动时间映射、状态转换、偏移冻结、严格递增输出和退化拒识。
 - [x] 实现毫秒窗口调度器、全局递增推理游标和可复用的姿态结果缓存。
 - [x] 在独立 Worker 中接入 Pose Landmarker Full `VIDEO` 模式，只暴露帧输入、事件输入、结果输出和生命周期接口。
-- [x] 实现视觉质量门和四类独立参考标签；高置信融合及光栅安全回退另立薄适配任务，不进入首版模块。
+- [x] 实现视觉质量门和可拒识的事件级参考标签；当前正式目标只保留 `left`、`right`、`unknown`。高置信融合及光栅安全回退另立薄适配任务，不进入首版模块。
 - [ ] 增加测试前入镜质量检查，覆盖髋、膝、踝、脚跟和 foot index 的可见性。
 - [ ] 对 Full 与可选 Lite 分别标定置信阈值；不允许未验证的静默降级。
 - [x] 补充稳定映射、回调抖动、时间回退、流重启、漂移、严格递增、窗口重叠、采样诊断和退化拒识的自动化测试。
 - [ ] 在无独显 Windows CPU 设备上进行端到端压测：光栅帧无丢失、队列不积压、UI 无明显停顿，从触地事件到视觉结果的 P95 延迟（包含等待 `post_event_ms`）目标不超过 350ms。
 - [ ] 按受试者、机位和 session 分组验证已输出标签的精确率与覆盖率，单独统计交叉步、设备外踩踏、踉跄、遮挡和近同时接触。
-- [ ] 完成右脚 10 次和双脚跳 10 次 Windows 验收，并为三组 CSV 批量补充已知动作真值后重新计算准确率。
+- [x] 完成受控左脚和右脚各 10 次基础检查。
+- [ ] 使用 Vision Session 工具完成跨受试者、跨 session 和困难场景的独立真值验收。
 
 **Windows 自动同步验收与后续校准门槛**：
 
-- 每个独立会话分别执行左脚 10 次、右脚 10 次和双脚跳 10 次；Jump 首次没有前序离地的触地标记为 `baseline`，保留在 CSV 中但不进入落地准确率和覆盖率分母。
+- 第一阶段分别执行正常交替、随机顺序、连续同脚、设备外移动、交叉腿、轻微踉跄和遮挡场景；按受试者与 Session 隔离训练、校准和最终测试数据。
 - 自动方案通过条件：同步在 2 秒内进入 `ready`；同步不确定度 P95 不超过 40 ms；干净动作中触地前后姿态均充足的事件覆盖率不低于 80%；视觉决策 P95 不超过 350 ms。
 - 如果同步内部指标稳定，但至少 10 个高质量事件持续存在超过一个实际 Pose 采样周期的固定偏移，下一阶段才开发“三次踩踏校准”。
 - 如果偏移抖动本身超过一个实际 Pose 采样周期，三次踩踏无法修复随机抖动；继续输出视觉拒识并诊断相机采集链路，不自动切换校准方案。
@@ -217,9 +443,9 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
 - 独立验证器只借用 `SessionController` 获取真实光栅事件并输出诊断 CSV，不修改 engine、报告或主 UI。
 - 只有完成 Windows 依赖、CPU 延迟和真人准确率验收后，才讨论高置信融合、A/B 映射更新和 UI 开关。
 
-初始视觉模块的文件和接口清单见 `docs/superpowers/plans/2026-07-15-visual-foot-reference.md`；其中旧的窗口和延迟起点仅记录初版实现，本节的 TinySE 时间同步、`250 ms + 200 ms` 窗口和 350 ms 验收目标优先。
+视觉模块的当前接口、Session 数据结构、标注/Replay 流程和 Windows 验收入口见 `vision/README.md`；旧 Superpowers 阶段计划已被本计划和该 README 吸收，不再作为事实源。
 
-### 2.6 跑步机步态周期检测与显示
+### 2.7 跑步机步态周期检测与显示
 
 **当前状态**：算法、检测页、报告、Excel 和历史记录开发已经完成，并通过合成事件与自动化测试验证；顶部参数卡裁切、周期倒序排列和自动定位到最新周期也已修复。当前缺口是跑步机步态/跑步原始帧及 OptoJump 或人工标注真值，尚不能声明真实检测准确性。
 
@@ -291,7 +517,7 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
 - [x] 使用合成事件序列验证同侧周期边界、跨侧事件关联、步行双支撑、跑步腾空及 `0` / `N/A` 语义；补充真实采集回放和参考数据后，再完成准确性验证。
 - [ ] 收集跑步机步态和跑步原始帧及 OptoJump/人工标注结果，统计触地/离地事件误差、周期指标误差、拒识率和异常事件分布，完成第二阶段真实准确性验证。
 
-### 2.7 架构分层
+### 2.8 架构分层
 
 按风险从低到高推进，不进行一次性大搬家：
 
@@ -302,18 +528,18 @@ TinySE 采集（原始帧 + DirectShow sample time + 回调时间）
 - [ ] 引入 `DeviceTopology(segment_count, leds_per_segment, spacing_cm)`。
 - [ ] 清理模块启动时的路径 hack，并补充依赖边界检查。
 
-### 2.8 文档一致性（P1）
+### 2.9 文档一致性（P1）
 
 - [x] 更新 `README.md` 中仍把 LED 足迹和相机嵌入写成未来工作的旧状态。
 - [ ] 更新 `docs/architecture.md` 中已经不存在的 `CLAUDE.md` 引用和过时模块树。
 - [ ] 核对并处理 `docs/步态参数相关/步态周期定义.md` 的未提交修改，保持“不建立左右周期配对”和“无法拆分双支撑子阶段时使用 N/A”的语义一致。
 - [ ] 跑步机长度算法收敛后，同步 `docs/treadmill_architecture.md`、参数定义和算法说明，避免文档分别描述两套实现。
 
-### 2.9 未来测试类型
+### 2.10 未来测试类型
 
 暂未实现：Sprint and Gait、Tapping、Reaction Times、Static Test (Sway) 等。新增模式应沿用配置 → processor → report → UI 的分发模式，不污染 Jump Test 和现有跑步机模式。
 
-### 2.10 主 UI 信息架构与组件迁移（P1）
+### 2.11 主 UI 信息架构与组件迁移（P1）
 
 **目标**：在当前 UI 截图右侧重建可编辑的 Figma 桌面端界面，并以此作为后续 PySide6 主界面改版依据。画布尺寸和当前 UI 截图保持一致；文字、按钮、输入框、卡片和导航均使用独立图层及 Auto Layout，不把新方案再次做成不可编辑位图。
 

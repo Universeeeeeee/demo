@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -48,6 +49,17 @@ class EventHook:
                 log.exception("Vision event callback failed")
 
 
+@dataclass(frozen=True)
+class PoseInferenceRecord:
+    """Timing and result for one actual MediaPipe inference attempt."""
+
+    frame_timestamp_s: float
+    inference_start_timestamp_s: float
+    inference_end_timestamp_s: float
+    pose: object | None
+    error: str | None = None
+
+
 class FootVisionService:
     """Own an isolated pose adapter, scheduler, and bounded input queues."""
 
@@ -64,6 +76,7 @@ class FootVisionService:
         self.model_path = Path(model_path)
         self.decision_ready = EventHook()
         self.pose_ready = EventHook()
+        self.pose_inference_ready = EventHook()
         self.status_changed = EventHook()
 
         self._adapter_factory = adapter_factory
@@ -165,7 +178,30 @@ class FootVisionService:
                 self.status_changed.emit("ready")
 
             def infer_pose(frame, timestamp_ms):
-                pose = adapter.infer_bgr(frame, timestamp_ms)
+                inference_start_s = self._clock()
+                try:
+                    pose = adapter.infer_bgr(frame, timestamp_ms)
+                except Exception as exc:
+                    inference_end_s = self._clock()
+                    self.pose_inference_ready.emit(
+                        PoseInferenceRecord(
+                            timestamp_ms / 1000.0,
+                            inference_start_s,
+                            inference_end_s,
+                            None,
+                            str(exc),
+                        )
+                    )
+                    raise
+                inference_end_s = self._clock()
+                self.pose_inference_ready.emit(
+                    PoseInferenceRecord(
+                        timestamp_ms / 1000.0,
+                        inference_start_s,
+                        inference_end_s,
+                        pose,
+                    )
+                )
                 if pose is not None:
                     self.pose_ready.emit(pose)
                 return pose

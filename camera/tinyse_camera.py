@@ -299,6 +299,7 @@ class TinySeCameraCapture(QObject):
     analysis_frame_timed_ready = Signal(object, object)
     stats_updated = Signal(float, float)
     recording_finished = Signal(str)
+    started = Signal()
     error = Signal(str)
 
     def __init__(
@@ -326,6 +327,8 @@ class TinySeCameraCapture(QObject):
         self._record_lock = threading.Lock()
         self._record_finalizing = False
         self._record_finalize_thread: threading.Thread | None = None
+        self._record_preserve_raw = False
+        self._last_record_stats = None
         self._mirror = True  # 软件镜像
         self._preview_enabled = True
 
@@ -377,6 +380,7 @@ class TinySeCameraCapture(QObject):
             capture.start()
             _log_timing(f"dshow.start={time.perf_counter() - start:.3f}s")
             self._running = True
+            self.started.emit()
             _log_timing(f"capture.worker.ready={time.perf_counter() - total_start:.3f}s")
             while self._running:
                 stats = capture.stats()
@@ -398,13 +402,18 @@ class TinySeCameraCapture(QObject):
             self._capture.stop()
             _log_timing(f"dshow.stop={time.perf_counter() - start:.3f}s")
 
-    def start_record(self) -> str | None:
+    def start_record(
+        self,
+        stem: str | Path | None = None,
+        *,
+        preserve_raw: bool = False,
+    ) -> str | None:
         with self._record_lock:
             if self._capture is None or self._recording or self._record_finalizing:
                 return None
             capture = self._capture
         try:
-            mjpg_path, csv_path = capture.start_record()
+            mjpg_path, csv_path = capture.start_record(stem)
         except Exception as exc:
             self.error.emit(str(exc))
             return None
@@ -412,6 +421,7 @@ class TinySeCameraCapture(QObject):
             self._recording = True
             self._record_path = mjpg_path
             self._csv_path = csv_path
+            self._record_preserve_raw = preserve_raw
             self._record_start = time.perf_counter()
         return str(mjpg_path)
 
@@ -430,16 +440,18 @@ class TinySeCameraCapture(QObject):
                 capture = self._capture
                 mjpg_path = self._record_path
                 csv_path = self._csv_path
+                preserve_raw = self._record_preserve_raw
                 self._recording = False
                 self._record_path = None
                 self._csv_path = None
+                self._record_preserve_raw = False
                 self._record_finalizing = True
                 if wait:
                     thread_to_join = None
                 else:
                     thread = threading.Thread(
                         target=self._finalize_recording,
-                        args=(capture, mjpg_path, csv_path),
+                        args=(capture, mjpg_path, csv_path, preserve_raw),
                         name="TinySeRecordFinalize",
                         daemon=True,
                     )
@@ -452,7 +464,7 @@ class TinySeCameraCapture(QObject):
                 thread_to_join.join()
             return True
 
-        self._finalize_recording(capture, mjpg_path, csv_path)
+        self._finalize_recording(capture, mjpg_path, csv_path, preserve_raw)
         return True
 
     def _finalize_recording(
@@ -460,14 +472,15 @@ class TinySeCameraCapture(QObject):
         capture: TinySeDShowCapture,
         mjpg_path: Path | None,
         csv_path: Path | None,
+        preserve_raw: bool = False,
     ) -> None:
         try:
             try:
-                capture.stop_record()
+                self._last_record_stats = capture.stop_record()
             except Exception as exc:
                 self.error.emit(str(exc))
 
-            if mjpg_path is not None and csv_path is not None:
+            if not preserve_raw and mjpg_path is not None and csv_path is not None:
                 try:
                     avi_path = mjpg_to_avi(mjpg_path, csv_path)
                     self.recording_finished.emit(str(avi_path))
@@ -479,6 +492,10 @@ class TinySeCameraCapture(QObject):
                 self._record_finalizing = False
                 if self._record_finalize_thread is threading.current_thread():
                     self._record_finalize_thread = None
+
+    @property
+    def last_record_stats(self):
+        return self._last_record_stats
 
     def set_mirror(self, on: bool):
         self._mirror = on
