@@ -97,10 +97,10 @@ def test_single_foot_detector_confirms_touch_and_lift_after_required_samples():
     assert events[1].centroid_cm is None
 
 
-def test_single_foot_detector_ignores_clusters_shorter_than_ten_leds():
+def test_single_foot_detector_ignores_clusters_shorter_than_four_leds():
     detector = SingleFootDetector(confirm_samples=1)
 
-    events = detector.consume(SingleFootFrame(0.0, _bits(20, 28)))
+    events = detector.consume(SingleFootFrame(0.0, _bits(20, 22)))
 
     assert events == []
 

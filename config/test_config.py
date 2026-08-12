@@ -55,6 +55,7 @@ class TestConfig:
     min_contact_time: int = 60                # ms, 低于此值的接触视为无效
     min_flight_time: int = 0                  # ms, 低于此值的腾空视为无效, 0=禁用
     max_flight_time: int = 0                  # ms, 超过此值的腾空直接丢弃, 0=禁用
+    flight_time_review_threshold: int = 700  # ms, 超过时仅标记复核，不自动丢弃
 
     # ---- Layer 4: 可选反馈参数 ----
     metronome_enabled: bool = False
@@ -154,6 +155,7 @@ def default_jump_config() -> TestConfig:
         min_contact_time=60,
         min_flight_time=0,
         max_flight_time=0,
+        flight_time_review_threshold=700,
         metronome_enabled=False,
         metronome_bpm=120,
     )

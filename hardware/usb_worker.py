@@ -6,6 +6,7 @@ usb_worker.py — USB 硬件数据采集 Worker（基于 receive.CyUsbInterfaceD
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 
@@ -21,12 +22,57 @@ except ImportError:
         E_DATA_REPORT = 0x82
 
 
+LED_HEALTH_TARGET_FRAMES = 64
+LED_HEALTH_MIN_FRAMES = 20
+LED_HEALTH_TIMEOUT_S = 0.8
+
+
+def summarize_led_health(contact_frames: list[list[int]]) -> dict:
+    """Summarize per-LED continuity from a short unobstructed sampling window."""
+    frames = [
+        [1 if int(bit) else 0 for bit in frame[:96]]
+        for frame in contact_frames
+        if len(frame) >= 96
+    ]
+    sample_count = len(frames)
+    if sample_count < LED_HEALTH_MIN_FRAMES:
+        return {
+            "status": "insufficient",
+            "sample_count": sample_count,
+            "disconnected_leds": [],
+            "flickering_leds": [],
+        }
+
+    disconnected: list[int] = []
+    flickering: list[int] = []
+    transition_threshold = max(4, math.ceil((sample_count - 1) * 0.10))
+    for led_index in range(96):
+        values = [frame[led_index] for frame in frames]
+        if all(values):
+            disconnected.append(led_index + 1)
+            continue
+        transitions = sum(
+            current != previous
+            for previous, current in zip(values, values[1:])
+        )
+        if transitions >= transition_threshold:
+            flickering.append(led_index + 1)
+
+    return {
+        "status": "warning" if disconnected or flickering else "normal",
+        "sample_count": sample_count,
+        "disconnected_leds": disconnected,
+        "flickering_leds": flickering,
+    }
+
+
 class UsbWorker(QObject):
     data_received = Signal(str)   # 文本日志（HEX）- 节流
     device_state_changed = Signal(str, str)  # state, user-facing detail
     led_bits_signal = Signal(list)  # 96 位 LED 位图 (物理语义: 1=LED亮/未遮挡) - 节流，供 UI
     led_contact_signal = Signal(list)  # 96 位 LED 位图 (接触语义: 1=遮挡/触地) - 节流，供 UI
     raw_contact_signal = Signal(list, float)  # 96 位无损状态 (1=触地) & 精确时间戳 - 供算法无损计算
+    led_health_changed = Signal(dict)  # 轻量 LED 通断/闪烁检查结果
 
     def __init__(self, dll_path=None, vid=0x04B4, pid=0x1004, timeout_ms=30, chunk_size=512):
         super().__init__()
@@ -55,6 +101,13 @@ class UsbWorker(QObject):
         self._pending_hex = None
         self._pending_bits = None
         self._flush_timer = None
+        self._health_frames: list[list[int]] = []
+        self._health_check_active = False
+        self._health_owns_capture = False
+        self._health_deadline = 0.0
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(50)
+        self._health_timer.timeout.connect(self._poll_led_health)
 
     # --- 工具 ---
     def _emit(self, msg: str):
@@ -182,6 +235,7 @@ class UsbWorker(QObject):
             
             # --- 1. 无损高频发射 (供算法通道) ---
             contact_bits = [1 - b for b in bits]
+            self._record_led_health_frame(contact_bits)
             try:
                 self.raw_contact_signal.emit(contact_bits, time.perf_counter())
             except Exception:
@@ -231,6 +285,7 @@ class UsbWorker(QObject):
             
             # --- 1. 无损高频发射 (供算法通道) ---
             contact_bits = [1 - b for b in bits]
+            self._record_led_health_frame(contact_bits)
             try:
                 self.raw_contact_signal.emit(contact_bits, time.perf_counter())
             except Exception:
@@ -286,8 +341,18 @@ class UsbWorker(QObject):
             self._emit_state("error", "设备尚未连接，无法开始采集。")
             return
         if self._capturing:
+            if self._health_check_active and self._health_owns_capture:
+                self._health_check_active = False
+                self._health_owns_capture = False
+                self._health_timer.stop()
             self._emit_state("streaming", "设备正在采集")
             return
+        if not self._start_capture_stream():
+            return
+        self._emit_state("streaming", "设备正在采集")
+
+    def _start_capture_stream(self) -> bool:
+        """Start callbacks without deciding how the UI labels the stream."""
         self._ensure_timer()
         try:
             try:
@@ -300,12 +365,89 @@ class UsbWorker(QObject):
             ret = self.dev.start_auto_read(self.chunk_size)
             if ret != 0:
                 self._emit_state("error", f"start_auto_read 失败: {ret}")
-                return
+                return False
             self._capturing = True
-            self._emit_state("streaming", "设备正在采集")
+            return True
         except Exception as e:
             self._capturing = False
             self._emit_state("error", f"启动读取失败: {e}")
+            return False
+
+    @Slot()
+    def refresh_led_health(self):
+        """Collect a small background sample and report only per-LED anomalies."""
+        if self.dev is None:
+            self.led_health_changed.emit(
+                {
+                    "status": "insufficient",
+                    "sample_count": 0,
+                    "disconnected_leds": [],
+                    "flickering_leds": [],
+                }
+            )
+            return
+
+        owns_existing_stream = (
+            self._health_check_active and self._health_owns_capture
+        )
+        self._health_frames.clear()
+        self._health_check_active = True
+        self._health_deadline = time.perf_counter() + LED_HEALTH_TIMEOUT_S
+        self.led_health_changed.emit(
+            {
+                "status": "checking",
+                "sample_count": 0,
+                "disconnected_leds": [],
+                "flickering_leds": [],
+            }
+        )
+        if not self._capturing:
+            if not self._start_capture_stream():
+                self._health_check_active = False
+                return
+            self._health_owns_capture = True
+        else:
+            self._health_owns_capture = owns_existing_stream
+        self._health_timer.start()
+
+    def _record_led_health_frame(self, contact_bits: list[int]) -> None:
+        if not self._health_check_active:
+            return
+        if (
+            len(contact_bits) >= 96
+            and len(self._health_frames) < LED_HEALTH_TARGET_FRAMES
+        ):
+            self._health_frames.append(list(contact_bits[:96]))
+
+    def _poll_led_health(self) -> None:
+        if not self._health_check_active:
+            self._health_timer.stop()
+            return
+        if (
+            len(self._health_frames) >= LED_HEALTH_TARGET_FRAMES
+            or time.perf_counter() >= self._health_deadline
+        ):
+            self._finish_led_health()
+
+    def _finish_led_health(self) -> None:
+        if not self._health_check_active:
+            return
+        self._health_check_active = False
+        self._health_timer.stop()
+        result = summarize_led_health(self._health_frames)
+        self._health_frames.clear()
+
+        if self._health_owns_capture and self.dev is not None:
+            try:
+                self.dev.set_on_bytes(None)
+                self.dev.set_on_frame(None)
+                self.dev.stop_auto_read()
+                self.dev.stop_capture()
+            except Exception:
+                pass
+            self._capturing = False
+        self._health_owns_capture = False
+        self.led_health_changed.emit(result)
 
     def start(self):
         """Backward-compatible one-shot start for legacy tools."""
@@ -315,6 +457,10 @@ class UsbWorker(QObject):
 
     def stop(self):
         self._stop.set()
+        self._health_check_active = False
+        self._health_owns_capture = False
+        self._health_frames.clear()
+        self._health_timer.stop()
         if self._flush_timer is not None:
             try:
                 self._flush_timer.stop()

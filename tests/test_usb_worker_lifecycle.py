@@ -85,3 +85,63 @@ def test_connect_failure_emits_structured_error(monkeypatch):
 
     assert states[-1][0] == "error"
     assert "打开设备失败" in states[-1][1]
+
+
+def test_led_health_summary_reports_exact_disconnected_and_flickering_leds():
+    frames = [[0] * 96 for _ in range(64)]
+    for frame in frames:
+        frame[2] = 1
+    for index, frame in enumerate(frames):
+        frame[6] = index % 2
+
+    result = usb_worker.summarize_led_health(frames)
+
+    assert result == {
+        "status": "warning",
+        "sample_count": 64,
+        "disconnected_leds": [3],
+        "flickering_leds": [7],
+    }
+
+
+def test_led_health_summary_is_quiet_when_all_leds_are_stable():
+    result = usb_worker.summarize_led_health([[0] * 96 for _ in range(64)])
+
+    assert result["status"] == "normal"
+    assert result["disconnected_leds"] == []
+    assert result["flickering_leds"] == []
+
+
+def test_led_health_summary_requires_a_minimum_sample():
+    result = usb_worker.summarize_led_health([[0] * 96 for _ in range(19)])
+
+    assert result["status"] == "insufficient"
+
+
+def test_led_health_refresh_uses_short_capture_without_streaming_state(
+    qtbot, monkeypatch
+):
+    monkeypatch.setattr(usb_worker, "CyUsbInterfaceDevice", _FakeDevice)
+    worker = usb_worker.UsbWorker(dll_path="fake")
+    states = []
+    health_results = []
+    worker.device_state_changed.connect(
+        lambda state, message: states.append((state, message))
+    )
+    worker.led_health_changed.connect(health_results.append)
+    worker.connect_device()
+
+    worker.refresh_led_health()
+    for _ in range(usb_worker.LED_HEALTH_TARGET_FRAMES):
+        worker._record_led_health_frame([0] * 96)
+    worker._poll_led_health()
+
+    assert [state for state, _message in states] == ["connecting", "connected"]
+    assert [result["status"] for result in health_results] == [
+        "checking",
+        "normal",
+    ]
+    assert worker.dev.opened
+    assert not worker.dev.capture_started
+    assert not worker.dev.auto_read_started
+    worker.stop()

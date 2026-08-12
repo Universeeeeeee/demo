@@ -444,6 +444,20 @@
             ],
             "source": "4.2.2.2/4.4.1.2",
             "priority": "core"
+          },
+          {
+            "name": "flight_time_review_threshold",
+            "display_name": "腾空复核阈值 Flight Time Review Threshold",
+            "description": "超过此值的腾空时间标记为需复核，但不自动丢弃。设为0禁用",
+            "type": "integer",
+            "unit": "ms",
+            "range": "0-3000",
+            "default": 700,
+            "applicable_tests": [
+              "Jump Test"
+            ],
+            "source": "Iron Jump quality control",
+            "priority": "core"
           }
         ]
       },

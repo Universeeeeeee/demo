@@ -86,6 +86,7 @@ class GaitEngine(QObject):
 
     # === 高级事件信号 (跨线程发往 UI，低频: 每秒 2~5 次) ===
     hop_event = Signal(object)            # FootEvent, 纵跳模式的触地/腾空
+    jump_quality_notice = Signal(dict)    # 纵跳非计数质量提示
     gait_step_event = Signal(object)      # GaitStepEvent, 步态模式的触地/离地
 
     # === 步态模式周期性状态快照 (节流: ~10Hz，供 UI 面板刷新) ===
@@ -245,11 +246,10 @@ class GaitEngine(QObject):
             )
             self._stop_timer.stop()
 
-        # 暂停时重置检测器的连续帧计数器，避免恢复后读到过时的 streak
         if self._processor is not None:
-            if hasattr(self._processor, '_detector') and self._processor._detector is not None:
-                self._processor._detector._touch_streak = 0
-                self._processor._detector._lift_streak = 0
+            pause_boundary = getattr(self._processor, "pause_boundary", None)
+            if callable(pause_boundary):
+                pause_boundary()
 
     @Slot()
     def resume_session(self):
@@ -363,6 +363,15 @@ class GaitEngine(QObject):
             if isinstance(self._processor, JumpProcessor):
                 for ev in events:
                     self.hop_event.emit(ev)
+                for notice in self._processor.pop_pending_quality_notices():
+                    self.jump_quality_notice.emit(
+                        {
+                            "kind": notice.kind,
+                            "time_s": notice.time_s,
+                            "cluster_length": notice.cluster_length,
+                            "ratio": notice.ratio,
+                        }
+                    )
                 self._check_stop_condition()
             else:
                 for ev in events:
@@ -530,20 +539,19 @@ class GaitEngine(QObject):
     # ---------------------------------------------------------------
 
     def _check_stop_condition(self):
-        """在每次 touch 事件后检查是否满足自动结束条件。"""
+        """在已结算统计后检查是否满足自动结束条件。"""
         if self._finished:
             return
 
         cfg = self._config
 
         if cfg.stop_type == "Status change" and cfg.number_of_jumps:
-            # 从 processor 获取 lift_count
             if self._processor is not None:
-                lift_count = self._processor.lift_count
-                if lift_count >= cfg.number_of_jumps:
+                completed_jumps = getattr(self._processor, "completed_jumps", 0)
+                if completed_jumps >= cfg.number_of_jumps:
                     self._finished = True
                     log.info("自动停止: 已完成 %d/%d 次跳跃",
-                             lift_count, cfg.number_of_jumps)
+                             completed_jumps, cfg.number_of_jumps)
                     self.test_finished.emit("jump_count_reached")
 
     def _start_timer(self):

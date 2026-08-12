@@ -25,10 +25,11 @@ PairingMode = Literal["raw_triplet", "production_equivalent"]
 class TimingConfig:
     cols: int = 96
     touch_ratio_threshold: float = 0.12
-    touch_ratio_max: float = 0.38
+    touch_min_cluster_length: int = 4
+    touch_max_cluster_length: int = 50
     lift_ratio_threshold: float = 0.05
     confirm_samples: int = 2
-    min_valid_cluster_length: int = 10
+    min_valid_cluster_length: int = 4
     gap_threshold: int = 1
     spacing_cm: float = 1.04
     touch_onset_min_leds: int = 2
@@ -119,10 +120,13 @@ class FrameTrace:
     confirm_window_s: float
     frame_index: int
     timestamp: float
+    frame_interval_s: float | None
     active_led_count: int
     raw_primary_cluster_length: int
     valid_primary_cluster_length: int
     ratio: float
+    cluster_class: str
+    over_limit_condition: bool
     state: str
     touch_condition: bool
     lift_condition: bool
@@ -438,6 +442,7 @@ def run_detector(
     active_contact_track_id: int | None = None
     events: list[EventRecord] = []
     traces: list[FrameTrace] = []
+    previous_timestamp: float | None = None
 
     for frame in frames:
         stats = _cluster_stats(frame.bits, config)
@@ -456,15 +461,25 @@ def run_detector(
         state_before = state
         touch_condition = (
             state == "air"
-            and stats.ratio >= config.touch_ratio_threshold
-            and stats.ratio < config.touch_ratio_max
+            and config.touch_min_cluster_length
+            <= stats.raw_primary_cluster_length
+            <= config.touch_max_cluster_length
         )
+        over_limit_condition = (
+            stats.raw_primary_cluster_length > config.touch_max_cluster_length
+        )
+        if stats.raw_primary_cluster_length == 0:
+            cluster_class = "empty"
+        elif stats.raw_primary_cluster_length < config.touch_min_cluster_length:
+            cluster_class = "below_touch_minimum"
+        elif over_limit_condition:
+            cluster_class = "oversized"
+        else:
+            cluster_class = "formal_touch_range"
         lift_condition = (
             state == "ground"
-            and (
-                stats.ratio <= config.lift_ratio_threshold
-                or stats.valid_primary_cluster_length == 0
-            )
+            and stats.raw_primary_cluster_length
+            < config.touch_min_cluster_length
         )
 
         if mode == "onset":
@@ -604,10 +619,17 @@ def run_detector(
                 confirm_window_s=config.confirm_window_s,
                 frame_index=frame.index,
                 timestamp=frame.timestamp,
+                frame_interval_s=(
+                    frame.timestamp - previous_timestamp
+                    if previous_timestamp is not None
+                    else None
+                ),
                 active_led_count=stats.active_led_count,
                 raw_primary_cluster_length=stats.raw_primary_cluster_length,
                 valid_primary_cluster_length=stats.valid_primary_cluster_length,
                 ratio=stats.ratio,
+                cluster_class=cluster_class,
+                over_limit_condition=over_limit_condition,
                 state=state_before,
                 touch_condition=touch_condition,
                 lift_condition=lift_condition,
@@ -625,6 +647,7 @@ def run_detector(
                 fallback_reason=event.fallback_reason if event else "",
             )
         )
+        previous_timestamp = frame.timestamp
 
     return DetectorResult(events=events, traces=traces)
 
@@ -779,6 +802,64 @@ def write_trace(path: Path, traces: list[FrameTrace]) -> None:
         writer.writeheader()
         for trace in traces:
             writer.writerow({field: getattr(trace, field) for field in fields})
+
+
+def write_cluster_episodes(path: Path, traces: list[FrameTrace]) -> None:
+    """Write contiguous cluster episodes with width, duration and frame-gap stats."""
+    fields = [
+        "variant",
+        "cluster_class",
+        "start_time_s",
+        "end_time_s",
+        "duration_s",
+        "frame_count",
+        "max_cluster_length",
+        "max_frame_interval_s",
+    ]
+    rows: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for trace in traces:
+        key = (trace.variant, trace.cluster_class)
+        current_key = None if current is None else (
+            current["variant"], current["cluster_class"]
+        )
+        if current is None or key != current_key:
+            if current is not None:
+                current["duration_s"] = (
+                    float(current["end_time_s"]) - float(current["start_time_s"])
+                )
+                rows.append(current)
+            current = {
+                "variant": trace.variant,
+                "cluster_class": trace.cluster_class,
+                "start_time_s": trace.timestamp,
+                "end_time_s": trace.timestamp,
+                "duration_s": 0.0,
+                "frame_count": 1,
+                "max_cluster_length": trace.raw_primary_cluster_length,
+                "max_frame_interval_s": trace.frame_interval_s or 0.0,
+            }
+        else:
+            current["end_time_s"] = trace.timestamp
+            current["frame_count"] = int(current["frame_count"]) + 1
+            current["max_cluster_length"] = max(
+                int(current["max_cluster_length"]),
+                trace.raw_primary_cluster_length,
+            )
+            current["max_frame_interval_s"] = max(
+                float(current["max_frame_interval_s"]),
+                trace.frame_interval_s or 0.0,
+            )
+    if current is not None:
+        current["duration_s"] = (
+            float(current["end_time_s"]) - float(current["start_time_s"])
+        )
+        rows.append(current)
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_comparisons(path: Path, rows: list[dict[str, object]]) -> None:
@@ -999,6 +1080,7 @@ def run_diagnostics(
             )
 
     write_trace(out_dir / "frame_trace.csv", traces)
+    write_cluster_episodes(out_dir / "cluster_episodes.csv", traces)
     write_comparisons(out_dir / "event_compare.csv", comparisons)
     write_summary(out_dir / "summary.md", comparisons)
 
