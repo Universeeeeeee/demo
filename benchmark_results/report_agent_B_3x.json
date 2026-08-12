@@ -1,0 +1,550 @@
+{
+  "repetitions": 3,
+  "case_count": 12,
+  "release_sample_requirement_met": true,
+  "hidden_pattern_recall": 0.8787878787878788,
+  "hidden_pattern_precision": 0.32954545454545453,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18549
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 15050
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 27877
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18415
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23085
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19824
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21340
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17060
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19117
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 16480
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20932
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported",
+        "decrease",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19276
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21502
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20987
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21119
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 16033
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 35119
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "decrease",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 43569
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19837
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 13015
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 24610
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17728
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20358
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17103
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20992
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18125
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19443
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 15961
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17922
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18353
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18230
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18307
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20639
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20117
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19646
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 33314
+    }
+  ]
+}

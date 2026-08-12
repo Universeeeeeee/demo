@@ -1,0 +1,105 @@
+{
+  "benchmark_schema_version": "report-agent-benchmark/1.2",
+  "model_name": "deepseek-v4-flash",
+  "prompt_version": "report-agent-system/2.0",
+  "observation_builder_version": "agent-observation/1.0",
+  "analysis_tool_registry_version": "analysis-tool-registry/1.0",
+  "analysis_method_registry_version": "analysis-method-registry/1.0",
+  "kernel_version": "analysis-kernel/1.0",
+  "skill": {
+    "name": "report-analysis",
+    "version": "report-analysis-skill/0.1-eval"
+  },
+  "ablation": {
+    "include_sketch": true,
+    "include_compact_series": true,
+    "include_screening_cues": false,
+    "max_replans": 0
+  },
+  "repetitions": 1,
+  "case_count": 1,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 1.0,
+  "hidden_pattern_precision": null,
+  "precision_unavailable_reason": "Benchmark cases define expected predicates but not the complete allowed predicate set; extra supported predicates cannot be classified as false positives",
+  "legacy_raw_predicate_match_ratio": 0.3333333333333333,
+  "validated_run_rate": 1.0,
+  "decision_assertion_pass_rate": 1.0,
+  "p50_elapsed_ms": 23555,
+  "p95_elapsed_ms": 23555,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q1_temporal_contact",
+                "description": "Does contact_time_s change coherently between early and late segments?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time_s is the only varying metric (0.2s in early records, 0.3s in later records); air_time, jump_height, cycle_time, and cadence are all constant, so only this metric merits verification.",
+                "stop_condition": "Verified change confirmed or refuted; no further worthwhile hypothesis remains since all other metrics are constant."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_temporal_contact",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q1_temporal_contact",
+                "purpose": "Verify whether contact_time_s shows a coherent early-to-late change across the session."
+              }
+            ]
+          },
+          "rationale": "This jump session shows contact_time_s changing from 0.2s (ordinals 0-2) to 0.3s (ordinals 3-5 and beyond, actually 6-11), with air_time, jump_height, cycle_time, and cadence all constant. The single varying metric is a good candidate for temporal change verification. However, examining the data: contact_time is 0.2 for first 6 records (ordinals 0-5), then 0.3 for ordinals 6-11. This is a coherent early-to-late change, worth verifying. Other metrics are all constant (air_time=0.4, jump_height=0.2, cycle_time=0.6, cadence=100), so cross-metric co-change is not viable (no two metrics both vary). Side dimension is unavailable, and no records are excluded, so exclusion robustness via prior evidence is not appropriate (no prior evidence yet). quality_scope_check would just confirm the data is clean.\n\nGiven the data: the only worthwhile hypothesis is verifying the temporal change in contact_time_s from early to late segments. Since only one metric varies, cross-metric co-change is not a valid hypothesis. I'll propose the temporal change verification for contact_time_s as the single high-value question."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "Evidence Review complete. The current-session temporal analysis (Evidence a797c1b7) conclusively supports that contact_time_s increased from early to late phases (comparison_supported, increase, transient all supported=true) in a jump test with 12 valid records and zero exclusions or quality flags. The contact_time pattern is settled: it was a transient increase (0.2→0.3s) rather than a sustained trend.\n\nNo remaining high-value hypotheses exist. The other metrics (air_time_s, jump_height_m, cycle_time_s, cadence) are all constant across the session (std=0), so there is no useful temporal change or cross-metric co-change candidate — pairing a varying contact metric with a constant metric would violate the cross-metric precondition. Exclusion robustness is not warranted because zero records were excluded. Side-segment difference is unavailable (no side dimension for a Jump Test), and longitudinal/cohort scopes are not authorized. The domain prior additionally notes the current jump report has no left/right dimension.\n\nNo conflicts, quality limitations that invalidate the report, or unresolved questions remain. Replan is not required.",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 23555
+    }
+  ]
+}

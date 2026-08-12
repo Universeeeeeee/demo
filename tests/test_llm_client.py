@@ -108,6 +108,49 @@ class LLMWorkerClientTest(unittest.TestCase):
         self.assertEqual(posted["agent_mode"], "treadmill_gait")
         self.assertEqual(posted["message"], "配置跑步机步态")
 
+    def test_analyze_report_posts_only_session_and_scope(self):
+        self.port_file.write_text(json.dumps({"pid": 111, "port": 9876}))
+        posted = {}
+        posted_url = ""
+
+        def fake_post(url, json, timeout):
+            nonlocal posted_url
+            posted_url = url
+            posted.update(json)
+            return _FakeResponse(
+                {"analysis": {"claims": []}, "analysis_run_id": "run_1"}
+            )
+
+        scope = {
+            "current_session": True,
+            "longitudinal": False,
+            "cohort": False,
+        }
+        with patch("ui.llm_client.requests.get", return_value=_FakeResponse({"status": "ready"})):
+            with patch("ui.llm_client.requests.post", side_effect=fake_post):
+                result = self.client.analyze_report(12, scope)
+
+        self.assertTrue(posted_url.endswith("/report/analyze"))
+        self.assertEqual(posted, {"session_id": 12, "data_access_scope": scope})
+        self.assertEqual(result["analysis_run_id"], "run_1")
+
+    def test_get_latest_analysis_returns_none_for_non_success_response(self):
+        self.port_file.write_text(json.dumps({"pid": 111, "port": 9876}))
+        with patch("ui.llm_client.requests.get", return_value=_FakeResponse({"status": "ready"})):
+            with patch(
+                "ui.llm_client.requests.post",
+                return_value=_FakeResponse(
+                    {"error_code": "analysis_unavailable"},
+                    status_code=422,
+                ),
+            ):
+                result = self.client.get_latest_analysis(
+                    12,
+                    {"current_session": True, "longitudinal": False, "cohort": False},
+                )
+
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()

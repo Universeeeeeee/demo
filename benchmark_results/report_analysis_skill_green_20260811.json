@@ -1,0 +1,1153 @@
+{
+  "benchmark_schema_version": "report-agent-benchmark/1.2",
+  "model_name": "deepseek-v4-flash",
+  "prompt_version": "report-agent-system/2.0",
+  "observation_builder_version": "agent-observation/1.0",
+  "analysis_tool_registry_version": "analysis-tool-registry/1.0",
+  "analysis_method_registry_version": "analysis-method-registry/1.0",
+  "kernel_version": "analysis-kernel/1.0",
+  "skill": {
+    "name": "report-analysis",
+    "version": "report-analysis-skill/0.1-eval"
+  },
+  "ablation": {
+    "include_sketch": true,
+    "include_compact_series": true,
+    "include_screening_cues": false,
+    "max_replans": 0
+  },
+  "repetitions": 1,
+  "case_count": 12,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 0.7272727272727273,
+  "hidden_pattern_precision": null,
+  "precision_unavailable_reason": "Benchmark cases define expected predicates but not the complete allowed predicate set; extra supported predicates cannot be classified as false positives",
+  "legacy_raw_predicate_match_ratio": 0.32,
+  "validated_run_rate": 1.0,
+  "decision_assertion_pass_rate": 0.7083333333333334,
+  "p50_elapsed_ms": 17469,
+  "p95_elapsed_ms": 24154,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_temporal",
+                "description": "Does contact_time_s show a coherent early-to-late temporal change across the jump session?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time_s is the only metric that varies across the session, transitioning from 0.2s (segments 0-1) to 0.3s (segments 2-3), a coherent step change worth deterministic verification.",
+                "stop_condition": "Verify temporal change in contact_time_s across the session."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n_contact_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_temporal",
+                "purpose": "Deterministically verify whether contact_time_s exhibits an early-to-late temporal change across the jump session."
+              }
+            ]
+          },
+          "rationale": "Jump Test, current-session scope only, no side dimension. Record set has 12 jumps across 4 temporal segments. air_time (0.4s), cycle_time (0.6s), cadence (100/min), jump_height (0.2m) are all constant across all segments; only contact_time changes: 0.2s in segments 0-1 then 0.3s in segments 2-3. This is the only visibly varying metric and shows a coherent early-to-late step change, making it a valid temporal hypothesis. Since both air_time and cycle_time are constant, cross-metric co-change is not a useful candidate (a constant metric cannot co-change). No records are excluded, so exclusion robustness has no basis. I plan to verify the temporal change in contact_time (the one clear varying pattern). I will not add a second node merely to consume budget since no other coherent, separable hypothesis is worth verifying in this data."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "现有证据已支持主要发现：contact_time_s 在会话中呈现暂时性（transient）增加（由 first half ~0.2s 升至 second half ~0.3s），并由确定性 verify_temporal_change Evidence（973a2d6b）的 supported predicates（comparison_supported、increase、transient）支撑。Observation 显示 air_time_s、jump_height_m、cycle_time_s、cadence 各时段近常数（std≈0），无跨指标共变候选，也不满足排除敏感性先决条件（无排除记录）。其余指标无有意义趋势，侧向维度不可用、纵向/队列数据不可访问（仅 current_session 授权），故无进一步高价值假设。无需 Replan。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 14551
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_time_temporal",
+                "description": "Does contact_time_s increase from early to late segments across the session?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "Early temporal segments (0-11) are a constant 0.20s while later segments (12-23) rise to ~0.265s mean, a clear visible temporal candidate.",
+                "stop_condition": "Evidence returns supported or not_supported; if inconclusive, record ambiguity."
+              },
+              {
+                "question_id": "q_contact_time_side",
+                "description": "Is the later-session contact_time change concentrated on one side rather than symmetric?",
+                "dimensions": [
+                  "temporal",
+                  "side"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "In later segments left steps are 0.31s while right steps are 0.22s, suggesting a side-specific divergence masked in the overall/segmented mean.",
+                "stop_condition": "Evidence returns supported or not_supported; if inconclusive, record ambiguity."
+              },
+              {
+                "question_id": "q_quality_scope",
+                "description": "Are data quality and available scope sufficient to trust the contact_time analysis?",
+                "dimensions": [
+                  "quality"
+                ],
+                "metric_codes": [],
+                "reason": "The observation reports 336 missing values across metric codes; confirming scope and quality before relying on the temporal/side interpretations is prudent.",
+                "stop_condition": "Evidence returns a scope/quality determination."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n_contact_time_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_time_temporal",
+                "purpose": "Verify whether contact_time_s changes over the session temporal segments."
+              },
+              {
+                "node_id": "n_contact_time_side",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_side_segment_difference",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_time_side",
+                "purpose": "Verify whether the later-session contact_time pattern differs by side/segment."
+              },
+              {
+                "node_id": "n_quality_scope",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "quality_scope_check",
+                "inputs": {},
+                "dependencies": [],
+                "question_id": "q_quality_scope",
+                "purpose": "Confirm data scope and quality conditions for the session analyses."
+              }
+            ]
+          },
+          "rationale": "The session has 24 valid step records. Only contact_time_s and step_length_cm have values; step_length_cm is constant (70.0). contact_time_s varies: early segments (0-11) at 0.20s, later segments (12-23) at ~0.265s mean. Side segments show a pattern: left steps take 0.31s while right steps take 0.22s in the later portion, while the early portion is symmetric at 0.20s. This is a treadmill gait session (temporal + side dimensions, current_session scope only). High-value hypotheses: (1) whole-session temporal change in contact_time (early vs late); (2) side difference in contact_time, especially whether the change is concentrated on one side; (3) quality_scope_check to assess data completeness given 336 missing values. Cross-metric co-change is not useful because step_length is constant. Exclusion robustness is not useful since excluded_records=0. I'll plan 3 nodes: verify_temporal_change for contact_time overall, verify_side_segment_difference for contact_time (to test whether sides diverge), and quality_scope_check for data quality. Questions: Q1 tests temporal change; Q2 tests side/segment difference; Q3 checks data scope quality. The method contracts are respected."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "证据链完整且相互一致：时间变化证据显示contact_time在第二半程增加（increase/support、transient/support），侧面差异证据显示该变化集中在左侧（concentrated_on_side:left/support），质量范围检查确认无质量标志或排除记录影响结论。三项证据均为conclusive且supported，已覆盖temporal与side两个关键维度。已拒绝decrease与persistent谓词，无未解决的冲突或质量问题。生成DraftAnalysisPackage即可，无需Replan。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "e5207f40e3af3e7ebb2ea28c4c67b0f80345d302fb7bf50897b4b3ba78ebecea"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 19877
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_temporal",
+                "description": "Verify whether contact_time_s increases from the early half to the later half of the session.",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "Segments 0-1 show constant 0.2s contact time while segments 2-3 rise to a 0.26s mean with max 0.32s, indicating a whole-session temporal change.",
+                "stop_condition": "A definitive supported or not-supported verdict for temporal change in contact_time_s."
+              },
+              {
+                "question_id": "q_contact_side",
+                "description": "Verify whether the contact_time_s increase is concentrated on one side across the session.",
+                "dimensions": [
+                  "temporal",
+                  "side"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "In later segments the left side reaches contact times of 0.32s while the right side stays at 0.2s, suggesting an asymmetric side pattern.",
+                "stop_condition": "A definitive supported or not-supported verdict for a side-segment difference in contact_time_s."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_temporal_contact",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_temporal",
+                "purpose": "Verify the visible rise in contact time from the early to the later session segments."
+              },
+              {
+                "node_id": "n2_side_contact",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_side_segment_difference",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_side",
+                "purpose": "Verify whether the contact time increase is concentrated on one side across the session."
+              }
+            ]
+          },
+          "rationale": "The clearest structure in the observation is a contact_time_s change over the session: segments 0-1 hold a constant 0.2s, while segments 2-3 rise to 0.26s mean with values reaching 0.32s. Both sides are available and reflect a left-side-heavy increase (left side hits 0.32 in segments 2 and 3, right side stays at 0.2). This is worth verifying as (1) a whole-session temporal change in contact_time_s, and (2) whether that change is side-concentrated via a side difference check. step_length_cm is constant at 70 across all records, so it provides no useful co-change candidate; I omit cross-metric verification to conserve budget. No exclusions or quality flags exist (excluded_records=0, total_flags=0), so exclusion-robustness has no excluded records to test against and is skipped. I select only the two highest-value hypotheses."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "现有证据充分回答了已提出并验证的核心问题。两个确定性Evidence均conclusive且supported：Q1（temporal）确认contact_time_s从first_half到second_half总体increase，且为transient（非persistent）；Q2（side）确认变化concentrated_on_side=left（left_change>0，right_change=0）。这两个问题分别覆盖了\"session temporal change\"与\"change concentrated on one side\"两个高价值假设，既有横向（总览）也有纵向维度（side细分），交叉验证紧密。被拒绝的predicate（decrease、persistent）已正确标记，未判定的推断（机械、疲劳、伤病、训练）均不被允许也不制造。quality_summary显示无excluded/invalid记录、无质量flag，报告未被invalidated，不需要exclusion_robustness复查。cross-metric cochange方面，唯一有变异的指标是contact_time_s，其余所有指标（step_length_cm恒定70, 其他metric count=0）无有意义的变化候选，共变化检测无实际价值。longitudinal/cohort工具未启用且无授权数据。Tool预算无需继续消耗。故证据足够，正常停机，无需Replan。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "e5207f40e3af3e7ebb2ea28c4c67b0f80345d302fb7bf50897b4b3ba78ebecea"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 17469
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "decrease",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "Q1",
+                "description": "Does contact_time_s change across the session over time (early segments 0-1 at 0.2s vs later segments 2-3 at 0.3s)?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "Contact time shows a clear step increase from 0.2s to 0.3s between the first half and second half of the session; this is the most visible temporal pattern.",
+                "stop_condition": "Stop when verify_temporal_change returns supported or not_supported with conclusive evidence."
+              },
+              {
+                "question_id": "Q2",
+                "description": "Does step_length_cm change across the session over time (early segments 0-1 at 72cm vs later segments 2-3 at 66cm)?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "step_length_cm"
+                ],
+                "reason": "Step length shows a clear step decrease from 72cm to 66cm across the session, co-occurring with the contact time change.",
+                "stop_condition": "Stop when verify_temporal_change returns supported or not_supported with conclusive evidence."
+              },
+              {
+                "question_id": "Q3",
+                "description": "Do contact_time_s and step_length_cm change together in aligned records during the session?",
+                "dimensions": [
+                  "temporal",
+                  "cross_metric"
+                ],
+                "metric_codes": [
+                  "contact_time_s",
+                  "step_length_cm"
+                ],
+                "reason": "Both metrics show an aligned change at the same temporal boundary (segment 2), suggesting co-change worth verifying.",
+                "stop_condition": "Stop when verify_cross_metric_cochange returns supported or not_supported with conclusive evidence."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "N1",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "Q1",
+                "purpose": "Verify whether contact time increases over the session."
+              },
+              {
+                "node_id": "N2",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "step_length_cm"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "Q2",
+                "purpose": "Verify whether step length decreases over the session."
+              },
+              {
+                "node_id": "N3",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_cross_metric_cochange",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s",
+                    "step_length_cm"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "Q3",
+                "purpose": "Verify whether contact time and step length co-change across aligned records."
+              }
+            ]
+          },
+          "rationale": "The observation shows a single temporary treadmill gait session with 12 valid step records. Only two metrics have data: contact_time_s (mean 0.25s, ranging 0.2→0.3) and step_length_cm (mean 69cm, ranging 72→66). Both metrics show a clear temporal change: contact_time_s increases from 0.2 (segments 0-1) to 0.3 (segments 2-3), while step_length_cm decreases from 72 to 66. Side-by-side analysis shows left and right records are stable within each temporal segment, so the change is not lateralized. No excluded records exist (exclusion_robustness precondition unmet). The primary high-value hypothesis is the whole-session temporal change in both metrics. I propose verifying the temporal change for each metric separately, plus checking the cross-metric co-change since both aligned metrics change in opposite directions together. The side difference hypothesis adds little value because both sides show identical within-segment values."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "三个调查问题（Q1 接触时间变化、Q2 步长变化、Q3 接触时间与步长共同变化）均已获得 conclusive 且 supported 的确定性证据。所有受支持谓词均有明确对应的 Predicate Evidence，未出现不可判断或被否定的关键谓词；不一致谓词（如 contact_time_s decrease、step_length_cm increase、persistent）均已被记录为 rejected。质量检查显示无排除记录、无标志、无效记录为零，且 invalidates_report=false，数据质量足以支撑当前结论。已有的证据足以支撑 derived 与 synthesis 类 Claim 的绑定，无需再进行额外调查。因此本轮证据充分，返回最终结论，不进行 Replan。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "e5207f40e3af3e7ebb2ea28c4c67b0f80345d302fb7bf50897b4b3ba78ebecea"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 15794
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q1",
+                "description": "Does contact time increase over the session (whole-session temporal change)?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "Segments 0-1 mean 0.21s vs segments 2-3 mean 0.26s, a visible increase across time.",
+                "stop_condition": "Temporal trend in contact_time_s is supported or not_supported by deterministic tool output."
+              },
+              {
+                "question_id": "q2",
+                "description": "Is there a side difference in contact time across the session?",
+                "dimensions": [
+                  "temporal",
+                  "side"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "Left side consistently higher (0.20 then 0.30) than right side (0.22) in every segment; overall change may be side-concentrated.",
+                "stop_condition": "Side difference in contact_time_s is supported or not_supported by deterministic tool output."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q1",
+                "purpose": "Verify whether the visible increase in contact_time across session segments is a supported temporal change."
+              },
+              {
+                "node_id": "n2",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_side_segment_difference",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q2",
+                "purpose": "Verify whether left-side contact time is systematically higher than right-side across the session."
+              }
+            ]
+          },
+          "rationale": "Treadmill Gait Test session with 24 valid step records. Two metrics have data: contact_time_s (varying, mean 0.235s, range 0.2-0.3s) and step_length_cm (constant at 70.0cm across all records). Only current-session scope is authorized; longitudinal/cohort tools are disabled. step_length is constant so cross-metric co-change is not a candidate. The clearest pattern is contact_time increasing across the session (segments 0-1 at 0.21s, segments 2-3 at 0.26s) — a temporal change candidate. Also left side consistently shows higher contact_time (0.20/0.3) than right (0.22) across segments, a side difference candidate. Since data is valid with no flags and no exclusions, exclusion robustness and quality checks are not warranted. Two high-value hypotheses: (1) whole-session temporal change in contact_time, (2) side-segment difference in contact_time. Cross-metric co-change not applicable (step_length constant). I keep the plan focused on the two verifiable hypotheses."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "两个确定性证据均已conclusive且supported：q1的verify_temporal_change确认contact_time_s整体前半段到后半段上升（increase supported，非persistent、非decrease），q2的verify_side_segment_difference确认该上升集中在左侧（concentrated_on_side:left supported，left_change非零而right_change为零）。结论相互一致、无冲突；质量汇总显示invalidates_report=false、excluded_records=0、无quality flags，无需补充质量检查。纵向与cohort工具在MVP中不可用，无法扩展范围，但当前会话分析已充分回答问题。没有剩余高价值的未测假设，预算内不机械补足节点。停止调查。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "e5207f40e3af3e7ebb2ea28c4c67b0f80345d302fb7bf50897b4b3ba78ebecea"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 17071
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_time_temporal",
+                "description": "Does contact time show a temporal change across the session (early vs late segments), or is the elevated value at ordinal 5 just an isolated transient excursion in an otherwise constant metric?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time_s is the only metric with any variation (0.2 baseline with one 0.5 excursion at ordinal 5); air_time, jump_height, cycle_time, and cadence are all constant. An isolated excursion is a candidate transient pattern, not proof of a sustained trend — verifies whether any coherent early-to-late change exists.",
+                "stop_condition": "Conclusive evidence that contact_time either has a coherent temporal change or is an isolated single-record excursion with no sustained segment pattern."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "node_contact_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_time_temporal",
+                "purpose": "Deterministically verify whether the sole varying metric (contact_time_s) shows a coherent temporal change across the session or is merely an isolated excursion."
+              }
+            ]
+          },
+          "rationale": "Looking at the Jump Test data: air_time_s is constant at 0.4, jump_height_m constant at 0.2, cycle_time_s constant at 0.6, cadence constant at 100. The only metric with any variation is contact_time_s, which is 0.2 for all records except ordinal 5 where it spikes to 0.5 (segment_index 1 shows mean 0.3, std 0.141).\n\nThe single excursion at ordinal 5 is an isolated transient pattern in an otherwise constant metric. Per the domain prior, an isolated excursion is a candidate transient pattern, not proof of a sustained trend. This is the only meaningful hypothesis worth verifying.\n\nSince air_time, jump_height, cycle_time, and cadence are all constant, they cannot serve as useful temporal or co-change candidates. Contact_time is the only varying metric, so a cross-metric co-change would require pairing it with another varying metric — none exists. Side difference is disabled. Exclusion robustness is not applicable since there are 0 excluded records.\n\nI'll keep this to 1 question and 1 node — the budget is not to be filled mechanically, and only one hypothesis is worthy here."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "证据充分，无需Replan。已有一项确定性Evidence (e838f4d9) 通过verify_temporal_change确认contact_time_s在时间上存在有效的比较变化：comparison_supported=true且decrease=true。同时该Evidence明确标志持续变化persistent=false，并支持transient=true——即contact_time_s仅在第二时段出现一次瞬时升高（ordinal 5处contact_time 0.5s）后回落，而非持续趋势。State中的rejected_predicates（increase、persistent）与该否定谓词支持状态一致，supported_predicates（comparison_supported、decrease、transient）与Evidence内容精确吻合，无inconclusive谓词，无quality flags，无excluded_records，无未解决问题。数据质量完好（invalidates_report=false, missing_values=0）。remaining metrics（air_time_s、jump_height_m、cycle_time_s、cadence）均为常量，不符合跨指标共同变化或追踪假设的前提，不值得额外分析。longitudinal与cohort范围均不可用（tool_not_implemented_in_mvp且无外部范围），无法提出有意义的后续假设。按停止规则结束，返回空derived claims亦有效。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 19961
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_temporal",
+                "description": "Does contact_time_s change from early to late segments within the session?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time_s shows a clear stepwise increase from 0.2s in early segments to 0.3s in later segments; all other metrics are constant.",
+                "stop_condition": "Confirm or refute a temporal change in contact_time_s across segments."
+              },
+              {
+                "question_id": "q_contact_cycle_cochange",
+                "description": "Does the contact_time_s change co-occur with a change in cycle_time_s while other metrics stay constant?",
+                "dimensions": [
+                  "temporal",
+                  "cross_metric"
+                ],
+                "metric_codes": [
+                  "contact_time_s",
+                  "cycle_time_s"
+                ],
+                "reason": "Tests whether contact_time change is accompanied by cycle_time change or isolated; cycle_time is constant while contact varies so this is an alignment test.",
+                "stop_condition": "Determine whether contact_time and cycle_time co-vary or whether the contact change is isolated."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_temporal_contact",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_temporal",
+                "purpose": "Deterministically verify the stepwise contact_time increase from early to late segments."
+              },
+              {
+                "node_id": "n2_cochange_contact_cycle",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_cross_metric_cochange",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s",
+                    "cycle_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_cycle_cochange",
+                "purpose": "Determine whether the contact_time change is accompanied by cycle_time change or isolated to contact time."
+              }
+            ]
+          },
+          "rationale": "This is a Jump Test with current_session scope only. Enabling this analysis: verify_temporal_change, verify_cross_metric_cochange, verify_exclusion_robustness, quality_scope_check. The most notable pattern in the data is a stepwise change in contact_time_s from 0.2s (ordinals 0-5) to 0.3s (ordinals 6-11), which represents a clear early-to-late temporal change. Air time, jump height, cycle time, and cadence are all constant across segments (air_time_s=0.4, jump_height_m=0.2, cycle_time_s=0.6, cadence=100). The 0.4s air_time/0.2s jump_height pairing appears constant, so testing cross-metric co-change between contact_time and air_time is a poor candidate since air_time is constant. However, contact_time varies while cycle_time stays constant — this is worth testing as a co-change since when one metric changes the other does not, which is a meaningful alignment test. The most valuable deterministic verification is the temporal change in contact_time_s from 0.2 to 0.3. Since there are excluded records (2 records with synthetic_exclusion flags), exclusion robustness is a candidate but only after a temporal pattern is supported (per the domain prior), so it should be deferred. I'll plan: (1) verify_temporal_change on contact_time_s, and (2) verify_cross_metric_cochange on contact_time_s and cycle_time_s — since cycle_time stays constant while contact_time varies, this tests whether the temporal change in contact is isolated to contact time or accompanies cycle time change. I do not see a second cross-metric candidate with two varying metrics. I'll limit to 2 questions to respect budget efficiency."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "The current cycle produced two conclusive Evidence items. Evidence a797c1b7 (verify_temporal_change) confirms a supported comparison and increase for contact_time_s from first half to second half. Evidence 67f4429a (verify_cross_metric_cochange) confirms that the contact_time_s increase does not co-change with cycle_time_s (which remained constant), and comparison_supported is present. There are no inconclusive predicates, no unresolved questions, and the quality summary (2 excluded records, synthetic exclusion flags, invalidates_report=false) does not compromise the pattern. The supported predicates fully answer the two posed questions: the temporal increase in contact time (q_contact_temporal) and the co-change assessment against cycle time (q_contact_cycle_cochange). No additional high-value untested hypothesis remains within current_session scope and enabled capabilities—side analysis is disabled, longitudinal and cohort tools are unavailable, and air_time/jump_height/cadence/cycle metrics are constant (no useful cross-metric co-change candidate). Replan is not warranted.",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": false
+      },
+      "elapsed_ms": 16441
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_temporal",
+                "description": "contact_time_s在会话后期相对早期是否发生时序变化？",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "air_time/jump_height/cadence/cycle_time在所有时段完全恒定，唯一变化的是contact_time_s（早期段0.4，中后期段0.2）。这是最清晰的可变指标候选。",
+                "stop_condition": "无可用时序分段或共变方向不明确时停止"
+              },
+              {
+                "question_id": "q_contact_exclusion",
+                "description": "已排除的4条记录是否影响contact_time_s的时序模式结论？",
+                "dimensions": [
+                  "temporal",
+                  "quality"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "有4条excluded记录（ordinal 2,5,8,11），其contact_time异常值（0.1或0.6）与included记录不同，需验证排除对该指标时序结论的敏感性。",
+                "stop_condition": "若q_contact_temporal未得出支持结论则跳过"
+              },
+              {
+                "question_id": "q_quality_scope",
+                "description": "当前会话数据质量范围是否完整且无未处理的缺失/无效记录？",
+                "dimensions": [
+                  "quality"
+                ],
+                "metric_codes": [],
+                "reason": "存在4条excluded记录和synthetic_exclusion质量标记，需按质量优先级核验数据范围以指导后续解释。",
+                "stop_condition": "质量范围核验完成即止"
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n_contact_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_temporal",
+                "purpose": "验证唯一变化的contact_time_s是否存在早期到后期的时序变化"
+              },
+              {
+                "node_id": "n_contact_exclusion",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_exclusion_robustness",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_exclusion",
+                "purpose": "验证已排除记录是否改变contact_time_s时序模式的结论"
+              },
+              {
+                "node_id": "n_quality_scope",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "quality_scope_check",
+                "inputs": {},
+                "dependencies": [],
+                "question_id": "q_quality_scope",
+                "purpose": "核验当前会话数据质量范围，处理排除记录与质量标记对解释的影响"
+              }
+            ]
+          },
+          "rationale": "这是Jump Test，无左右维度（side_unavailable）。观察显示air_time_s、jump_height_m、cycle_time_s和cadence_jumps_per_min在所有时段完全恒定（std=0），唯一变化的指标是contact_time_s（early段为0.4，后期段稳定为0.2，但被排除的4条记录excluded且contact_time异常为0.1/0.6）。最有价值的确定性问题是验证contact_time_s的时序变化是否存在，以及排除记录是否影响该模式。air_time/jump_height/cadence是恒定指标，不应作为co-change配对候选。cycle_time恒定，也不宜配对。contact_time是唯一变化指标，但不能单独构成cross-metric co-change（需要两个变化指标）。因此优先验证：1) contact_time_s的时序变化（temporal change）；2) 排除鲁棒性——因为有4条excluded记录且涉及contact_time的异常值，验证排除性对contact_time时序结论的敏感性；3) quality_scope_check作为数据质量范围核验（因为存在排除记录与质量标记）。不机械填充co-change节点。"
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "Evidence is sufficient to support the report. The temporal analysis (Evidence 973a2d6b) conclusively shows a decrease in contact_time from first to second half (comparison_supported:true, decrease:true, persistent:false, transient:false), indicating a supported temporal decrease. The exclusion robustness analysis (Evidence 9bf94925) shows comparison_supported:true but remains_after_exclusion:false, meaning the temporal pattern in contact_time does not persist after excluding the 4 flagged records — this is a resolved quality limitation, not an unresolved conflict. The quality scope check (Evidence 08da299b) is conclusive and confirms the scope is valid for the analysis. No unresolved questions or conflicting evidence remain. The rejected predicates already account for the pattern that does not survive exclusion. Replan is not warranted: the current evidence answers all posed questions conclusively, and no additional high-value untested hypothesis remains given the available data (temporal/quality dimensions exhausted for the varying metric, and cross-metric co-change has no suitable pairing since only contact_time varies).",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": false,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 17719
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [],
+            "nodes": []
+          },
+          "rationale": "The observation shows a Jump Test with all 12 records included and valid, no exclusions (quality_summary: excluded_records=0). air_time_s, jump_height_m, cycle_time_s, and cadence are all constant across the session. Only contact_time_s varies (0.1–0.4s), but its pattern across segments is non-monotonic: segment means 0.233 → 0.267 → 0.20 → 0.30, with high variance within segments (some segments have 0.1 and 0.4 values). There is no coherent early-to-late trend in the varying metric — the change appears to be a fluctuating/transient pattern rather than a sustained monotonic change. Given the jump prior guidance to prefer temporal hypotheses only when a populated metric shows a coherent early-to-late change, and not to test co-change between a varying and constant metric, there is no strong hypothesis that meets the evidence standards. Cross-metric co-change would require two varying aligned metrics, but only contact_time_s varies. Exclusion robustness is not justified since there are zero excluded records. I therefore propose no analysis nodes — the honest action is to stop, as further analysis would only repeat or confirm that most metrics are constant and contact_time shows a non-coherent fluctuation. I will note that scope expansion to longitudinal/cohort is unavailable."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "This is an Evidence Review stage. The Evidence set contains no tool runs and no predicate evidence items — no deterministic analysis was executed to produce derived/synthesis findings. The Observation shows 12 jumps all passed with valid records, no exclusions, no quality flags, and constant air_time, jump_height, cycle_time, and cadence metrics. The only varying metric (contact_time_s) shows no coherent early-to-late temporal trend in the compact session series (0.2, 0.3, 0.2 / 0.3, 0.2, 0.3 / 0.1, 0.4, 0.1 / 0.4, 0.1, 0.4), only isolated excursions that do not constitute a sustained pattern. Per the domain prior, an isolated excursion is a candidate transient, not proof of a trend; cross-metric co-change requires two clearly varying aligned metrics (only contact_time varies, air_time and other metrics are constant), so no qualified co-change hypothesis remains. No records are excluded, so exclusion robustness preconditions are not met. Current scope is current_session only (no longitudinal/cohort), and the report is temporary with no excluded or invalid records. No high-value deterministically verifiable hypothesis remains, and there are no conflicts, quality limitations, or unresolved questions requiring replanning.",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": false,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 17865
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q1_contact_temporal",
+                "description": "Verify whether contact_time_s changes across the temporal sequence within the current jump session.",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time_s is the only variable metric in the session series (0.2, 0.21, 0.3, 0.31 s), a coherent early-to-late change consistent with a candidate temporal pattern. Other metrics are constant and not suitable candidates.",
+                "stop_condition": "Stop once verify_temporal_change returns conclusive supported/not_supported result for contact_time_s. Do not pursue co-change or robustness given constant partner metrics and zero excluded records."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_contact_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q1_contact_temporal",
+                "purpose": "Deterministically verify whether contact_time_s shows a temporal change across the session sequence."
+              }
+            ]
+          },
+          "rationale": "Jump test, current_session scope only. The visible temporal series shows contact_time_s varying early-to-late (0.2 → 0.21 → 0.3 → 0.31 s) while air_time_s, jump_height_m, cycle_time_s, and cadence are constant. The most valuable hypothesis is whether contact_time_s exhibits a sustained temporal change. Since excluded_records=0, exclusion robustness cannot be meaningfully tested (method preconditions unmet). Cross-metric co-change should pair contact_time_s with a metric that visibly varies, but none of the other metrics vary, so no valid co-change candidate exists. I select one focused temporal change test on contact_time_s; other hypotheses have no valid differentiable partner metric or lack excluded records."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "当前证据审查：仅有一次分析运行（verify_temporal_change for contact_time_s）返回 inconclusive，原因是样本量不足（4条记录，前半/后半各2条）。数据集中没有排除记录（excluded_records=0）、没有标志（total_flags=0）、没有无效记录，质量方面无问题需要进一步检查。side 维度不可用，纵向上下文与队列均不可用。所有其它指标（air_time_s, jump_height_m, cycle_time_s, cadence_jumps_per_min）全部恒定无变化，不适合co-change或进一步趋势验证。接触时间虽呈现早期到后期的递增（0.2→0.31）但样本量不足导致无法结论性判断，在此临时会话（is_temporary=true, subject_id=null）中无法通过追加数据解决。无未解决的未被测试的高价值假设：已测试的趋势假设因样本量而不可判断，没有可供验证的其它确定性模式。未见证据冲突或质量问题需要Replan。证据不足的原因记录于limitations（insufficient_sample_size），计划正常结束。",
+          "replan": null,
+          "unresolved_questions": [
+            "q1_contact_temporal 因样本量不足（4条记录）而无法判断 contact_time_s 的时间趋势，需更多记录才能确定性回答"
+          ]
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": false,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 13126
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_contact_temporal_rise",
+                "description": "Does contact_time increase across the session from early (0.20s) to late (0.30s) segments?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "contact_time is the only varying metric, showing a coherent 0.20→0.233→0.30 rise across segments; air_time, jump_height, cycle_time, cadence are constant.",
+                "stop_condition": "Stop once contact_time temporal change is verified as supported or not_supported."
+              },
+              {
+                "question_id": "q_contact_exclusion_robust",
+                "description": "Is the contact_time temporal rise robust to the single excluded record (ordinal 5, contact 0.2)?",
+                "dimensions": [
+                  "temporal",
+                  "quality"
+                ],
+                "metric_codes": [
+                  "contact_time_s"
+                ],
+                "reason": "One record is excluded (synthetic_exclusion); testing robustness of the temporal pattern is meaningful given a prior supported temporal change.",
+                "stop_condition": "Stop once robustness result is conclusive; do not re-run if no temporal evidence supports the pattern."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_verify_contact_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_contact_temporal_rise",
+                "purpose": "Verify whether contact_time increases early-to-late across the session."
+              },
+              {
+                "node_id": "n2_verify_contact_robust",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_exclusion_robustness",
+                "inputs": {
+                  "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+                  "metric_codes": [
+                    "contact_time_s"
+                  ]
+                },
+                "dependencies": [
+                  "n1_verify_contact_temporal"
+                ],
+                "question_id": "q_contact_exclusion_robust",
+                "purpose": "Confirm the contact_time temporal rise is robust to the single excluded record."
+              }
+            ]
+          },
+          "rationale": "Current session only. air_time, jump_height, cycle_time, cadence are constant at 0.4s/0.2m/0.6s/100jpm across all records. The only varying metric is contact_time (mean 0.20 → 0.233 → 0.30 across temporal segments), showing a coherent early-to-late rise. This is the single high-value temporal hypothesis: contact_time increases across the session. Cross-metric co-change: only contact_time and (constant) air_time could be paired, but air_time is constant so co-change is not a meaningful candidate per guidance. Exclusion robustness is applicable because exactly one record is excluded (ordinal 5, contact 0.2) and there is a supported temporal pattern to test sensitivity against. I limit to 2 nodes to respect cost: (1) verify_temporal_change on contact_time, (2) verify_exclusion_robustness on contact_time. The excluded record has contact 0.2 (matching early-segment value), so robustness check on the temporal rise is meaningful. Side metrics and longitudinal/cohort are unavailable and not addressed."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "Evidence is sufficient. The temporal hypothesis (contact_time_s increase across the session) was tested and supported (comparison_supported, increase), with the exclusion-robustness check confirming the pattern persists after removing the sole excluded record (remains_after_exclusion supported). Both evidence items are conclusive and supported. All meaningful hypotheses for the Jump Test have been addressed: air_time, jump_height, cycle_time, and cadence are constant across the session with no visible variation, so no further hypotheses merit testing. Only contact_time_s showed coherent early-to-late variation, which was both verified temporally and confirmed robust to exclusion. No conflict, quality limitation, or unresolved question remains that would warrant a second investigation cycle.",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/jump.md"
+          ],
+          "content_digest": "74554ae38797619b592837d1cfed469791469aedef429735ed984effa9fe1a9b"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": false,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 15794
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "plan": {
+            "questions": [
+              {
+                "question_id": "q_step_length_temporal_change",
+                "description": "Does step length decrease across the session as a whole?",
+                "dimensions": [
+                  "temporal"
+                ],
+                "metric_codes": [
+                  "step_length_cm"
+                ],
+                "reason": "Visible step_length_cm declines from 72cm in the first two segments to 66cm in the last two, a clear candidate temporal change. contact_time is flat and is not a useful co-change candidate.",
+                "stop_condition": "Whole-session temporal change in step_length_cm is confirmed or declared inconclusive."
+              },
+              {
+                "question_id": "q_step_length_side_difference",
+                "description": "Is the overall step-length decline concentrated on one side?",
+                "dimensions": [
+                  "temporal",
+                  "side"
+                ],
+                "metric_codes": [
+                  "step_length_cm"
+                ],
+                "reason": "Both sides show the same 72→66 decline pattern in this small series, but verifying side-by-segment difference distinguishes whether the apparent overall change is symmetric or lateral-specific.",
+                "stop_condition": "Side-specific step-length difference is confirmed or declared inconclusive."
+              }
+            ],
+            "nodes": [
+              {
+                "node_id": "n1_step_length_temporal",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_temporal_change",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "step_length_cm"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_step_length_temporal_change",
+                "purpose": "Verify that step_length_cm declines over the session, which is the clearest visible pattern that could explain multiple segmented observations."
+              },
+              {
+                "node_id": "n2_step_length_side",
+                "tool_name": "analyze_current_session",
+                "analysis_method": "verify_side_segment_difference",
+                "inputs": {
+                  "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+                  "metric_codes": [
+                    "step_length_cm"
+                  ]
+                },
+                "dependencies": [],
+                "question_id": "q_step_length_side_difference",
+                "purpose": "Determine whether the step-length decline is symmetric across sides or concentrated on one side, distinguishing a global vs lateral-specific temporal pattern."
+              }
+            ]
+          },
+          "rationale": "The observation shows step_length_cm varies from 72cm (segments 0-1) to 66cm (segments 2-3), a clear temporal step-length shortening across the session. contact_time_s is constant at 0.2s (flat, no useful candidate). No other metric has data. The primary high-value hypothesis is a whole-session temporal decline in step length. Since the overall decline (72 → 66) is visible across segments, I propose one temporal change verification. I'll also ask whether the step-length decline is concentrated on one side (side-segment difference) since both sides are present. Cross-metric co-change is not viable (contact_time is flat; only step_length varies, so no second varying metric). No exclusions exist (excluded_records=0), so exclusion robustness is inapplicable. This keeps the plan small and high-value."
+        },
+        "evidence_review": {
+          "evidence_sufficient": true,
+          "rationale": "证据充分且自洽。两个确定性分析都达到conclusive状态：verify_temporal_change确认step_length_cm存在受支持的decrease（第一段均值72cm至第二段均值66cm，差-6cm），并判定为transient而非persistent；verify_side_segment_difference证实左右两侧变化一致（left_change -6，right_change -6），运行在两侧均验证了comparison_supported，并拒绝了concentrated_on_side谓词。两个Evidence共享同一record_set且无conflict。质量方面：quality_summary显示invalidates_report=false、invalid_records=0、excluded_records=0、total_flags=0，无质量问题需要复核。唯一观察到的数据限制是contact_time_s完全恒定（std≈0）以及大量指标缺失（168 missing values），但这些不构成对已证实step_length变化的冲突或未解决问题。数据域current_session可用，纵向和队列范围不可用但因其非必需（已验证的是会话内模式）不需扩展。所有支持谓词均已绑定且无未解决冲突，无需Replan。",
+          "replan": null,
+          "unresolved_questions": []
+        },
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.1-eval",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "e5207f40e3af3e7ebb2ea28c4c67b0f80345d302fb7bf50897b4b3ba78ebecea"
+        }
+      },
+      "decision_assertions": {
+        "bounded_initial_action": false,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 24154
+    }
+  ]
+}

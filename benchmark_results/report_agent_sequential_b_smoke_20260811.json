@@ -1,0 +1,158 @@
+{
+  "benchmark_schema_version": "report-agent-benchmark/2.0-sequential",
+  "model_name": "deepseek-v4-flash",
+  "prompt_version": "report-agent-sequential-system/3.0",
+  "observation_builder_version": "agent-observation/1.0",
+  "analysis_tool_registry_version": "analysis-tool-registry/1.0",
+  "analysis_method_registry_version": "analysis-method-registry/1.0",
+  "kernel_version": "analysis-kernel/1.0",
+  "skill": {
+    "name": "report-analysis",
+    "version": "report-analysis-skill/0.4"
+  },
+  "ablation": {
+    "include_sketch": true,
+    "include_compact_series": true,
+    "include_screening_cues": false,
+    "max_replans": 0
+  },
+  "repetitions": 1,
+  "case_count": 1,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 1.0,
+  "hidden_pattern_precision": null,
+  "precision_unavailable_reason": "Benchmark cases define expected predicates but not the complete allowed predicate set; extra supported predicates cannot be classified as false positives",
+  "legacy_raw_predicate_match_ratio": 1.0,
+  "validated_run_rate": 1.0,
+  "decision_assertion_pass_rate": 1.0,
+  "p50_elapsed_ms": 19342,
+  "p95_elapsed_ms": 19342,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "increase"
+      ],
+      "cycle_count": 2,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "decision_type": "analyze",
+          "action_id": "temporal_contact_time_change",
+          "hypothesis": {
+            "hypothesis_id": "hypo_contact_time_temporal",
+            "statement": "Contact time increases from early segments (0.2s) to late segments (0.3s) across the jump session, indicating a coherent early-to-late change in contact_time_s.",
+            "dimensions": [
+              "temporal"
+            ],
+            "metric_codes": [
+              "contact_time_s"
+            ],
+            "target_predicate": "increase",
+            "reason": "The compact session series shows contact_time_s is constant at 0.2s for ordinals 0-5 then shifts to 0.3s for ordinals 6-11, a clear coherent early-to-late change while air_time_s, jump_height_m, cycle_time_s, and cadence remain constant.",
+            "success_condition": "verify_temporal_change confirms contact_time_s follows a monotonic increase from early to late segments."
+          },
+          "tool_name": "analyze_current_session",
+          "analysis_method": "verify_temporal_change",
+          "inputs": {
+            "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+            "metric_codes": [
+              "contact_time_s"
+            ]
+          },
+          "purpose": "Verify the coherent early-to-late increase in contact_time_s observed across the jump session segments."
+        },
+        "evidence_review": null,
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.4",
+          "loaded_references": [
+            "references/jump.md",
+            "references/evidence-guidelines.md"
+          ],
+          "content_digest": "b3a892a83b96bb6b02480b2924c83a70481ed1e1d7bbbcdfa408a9a4fcb5f363"
+        },
+        "sequential_decisions": [
+          {
+            "decision_type": "analyze",
+            "action_id": "temporal_contact_time_change",
+            "hypothesis": {
+              "hypothesis_id": "hypo_contact_time_temporal",
+              "statement": "Contact time increases from early segments (0.2s) to late segments (0.3s) across the jump session, indicating a coherent early-to-late change in contact_time_s.",
+              "dimensions": [
+                "temporal"
+              ],
+              "metric_codes": [
+                "contact_time_s"
+              ],
+              "target_predicate": "increase",
+              "reason": "The compact session series shows contact_time_s is constant at 0.2s for ordinals 0-5 then shifts to 0.3s for ordinals 6-11, a clear coherent early-to-late change while air_time_s, jump_height_m, cycle_time_s, and cadence remain constant.",
+              "success_condition": "verify_temporal_change confirms contact_time_s follows a monotonic increase from early to late segments."
+            },
+            "tool_name": "analyze_current_session",
+            "analysis_method": "verify_temporal_change",
+            "inputs": {
+              "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+              "metric_codes": [
+                "contact_time_s"
+              ]
+            },
+            "purpose": "Verify the coherent early-to-late increase in contact_time_s observed across the jump session segments."
+          },
+          {
+            "decision_type": "load_skill_resource",
+            "reference_id": "references/evidence-guidelines.md",
+            "reason": "Before deciding the next action for the jump report, I need the evidence-guidelines detail to correctly weigh the already-supported contact_time_s temporal increase against remaining candidate hypotheses and determine the appropriate next step."
+          },
+          {
+            "decision_type": "analyze",
+            "action_id": "action_cross_metric_cochange",
+            "hypothesis": {
+              "hypothesis_id": "hypo_airtime_contacttime_cochange",
+              "statement": "Test cross-metric co-change between the varying contact_time_s and the constant cycle_time_s.",
+              "dimensions": [
+                "temporal",
+                "cross_metric"
+              ],
+              "metric_codes": [
+                "contact_time_s",
+                "cycle_time_s"
+              ],
+              "target_predicate": "co_change",
+              "reason": "contact_time_s increased (supported) and cycle_time_s is constant at 0.6s across all 12 records; testing cross-metric co-change between a varying metric and a steady metric is discouraged because the constant metric does not visibly vary.",
+              "success_condition": "Cross-metric co-change would confirm both metrics move together, which the constant cycle_time_s cannot satisfy."
+            },
+            "tool_name": "analyze_current_session",
+            "analysis_method": "verify_cross_metric_cochange",
+            "inputs": {
+              "record_set_id": "148b7108-3916-58f2-acc1-997d76407516",
+              "metric_codes": [
+                "contact_time_s",
+                "cycle_time_s"
+              ]
+            },
+            "purpose": "Refine the cross-metric relationship of the already-supported contact_time_s change."
+          },
+          {
+            "decision_type": "stop",
+            "reason_code": "no_high_value_hypothesis",
+            "reason": "The temporal increase in contact_time_s (0.2s to 0.3s across segments) is already supported by verified Evidence. The only cross-metric co-change candidate involving a varying metric was tested (contact_time_s vs cycle_time_s) and returned not_supported. All other metrics (air_time_s, jump_height_m, cycle_time_s, cadence_jumps_per_min) are constant across the session with zero variance, so no further temporal, cross-metric, or side hypothesis has a plausible varying pattern to validate. There are no excluded records (excluded_records=0) so exclusion robustness has no basis, and side dimension is unavailable for this Jump Test. No new high-value verifiable hypothesis remains and further analysis would only repeat or confirm the settled contact-time finding.",
+            "unresolved_hypothesis_ids": []
+          }
+        ]
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 19342
+    }
+  ]
+}

@@ -17,10 +17,15 @@ def _disable_logfire_pydantic_plugin() -> None:
 
 _disable_logfire_pydantic_plugin()
 
-from .models import AthleteProfile, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
+from .config.models import (
+    AthleteProfile,
+    LLMTreadmillGaitConfig,
+    LLMTreadmillRunningConfig,
+)
 
 __all__ = [
     "AthleteProfile",
+    "ConfigService",
     "GaitAgent",
     "LLMTreadmillGaitConfig",
     "LLMTreadmillRunningConfig",
@@ -28,7 +33,8 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name == "GaitAgent":
-        from .gait_agent import GaitAgent
-        return GaitAgent
+    if name in {"ConfigService", "GaitAgent"}:
+        from .config.service import ConfigService
+
+        return ConfigService
     raise AttributeError(name)

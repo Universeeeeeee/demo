@@ -63,6 +63,24 @@ class AgentImportBoundaryTest(unittest.TestCase):
 
         self.assertEqual(result.stdout.strip(), "False")
 
+    def test_agent_config_panel_does_not_import_config_runtime_or_report_agent(self):
+        code = (
+            "import sys;"
+            f"sys.path.insert(0, {str(ROOT)!r});"
+            "import ui.views.agent_config_panel;"
+            "print('|'.join(str(name in sys.modules) for name in ("
+            "'agent.config.agent', 'agent.config.service', 'agent.report.agent', "
+            "'pydantic_ai')))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        self.assertEqual(result.stdout.strip(), "False|False|False|False")
+
 
 if __name__ == "__main__":
     unittest.main()

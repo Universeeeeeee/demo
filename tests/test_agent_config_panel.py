@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtGui import QTextCursor
-from qtpy.QtWidgets import QApplication
+from qtpy.QtGui import QPalette, QTextCursor
+from qtpy.QtWidgets import QApplication, QFrame, QScrollArea
 
 from config.treadmill_config import TreadmillGaitConfig
 from ui.views.agent_config_panel import AgentConfigPanel, _LLMHttpWorker
@@ -311,6 +311,37 @@ class AgentConfigPanelRequestLifecycleTest(unittest.TestCase):
             self.panel._assistant_title.sizeHint().width(),
         )
         self.assertTrue(self.panel._status_label.isHidden())
+
+    def test_test_type_popup_uses_manual_config_dark_palette(self):
+        self.panel.show()
+        QApplication.processEvents()
+
+        popup_palette = self.panel._test_type_combo.view().palette()
+
+        self.assertEqual(popup_palette.color(QPalette.Text).name(), "#e7ebf2")
+        self.assertEqual(popup_palette.color(QPalette.Base).name(), "#1a2230")
+
+    def test_fullscreen_layout_prioritizes_assistant_and_flattens_cards(self):
+        self.panel.resize(1220, 700)
+        self.panel.show()
+        QApplication.processEvents()
+
+        self.assertLessEqual(self.panel._profile_card.width(), 230)
+        self.assertLessEqual(self.panel._suggestion_card.width(), 270)
+        self.assertGreaterEqual(self.panel._chat_card.width(), 680)
+        self.assertIn(
+            "QFrame#AgentCard {\n  background-color: rgba(32, 37, 48, 0.72);\n"
+            "  border: none;",
+            self.panel.styleSheet(),
+        )
+        self.assertIn("QTextEdit {\n  border: none;", self.panel.styleSheet())
+
+        suggestion_scroll = self.panel.findChild(
+            QScrollArea, "SuggestionConfigScroll"
+        )
+        self.assertIsNotNone(suggestion_scroll)
+        self.assertEqual(suggestion_scroll.frameShape(), QFrame.NoFrame)
+        self.assertFalse(suggestion_scroll.isAncestorOf(self.panel._confirm_btn))
 
     def test_intelligent_config_reflows_without_clipping_at_narrow_width(self):
         self.panel.setFixedSize(620, 480)
