@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import time
 from pathlib import Path
 from typing import Any, Union, Callable
@@ -23,6 +22,7 @@ from config.config_validation import validate_runtime_config
 from config.test_config import TestConfig, AnyTestConfig
 from agent.common.model_provider import build_chat_model, default_model_settings
 from .models import AthleteProfile, LLMTestConfig, ChatResponse, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
+from .rule_engine import RuleEngine
 
 
 # ---- Load System Prompts ----
@@ -84,8 +84,7 @@ class LLMConfigAgent:
 
     # ---- ClarifyGPT 配置 ----
     N_SAMPLES = 3         # 总采样次数（含首次）
-    MIN_CONFIG_COUNT = 2  # 至少需要几份 LLMTestConfig 才算有效
-    CRITICAL_FIELDS = ["stop_type", "number_of_jumps", "test_length"]
+    MIN_CONFIG_COUNT = 3  # 三次采样都必须生成配置，才进入一致性比较
     FIELD_LABELS = {
         "stop_type": "停止方式",
         "number_of_jumps": "跳跃次数",
@@ -151,8 +150,11 @@ class LLMConfigAgent:
         "treadmill_running": "treadmill_running.md",
     }
 
-    MODE_CRITICAL_FIELDS = {
-        "jump": ["stop_type", "number_of_jumps", "test_length"],
+    MODE_CONSENSUS_FIELDS = {
+        "jump": [
+            "start_type", "start_position", "stop_type", "finish_position",
+            "number_of_jumps", "test_length", "starting_foot",
+        ],
         "treadmill_gait": ["treadmill_speed", "direction", "stop_type", "test_length"],
         "treadmill_running": ["treadmill_speed", "direction", "stop_type", "test_length"],
     }
@@ -167,7 +169,9 @@ class LLMConfigAgent:
         self._mode = mode
         self.message_history = None
         self._last_config: AnyTestConfig | None = None
-        self._CRITICAL_FIELDS = self.MODE_CRITICAL_FIELDS.get(mode, self.MODE_CRITICAL_FIELDS["jump"])
+        self._CONSENSUS_FIELDS = self.MODE_CONSENSUS_FIELDS.get(
+            mode, self.MODE_CONSENSUS_FIELDS["jump"]
+        )
         self._system_prompt = _load_prompt(self.PROMPT_MAP.get(mode, self.PROMPT_MAP["jump"]))
 
     @staticmethod
@@ -273,7 +277,7 @@ class LLMConfigAgent:
         """
         groups: dict[tuple, list] = {}
         for c in configs:
-            key = tuple(getattr(c, f) for f in self._CRITICAL_FIELDS)
+            key = tuple(getattr(c, f) for f in self._CONSENSUS_FIELDS)
             groups.setdefault(key, []).append(c)
         return list(groups.values())
 
@@ -286,7 +290,7 @@ class LLMConfigAgent:
         若未来新增 float 字段，需改用 math.isclose()。
         """
         disagreements = {}
-        for field_name in self._CRITICAL_FIELDS:
+        for field_name in self._CONSENSUS_FIELDS:
             values = {getattr(c, field_name) for c in configs}
             if len(values) > 1:
                 disagreements[field_name] = values
@@ -313,12 +317,10 @@ class LLMConfigAgent:
             stop_label = f"按跳跃次数自动停止，共 {config.number_of_jumps} 次"
         else:
             stop_label = {
-                "External impulse": "手动控制停止",
                 "Software command": "手动（软件指令）停止",
             }.get(config.stop_type, config.stop_type)
         start_labels = {
             "Status change": "踩上踏板即开始",
-            "External impulse": "手动开始",
         }
         position_labels = {
             "Inside area": "踏板上",
@@ -446,7 +448,7 @@ class LLMConfigAgent:
 
         clusters = self._cluster_configs(configs)
         if len(clusters) == 1:
-            chosen = random.choice(clusters[0])
+            chosen = clusters[0][0]
             chosen_result = next(
                 result for config, result in config_results if config is chosen
             )
@@ -478,9 +480,12 @@ class LLMConfigAgent:
         t_start: float,
         timing: list[str],
         stream_callback: Callable[[str], None] | None = None,
+        athlete_profile: AthleteProfile | None = None,
     ) -> tuple[AnyTestConfig | None, str]:
         """将已通过 ClarifyGPT 的 LLM 结构化输出转成系统 Config。"""
         config = verified.to_test_config()
+        if athlete_profile is not None:
+            config = RuleEngine().normalize_runtime_config(config, athlete_profile)
         errors = validate_runtime_config(config)
         if errors:
             return self._finalize(
@@ -563,7 +568,7 @@ class LLMConfigAgent:
             )
 
         return self._finalize_config_output(
-            verified, t_start, timing, stream_callback,
+            verified, t_start, timing, stream_callback, ctx,
         )
 
     def chat(

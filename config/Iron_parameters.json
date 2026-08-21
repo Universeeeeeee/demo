@@ -56,10 +56,6 @@
                 "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test"]
               },
               {
-                "value": "External impulse",
-                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test"]
-              },
-              {
                 "value": "Software command",
                 "applicable_tests": ["Treadmill Running Test", "Treadmill Gait Test", "Static Test (Sway)"],
                 "note": "Treadmill 和 Static 测试固定为此值，不可更改"
@@ -73,7 +69,7 @@
               "Treadmill Gait Test",
               "Static Test (Sway)"
             ],
-            "note": "Reaction Times 的 start_type 语义不同（刺激类型），见 stimulus_type 参数。Jump Test 仅支持 Status change / External impulse",
+            "note": "Reaction Times 的 start_type 语义不同（刺激类型），见 stimulus_type 参数。Jump Test 固定使用 Status change",
             "source": "4.2.2.2-4.2.2.9",
             "priority": "core"
           },
@@ -106,11 +102,6 @@
                 "description": "通过状态变化（进入/离开测试区）结束",
                 "applicable_tests": ["Jump Test", "Reaction Times"],
                 "enables_fields": ["finish_position", "number_of_jumps"]
-              },
-              {
-                "value": "External impulse",
-                "description": "通过外部脉冲信号（光电门等）结束",
-                "applicable_tests": ["Jump Test", "Sprint and Gait Test", "Tapping Test", "Static Test (Sway)"]
               },
               {
                 "value": "End of Time",
@@ -267,8 +258,7 @@
             "values": [
               "Visual stimulus",
               "Acoustic stimulus",
-              "Visual/Acoustic stimulus",
-              "External impulse"
+              "Visual/Acoustic stimulus"
             ],
             "applicable_tests": [
               "Reaction Times"

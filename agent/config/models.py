@@ -49,19 +49,19 @@ class LLMTestConfig(BaseModel):
     )
 
     # ---- Layer 2: 主配置参数 ----
-    stop_type: Literal["Status change", "End of Time", "External impulse"] = Field(
-        default="External impulse",
-        description="停止方式: External impulse=手动停止(默认), Status change=按跳跃次数自动停止, End of Time=按时间自动停止",
+    stop_type: Literal["Status change", "End of Time"] = Field(
+        default="Status change",
+        description="停止方式: Status change=按跳跃次数自动停止, End of Time=按时间自动停止",
     )
     number_of_jumps: Optional[int] = Field(
-        default=None, ge=1, le=99,
+        default=5, ge=1, le=99,
         description="跳跃次数, 仅 stop_type='Status change' 时需要, 范围1-99",
     )
     test_length: Optional[str] = Field(
         default=None,
         description="测试时长, 仅 stop_type='End of Time' 时需要, 必须使用 mm:ss 格式(如 02:00 表示2分钟)",
     )
-    start_type: Literal["Status change", "External impulse"] = Field(
+    start_type: Literal["Status change"] = Field(
         default="Status change",
         description="启动方式: Status change=踩上踏板即开始",
     )

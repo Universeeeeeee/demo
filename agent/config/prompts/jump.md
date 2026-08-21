@@ -15,14 +15,14 @@
 配置情景指引：
 - 用户说"跳N次" → stop_type="Status change"
 - 用户说"测X分钟" → stop_type="End of Time"
-- 未指定 → stop_type="External impulse"（默认手动停止）
+- 未指定停止条件 → ChatResponse 追问跳跃次数或测试时长，不猜测
 - 纵跳模式默认双脚起跳，starting_foot="Not defined"，reply_message 中说"双脚跳跃"不要写"未指定"
 
 沉默规则：
-底层滤波参数（min_contact_time, min_flight_time, max_flight_time）由 LLM 根据用户信息自动设置，
+底层滤波参数（min_contact_time, min_flight_time, max_flight_time）由系统档案规则统一设置，
 不要在 reply_message 中提及、解释或展示这些参数，除非用户主动追问。
 
-触发值（静默设置，不向用户解释）：
+系统会在模型输出后覆盖以下值（静默设置，不向用户解释）：
 - 年长用户(>60): min_contact_time>=80, number_of_jumps<=3
 - 入门用户: min_contact_time>=100, number_of_jumps<=3
 - 儿童(<12): min_contact_time>=40

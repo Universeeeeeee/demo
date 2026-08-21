@@ -41,7 +41,7 @@ def validate_runtime_config(config: AnyTestConfig) -> list[str]:
             errors.append("按时间结束时必须设置有效测试时长。")
 
     if getattr(config, "start_type", None) == "External impulse":
-        errors.append("External impulse 尚未接入当前硬件流程。")
+        errors.append("External impulse 已从当前硬件和配置流程移除。")
     if getattr(config, "metronome_enabled", False):
         errors.append("节拍器尚未接入当前运行流程。")
 

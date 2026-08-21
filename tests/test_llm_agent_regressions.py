@@ -220,6 +220,61 @@ class LLMConfigAgentRegressionTest(unittest.TestCase):
         self.assertIn("你好！", reply)
         self.assertIn("gate=miss→chat", reply)
 
+    def test_filter_disagreement_does_not_prompt_and_profile_rule_wins(self):
+        message = "帮我配置5次纵跳"
+        outputs = [
+            LLMTestConfig(
+                stop_type="Status change",
+                number_of_jumps=5,
+                min_contact_time=value,
+            )
+            for value in (10, 200, 450)
+        ]
+        fake_agent = _FakeSequenceAgent(outputs)
+        original_make_agent = LLMConfigAgent._make_agent
+        LLMConfigAgent._make_agent = staticmethod(
+            lambda http_client, mode="jump": fake_agent
+        )
+        try:
+            agent = LLMConfigAgent(mode="jump")
+            config, reply = agent.chat(
+                message,
+                AthleteProfile(
+                    age=65, weight=70, height=170, level="beginner"
+                ),
+            )
+        finally:
+            LLMConfigAgent._make_agent = original_make_agent
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.min_contact_time, 100)
+        self.assertNotIn("不太确定", reply)
+
+    def test_user_intent_disagreement_requires_clarification(self):
+        message = "帮我配置纵跳"
+        fake_agent = _FakeSequenceAgent(
+            [
+                LLMTestConfig(stop_type="Status change", number_of_jumps=5),
+                LLMTestConfig(stop_type="Status change", number_of_jumps=6),
+                LLMTestConfig(stop_type="Status change", number_of_jumps=5),
+            ]
+        )
+        original_make_agent = LLMConfigAgent._make_agent
+        LLMConfigAgent._make_agent = staticmethod(
+            lambda http_client, mode="jump": fake_agent
+        )
+        try:
+            agent = LLMConfigAgent(mode="jump")
+            config, reply = agent.chat(
+                message,
+                AthleteProfile(age=30, weight=70, height=170),
+            )
+        finally:
+            LLMConfigAgent._make_agent = original_make_agent
+
+        self.assertIsNone(config)
+        self.assertIn("跳跃次数", reply)
+
     def test_chat_stream_gate_miss_verifies_config_and_emits_summary_once(self):
         message = "你好，我想进行跑步测试，速度6.0，倒计时60s，方向是opposite side"
         fake_agent = _FakeSequenceStreamAgent(

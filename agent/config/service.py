@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from config.test_config import AnyTestConfig, TestConfig
+from config.test_config import AnyTestConfig
 from .models import AthleteProfile
 from .rule_engine import RuleEngine
 
@@ -59,7 +59,7 @@ class ConfigService:
     # ---- 离线模式：直接配置 ----
     def configure_offline(
         self, test_type: str, ctx: AthleteProfile
-    ) -> TestConfig:
+    ) -> AnyTestConfig:
         """离线模式：UI 传入 test_type + 用户信息 → 直接返回配置"""
         return self._rule_engine.configure(test_type, ctx)
 

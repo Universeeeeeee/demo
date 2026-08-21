@@ -722,14 +722,15 @@ class AgentConfigPanel(QWidget):
         self._chat_display.clear()
 
     def _on_offline_generate(self) -> None:
-        if self._current_agent_mode() != "jump":
-            self._chat_display.append(
-                "<b>AI:</b> 本地规则暂不支持跑步机模式，请使用手动配置。"
-            )
-            return
+        test_types = {
+            "jump": "Jump Test",
+            "treadmill_gait": "Treadmill Gait Test",
+            "treadmill_running": "Treadmill Running Test",
+        }
         try:
             config = self._rule_engine.configure(
-                "Jump Test", self._current_athlete_profile(),
+                test_types[self._current_agent_mode()],
+                self._current_athlete_profile(),
             )
         except Exception as e:
             self._chat_display.append(f"<b>错误:</b> 离线推荐失败：{e}")
@@ -757,12 +758,10 @@ class AgentConfigPanel(QWidget):
         stop_labels = {
             "Status change": "按跳跃次数结束",
             "End of Time": f"按测试时长结束（{config.test_length}）",
-            "External impulse": "手动控制结束",
             "Software command": "软件指令停止",
         }
         start_labels = {
             "Status change": "踩上设备后开始",
-            "External impulse": "手动开始",
         }
         position_labels = {
             "Inside area": "设备内",

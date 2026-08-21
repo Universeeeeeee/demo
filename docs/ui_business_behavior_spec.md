@@ -456,7 +456,7 @@ subject_snapshot = 测试开始时冻结的人体与训练信息
 以下项目存在字段或旧 UI，但没有完整运行时行为，不能在新 UI 中伪装为可用能力：
 
 - `Reaction Times`、`Sprint and Gait Test`、`Tapping Test`、`Static Test (Sway)`。
-- `External impulse` 的真实硬件触发。
+- `External impulse` 已确认不属于当前硬件能力，并已从产品配置中移除。
 - `start_position` / `finish_position` 的自动检测与门控。
 - 节拍器播放；当前只有配置字段，没有主流程运行实现。
 - 跑步机 `min_foot_length`、`filter_gaitr_in`、`filter_gaitr_out` 的运行时过滤；当前只有模型和表单字段。

@@ -3,10 +3,18 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
+from pydantic import ValidationError
+
 from agent.models import LLMTestConfig, LLMTreadmillGaitConfig, LLMTreadmillRunningConfig
 from config.test_config import TestConfig as _TestConfig
 from config.param_schema import get_schema
 from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
+
+
+def test_external_impulse_is_not_in_agent_output_contract():
+    with pytest.raises(ValidationError):
+        LLMTestConfig(stop_type="External impulse")
 
 
 def test_to_test_config_excludes_reply_message():

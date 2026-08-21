@@ -268,7 +268,7 @@ Agent LLM 调用线程 (QThread):
 
 - `stop_type = "Status change"` → `number_of_jumps` 和 `finish_position` 可见
 - `stop_type = "End of Time"` → `test_length` 可见
-- `stop_type = "External impulse"` → 手动停止，硬件层未实现
+- `External impulse` 不属于当前硬件能力，已从活动参数 Schema 移除
 
 ### 术语说明
 

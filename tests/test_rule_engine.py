@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.rule_engine import RuleEngine, PROFILE_RULES
 from agent.models import AthleteProfile
+from config.treadmill_config import TreadmillGaitConfig, TreadmillRunningConfig
 
 
 def _configure(age, level, **kwargs):
@@ -135,3 +136,35 @@ def test_all_rules_produce_valid_config():
         values.setdefault("test_macro_type", "Performance")
         errors = schema.validate(config.test_type, values)
         assert not errors, f"{name}: {errors}"
+
+
+def test_offline_rule_engine_supports_all_runtime_modes():
+    ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
+    engine = RuleEngine()
+
+    gait = engine.configure("Treadmill Gait Test", ctx)
+    running = engine.configure("Treadmill Running Test", ctx)
+
+    assert isinstance(gait, TreadmillGaitConfig)
+    assert gait.treadmill_speed == 3.0
+    assert isinstance(running, TreadmillRunningConfig)
+    assert running.treadmill_speed == 6.0
+
+
+def test_offline_rule_engine_rejects_unknown_mode():
+    ctx = AthleteProfile(age=30, weight=70, height=170, level="intermediate")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="不支持的离线测试类型"):
+        RuleEngine().configure("Unknown Test", ctx)
+
+
+def test_profile_filter_policy_applies_to_treadmill_modes():
+    ctx = AthleteProfile(age=65, weight=70, height=170, level="beginner")
+
+    gait = RuleEngine().configure("Treadmill Gait Test", ctx)
+    running = RuleEngine().configure("Treadmill Running Test", ctx)
+
+    assert gait.min_contact_time == 100
+    assert running.min_contact_time == 100

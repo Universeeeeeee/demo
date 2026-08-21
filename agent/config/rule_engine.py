@@ -7,10 +7,15 @@
 
 from __future__ import annotations
 
+from dataclasses import fields, replace
 from typing import Callable
 
-from config.test_config import TestConfig, default_jump_config
-from config.param_schema import get_schema
+from config.config_validation import validate_runtime_config
+from config.test_config import AnyTestConfig, TestConfig, default_jump_config
+from config.treadmill_config import (
+    default_treadmill_gait_config,
+    default_treadmill_running_config,
+)
 from .models import AthleteProfile
 
 
@@ -49,19 +54,16 @@ class RuleEngine:
     规则引擎 — 根据用户信息自动调整测试参数
 
     职责:
-      - 以 default_jump_config() 为基准
-      - 按用户条件逐条修正 TestConfig 字段
-      - 用 ParamSchema.validate() 校验输出合法性
+      - 按测试模式选择独立默认工厂
+      - 按用户条件逐条修正配置字段
+      - 用统一运行时校验器校验输出合法性
 
     不做:
       - 不识别意图（test_type 由 UI 直接传入）
       - 不涉及 LLM（纯规则映射）
     """
 
-    def __init__(self):
-        self._schema = get_schema()
-
-    def configure(self, test_type: str, ctx: AthleteProfile) -> TestConfig:
+    def configure(self, test_type: str, ctx: AthleteProfile) -> AnyTestConfig:
         """
         生成测试配置。
 
@@ -70,17 +72,23 @@ class RuleEngine:
             ctx: 用户运动档案
 
         Returns:
-            TestConfig — 与 ParamPanel.get_config() 输出格式一致
+            AnyTestConfig — 与 ParamPanel.get_config() 输出格式一致
 
         Raises:
             ValueError: 如果生成的配置未通过 schema 校验
         """
-        # 1. 基准配置
-        config = default_jump_config()
-        config.test_type = test_type
+        factories = {
+            "Jump Test": default_jump_config,
+            "Treadmill Gait Test": default_treadmill_gait_config,
+            "Treadmill Running Test": default_treadmill_running_config,
+        }
+        try:
+            config = factories[test_type]()
+        except KeyError as exc:
+            raise ValueError(f"不支持的离线测试类型: {test_type}") from exc
 
         # 2. 按用户条件修正
-        self._apply_rules(config, ctx)
+        config = self._apply_rules(config, ctx)
 
         # 3. schema 校验
         self._validate(config)
@@ -92,7 +100,9 @@ class RuleEngine:
     _MERGE_MIN = {"number_of_jumps"}                           # 越小越保守
     _MERGE_MIN_NONZERO = {"max_flight_time"}                   # 0=禁用，非零值越小越保守
 
-    def _apply_rules(self, config: TestConfig, ctx: AthleteProfile) -> None:
+    def _apply_rules(
+        self, config: AnyTestConfig, ctx: AthleteProfile
+    ) -> AnyTestConfig:
         """收集匹配规则的覆盖值，保守聚合后应用到 config。"""
         collected: dict[str, list] = {}
         for condition_fn, overrides in PROFILE_RULES:
@@ -114,14 +124,50 @@ class RuleEngine:
                 # 未明确定义聚合策略的字段：取最后一个匹配规则的值（兼容扩展）
                 merged[field_name] = values[-1]
 
-        for field_name, value in merged.items():
-            setattr(config, field_name, value)
+        available_fields = {item.name for item in fields(config)}
+        applicable = {
+            field_name: value
+            for field_name, value in merged.items()
+            if field_name in available_fields
+        }
+        if isinstance(config, TestConfig):
+            for field_name, value in applicable.items():
+                setattr(config, field_name, value)
+            return config
+        return replace(config, **applicable)
 
-    def _validate(self, config: TestConfig) -> None:
-        """用 ParamSchema 校验配置合法性。"""
-        values = config.to_dict()
-        # test_macro_type 是 UI 选择层参数，TestConfig 不包含，手动补充
-        values.setdefault("test_macro_type", "Performance")
-        errors = self._schema.validate(config.test_type, values)
+    def normalize_runtime_config(
+        self, config: AnyTestConfig, ctx: AthleteProfile
+    ) -> AnyTestConfig:
+        """Replace model-selected technical filters with profile policy values."""
+        policy = self.configure(config.test_type, ctx)
+        intent_fields = {
+            "Jump Test": {
+                "test_type", "start_type", "start_position", "stop_type",
+                "finish_position", "number_of_jumps", "test_length",
+                "starting_foot",
+            },
+            "Treadmill Gait Test": {
+                "stop_type", "test_length", "treadmill_speed", "direction",
+            },
+            "Treadmill Running Test": {
+                "stop_type", "test_length", "treadmill_speed", "direction",
+            },
+        }[config.test_type]
+        technical_values = {
+            item.name: getattr(policy, item.name)
+            for item in fields(policy)
+            if item.name not in intent_fields
+        }
+        if isinstance(config, TestConfig):
+            normalized = TestConfig.from_dict(config.to_dict())
+            for field_name, value in technical_values.items():
+                setattr(normalized, field_name, value)
+            return normalized
+        return replace(config, **technical_values)
+
+    def _validate(self, config: AnyTestConfig) -> None:
+        """Use the common runtime validator for every supported mode."""
+        errors = validate_runtime_config(config)
         if errors:
             raise ValueError(f"规则引擎生成的配置不合法: {errors}")
