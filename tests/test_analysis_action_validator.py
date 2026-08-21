@@ -169,6 +169,35 @@ def test_action_rejects_duplicate_request_and_exhausted_budget():
     assert exhausted.value.code == "tool_budget_exhausted"
 
 
+def test_action_rejects_ids_used_by_previous_sequential_turn():
+    package = make_jump_package([0.2] * 6 + [0.3] * 6)
+    action = _action(package.record_sets[0].record_set_id)
+    validator = ActionValidator()
+
+    with pytest.raises(ActionValidationError) as action_error:
+        validator.validate_action(
+            action,
+            package,
+            DataAccessScope(),
+            seen_action_ids=frozenset((action.action_id,)),
+        )
+    with pytest.raises(ActionValidationError) as hypothesis_error:
+        validator.validate_action(
+            action,
+            package,
+            DataAccessScope(),
+            seen_hypothesis_ids=frozenset(
+                (action.hypothesis.hypothesis_id,)
+            ),
+        )
+
+    assert action_error.value.code == "duplicate_node_id_across_cycles"
+    assert (
+        hypothesis_error.value.code
+        == "duplicate_question_id_across_cycles"
+    )
+
+
 def test_skill_reference_is_whitelisted_and_cannot_be_loaded_twice():
     validator = ActionValidator()
     decision = LoadSkillResource(

@@ -67,6 +67,7 @@ class SequentialAnalysisLoop:
         action_boundary: SequentialActionBoundary | None = None,
         state_reducer: AnalysisStateReducer | None = None,
         checkpoint_sink=None,
+        prompt_content_digest: str | None = None,
     ):
         self._agent = agent
         self._skill_loader = skill_loader or ReportAnalysisSkillLoader()
@@ -76,6 +77,7 @@ class SequentialAnalysisLoop:
         )
         self._state_reducer = state_reducer or AnalysisStateReducer()
         self._checkpoint_sink = checkpoint_sink
+        self._prompt_content_digest = prompt_content_digest
 
     def run(
         self,
@@ -167,6 +169,8 @@ class SequentialAnalysisLoop:
                 package,
                 access_scope,
                 seen_request_hashes=frozenset(state.seen_request_hashes),
+                seen_action_ids=frozenset(state.action_ids),
+                seen_hypothesis_ids=frozenset(state.question_ids),
                 remaining_tool_calls=(
                     MAX_ANALYSIS_TOOL_CALLS - state.tool_call_count
                 ),
@@ -439,6 +443,10 @@ class SequentialAnalysisLoop:
             "analysis_method_registry_version": ANALYSIS_METHOD_REGISTRY_VERSION,
             "kernel_version": KERNEL_VERSION,
         }
+        if self._prompt_content_digest is not None:
+            expected["prompt_content_digest"] = (
+                self._prompt_content_digest
+            )
         for field_name, expected_value in expected.items():
             if getattr(checkpoint, field_name) != expected_value:
                 raise SequentialAnalysisLoopError(
@@ -498,6 +506,7 @@ class SequentialAnalysisLoop:
                 analysis_tool_registry_version=ANALYSIS_TOOL_REGISTRY_VERSION,
                 analysis_method_registry_version=ANALYSIS_METHOD_REGISTRY_VERSION,
                 kernel_version=KERNEL_VERSION,
+                prompt_content_digest=self._prompt_content_digest,
             )
         )
 

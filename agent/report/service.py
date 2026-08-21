@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 from reporting.builders import ReportManifestBuilder
 from reporting.kernel import (
@@ -14,6 +15,7 @@ from reporting.models import (
     AnalysisPackage,
     AnalysisRunMetrics,
     DataAccessScope,
+    DataScopeAvailability,
     SequentialLoopCheckpoint,
     SequentialLoopResult,
 )
@@ -28,10 +30,14 @@ from reporting.repository import ReportRepository
 from reporting.tools import ANALYSIS_TOOL_REGISTRY_VERSION, AnalysisToolRegistry
 from reporting.validators import (
     ActionValidator,
+    ClaimRepairValidationError,
+    ClaimRepairValidator,
     ClaimValidationError,
     ClaimValidator,
     PlanValidator,
 )
+from knowledge.integration import build_report_rag_context
+from knowledge.pipeline import degraded_rag_result
 
 from .agent import ReportAgent
 from .analysis_loop import AnalysisLoop, AnalysisLoopError
@@ -61,9 +67,12 @@ class ReportAnalysisService:
         method_registry: AnalysisMethodRegistry | None = None,
         observation_builder: ObservationBuilder | None = None,
         claim_validator: ClaimValidator | None = None,
+        claim_repair_validator: ClaimRepairValidator | None = None,
         renderer: AnalysisRenderer | None = None,
         max_replans: int = 0,
         skill_loader: ReportAnalysisSkillLoader | None = None,
+        rag_pipeline=None,
+        rag_unavailable_error_code: str | None = None,
     ):
         self._repository = repository
         self._agent = agent or ReportAgent()
@@ -75,9 +84,14 @@ class ReportAnalysisService:
             include_screening_cues=False,
         )
         self._claim_validator = claim_validator or ClaimValidator()
+        self._claim_repair_validator = (
+            claim_repair_validator or ClaimRepairValidator()
+        )
         self._renderer = renderer or AnalysisRenderer()
         self._max_replans = max_replans
         self._skill_loader = skill_loader or ReportAnalysisSkillLoader()
+        self._rag_pipeline = rag_pipeline
+        self._rag_unavailable_error_code = rag_unavailable_error_code
 
     def analyze(
         self,
@@ -91,7 +105,9 @@ class ReportAnalysisService:
             )
         package = self._repository.get_package(session_id)
         manifest = ReportManifestBuilder().build(package)
-        availability = self._repository.get_scope_availability(session_id)
+        availability = DataScopeAvailability(
+            reasons=("external_scope_not_requested",)
+        )
         capabilities = self._tool_registry.list_capabilities(
             package, access_scope, self._method_registry
         )
@@ -111,18 +127,29 @@ class ReportAnalysisService:
             else "prompt_version",
             "unknown",
         )
+        prompt_content_digest = getattr(
+            self._agent,
+            "sequential_prompt_content_digest"
+            if use_sequential_loop
+            else "prompt_content_digest",
+            None,
+        )
         resume_from = None
         run_id = None
         if use_sequential_loop:
-            skill_context = self._skill_loader.load_initial(
-                package.context.test_type
-            )
+            try:
+                skill_context = self._skill_loader.load_initial(
+                    package.context.test_type
+                )
+            except SkillLoadError as exc:
+                raise ReportAnalysisError(exc.code, str(exc)) from exc
             resumable = self._repository.get_resumable_analysis_checkpoint(
                 session_id,
                 access_scope,
                 package.metadata.package_digest,
                 model_name=model_name,
                 prompt_version=prompt_version,
+                prompt_content_digest=prompt_content_digest,
                 skill_version=skill_context.skill_version,
                 observation_builder_version=OBSERVATION_BUILDER_VERSION,
                 analysis_tool_registry_version=ANALYSIS_TOOL_REGISTRY_VERSION,
@@ -167,6 +194,7 @@ class ReportAnalysisService:
                         tool_gateway=gateway,
                     ),
                     checkpoint_sink=checkpoint_sink,
+                    prompt_content_digest=prompt_content_digest,
                 )
                 if resume_from is not None and resume_from.phase in {
                     "draft_generated",
@@ -193,6 +221,7 @@ class ReportAnalysisService:
                         package,
                         access_scope,
                         result,
+                        prompt_content_digest=prompt_content_digest,
                     )
             else:
                 loop = AnalysisLoop(
@@ -213,7 +242,13 @@ class ReportAnalysisService:
                 )
             except ClaimValidationError as first_error:
                 repair = getattr(self._agent, "repair_synthesis", None)
-                if not callable(repair) or claim_repair_count >= 1:
+                if (
+                    not callable(repair)
+                    or claim_repair_count >= 1
+                    or not self._claim_repair_validator.can_repair(
+                        first_error.code
+                    )
+                ):
                     raise
                 if use_sequential_loop:
                     self._save_claim_checkpoint(
@@ -225,6 +260,7 @@ class ReportAnalysisService:
                         error_code=first_error.code,
                         error_message=str(first_error),
                         claim_repair_count=claim_repair_count,
+                        prompt_content_digest=prompt_content_digest,
                     )
                 repaired_draft = repair(
                     observation,
@@ -234,6 +270,18 @@ class ReportAnalysisService:
                     first_error.code,
                     str(first_error),
                 )
+                try:
+                    self._claim_repair_validator.validate(
+                        result.draft,
+                        repaired_draft,
+                        first_error.code,
+                        package,
+                        result.evidence,
+                    )
+                except ClaimRepairValidationError as repair_error:
+                    raise ClaimValidationError(
+                        repair_error.code, str(repair_error)
+                    ) from repair_error
                 claim_repair_count += 1
                 result = result.model_copy(update={"draft": repaired_draft})
                 if use_sequential_loop:
@@ -244,12 +292,30 @@ class ReportAnalysisService:
                         access_scope,
                         result,
                         claim_repair_count=claim_repair_count,
+                        prompt_content_digest=prompt_content_digest,
                     )
                 validated = self._claim_validator.validate(
                     repaired_draft,
                     package,
                     result.evidence,
                     access_scope,
+                )
+            rag_result = None
+            if self._rag_pipeline is not None:
+                try:
+                    rag_context = build_report_rag_context(
+                        package, validated, result.evidence
+                    )
+                    rag_result = self._rag_pipeline.run(rag_context)
+                except Exception:
+                    rag_result = degraded_rag_result(
+                        package.metadata.package_digest,
+                        "rag_integration_failed",
+                    )
+            elif self._rag_unavailable_error_code is not None:
+                rag_result = degraded_rag_result(
+                    package.metadata.package_digest,
+                    self._rag_unavailable_error_code,
                 )
             rendered = self._renderer.render(
                 validated,
@@ -259,6 +325,8 @@ class ReportAnalysisService:
                 state=result.state,
                 model_name=model_name,
                 prompt_version=prompt_version,
+                prompt_content_digest=prompt_content_digest,
+                rag_result=rag_result,
             )
             self._record_metrics(
                 run_id,
@@ -266,6 +334,7 @@ class ReportAnalysisService:
                 observation,
                 model_name,
                 prompt_version,
+                prompt_content_digest,
                 started,
                 result,
             )
@@ -280,14 +349,18 @@ class ReportAnalysisService:
             SequentialAnalysisLoopError,
             ClaimValidationError,
         ) as exc:
+            metrics_result = self._metrics_result(
+                result, exc, checkpoint_sink
+            )
             self._record_metrics(
                 run_id,
                 package.metadata.package_digest,
                 observation,
                 model_name,
                 prompt_version,
+                prompt_content_digest,
                 started,
-                result,
+                metrics_result,
             )
             self._repository.finalize_analysis_run(
                 run_id,
@@ -297,14 +370,18 @@ class ReportAnalysisService:
             )
             raise ReportAnalysisError(exc.code, str(exc)) from exc
         except Exception as exc:
+            metrics_result = self._metrics_result(
+                result, exc, checkpoint_sink
+            )
             self._safe_record_metrics(
                 run_id,
                 package.metadata.package_digest,
                 observation,
                 model_name,
                 prompt_version,
+                prompt_content_digest,
                 started,
-                result,
+                metrics_result,
             )
             self._repository.finalize_analysis_run(
                 run_id,
@@ -325,6 +402,7 @@ class ReportAnalysisService:
         error_code=None,
         error_message=None,
         claim_repair_count=0,
+        prompt_content_digest=None,
     ) -> None:
         checkpoint_sink.save(
             SequentialLoopCheckpoint(
@@ -344,8 +422,27 @@ class ReportAnalysisService:
                 analysis_tool_registry_version=ANALYSIS_TOOL_REGISTRY_VERSION,
                 analysis_method_registry_version=ANALYSIS_METHOD_REGISTRY_VERSION,
                 kernel_version=KERNEL_VERSION,
+                prompt_content_digest=prompt_content_digest,
             )
         )
+
+    def _metrics_result(self, result, exc, checkpoint_sink):
+        if result is not None:
+            return result
+        checkpoint = (
+            checkpoint_sink.latest_checkpoint
+            if checkpoint_sink is not None
+            else None
+        )
+        state = getattr(exc, "state", None)
+        if state is None and checkpoint is not None:
+            state = checkpoint.state
+        if state is None:
+            return None
+        evidence = getattr(exc, "evidence", ())
+        if checkpoint is not None and len(checkpoint.evidence) > len(evidence):
+            evidence = checkpoint.evidence
+        return SimpleNamespace(state=state, evidence=evidence)
 
     def _checkpoint_skill_matches(self, checkpoint, test_type) -> bool:
         try:
@@ -381,6 +478,7 @@ class ReportAnalysisService:
         observation,
         model_name,
         prompt_version,
+        prompt_content_digest,
         started,
         result,
     ):
@@ -391,6 +489,7 @@ class ReportAnalysisService:
             AnalysisRunMetrics(
                 model_name=model_name,
                 prompt_version=prompt_version,
+                prompt_content_digest=prompt_content_digest,
                 observation_builder_version=OBSERVATION_BUILDER_VERSION,
                 analysis_tool_registry_version=ANALYSIS_TOOL_REGISTRY_VERSION,
                 analysis_method_registry_version=ANALYSIS_METHOD_REGISTRY_VERSION,

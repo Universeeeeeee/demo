@@ -209,6 +209,27 @@ def test_quality_scope_check_keeps_its_semantic_digest():
     )
 
 
+def test_kernel_ids_include_snapshot_identity_for_inputless_methods():
+    first = _run_quality(make_jump_package([0.20] * 12))
+    second = _run_quality(make_jump_package([0.30] * 12))
+
+    assert first.package_digest != second.package_digest
+    assert first.items[0].evidence_id != second.items[0].evidence_id
+    assert first.tool_runs[0].tool_run_id != second.tool_runs[0].tool_run_id
+    assert first.provenance[0].provenance_id != second.provenance[0].provenance_id
+
+
+def test_kernel_ids_include_semantic_request_not_model_node_id_only():
+    package = make_jump_package([0.20] * 6 + [0.30] * 6)
+
+    contact = _run(package, "verify_temporal_change", ["contact_time_s"])
+    air = _run(package, "verify_temporal_change", ["air_time_s"])
+
+    assert contact.items[0].node_id == air.items[0].node_id == "n1"
+    assert contact.items[0].evidence_id != air.items[0].evidence_id
+    assert contact.tool_runs[0].tool_run_id != air.tool_runs[0].tool_run_id
+
+
 def test_migration_keeps_pre_v2_semantic_output_digests_byte_identical():
     cases = (
         (

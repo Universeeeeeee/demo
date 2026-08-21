@@ -56,6 +56,32 @@ def test_valid_plan_has_stable_execution_order_and_request_hash():
     assert validated_a.request_hashes == validated_b.request_hashes
 
 
+def test_plan_rejects_question_and_node_ids_used_by_previous_cycle():
+    package = make_jump_package([0.2] * 6 + [0.3] * 6)
+    plan = SmallAnalysisPlan(
+        questions=(_question(),),
+        nodes=(_node(package.record_sets[0].record_set_id),),
+    )
+
+    with pytest.raises(PlanValidationError) as question_error:
+        PlanValidator().validate(
+            plan,
+            package,
+            DataAccessScope(),
+            used_question_ids=frozenset((plan.questions[0].question_id,)),
+        )
+    with pytest.raises(PlanValidationError) as node_error:
+        PlanValidator().validate(
+            plan,
+            package,
+            DataAccessScope(),
+            used_node_ids=frozenset((plan.nodes[0].node_id,)),
+        )
+
+    assert question_error.value.code == "duplicate_question_id_across_cycles"
+    assert node_error.value.code == "duplicate_node_id_across_cycles"
+
+
 def test_analysis_question_rejects_agent_supplied_permission_fields():
     with pytest.raises(ValidationError):
         AnalysisQuestion(

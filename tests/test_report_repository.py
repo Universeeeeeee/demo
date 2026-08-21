@@ -251,11 +251,28 @@ def test_running_checkpoint_is_append_only_and_requires_exact_versions(store):
         package.metadata.package_digest,
         **{**expected, "kernel_version": "analysis-kernel/changed"},
     ) is None
+
+    digest_checkpoint = checkpoint.model_copy(
+        update={"prompt_content_digest": "c" * 64}
+    )
+    repository.save_analysis_checkpoint(run_id, digest_checkpoint)
+    assert repository.get_resumable_analysis_checkpoint(
+        session_id,
+        scope,
+        package.metadata.package_digest,
+        **{**expected, "prompt_content_digest": "d" * 64},
+    ) is None
+    assert repository.get_resumable_analysis_checkpoint(
+        session_id,
+        scope,
+        package.metadata.package_digest,
+        **{**expected, "prompt_content_digest": "c" * 64},
+    ).checkpoint == digest_checkpoint
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM report_analysis_checkpoints"
         ).fetchone()[0]
-    assert count == 2
+    assert count == 3
 
     repository.finalize_analysis_run(run_id, "failed", None, "interrupted")
     assert repository.get_resumable_analysis_checkpoint(

@@ -10,6 +10,7 @@ from .models import (
     ReportDataPackage,
     ValidatedAnalysisPackage,
 )
+from .text import format_numeric_value, render_validated_claim_text
 
 
 class AnalysisRenderer:
@@ -23,15 +24,12 @@ class AnalysisRenderer:
         state: AnalysisState,
         model_name: str,
         prompt_version: str,
+        prompt_content_digest: str | None = None,
+        rag_result=None,
     ) -> AnalysisPackage:
         claims = []
         for claim in validated.claims:
-            text = claim.text_template
-            for binding in claim.numeric_bindings:
-                text = text.replace(
-                    "{" + binding.binding_id + "}",
-                    self._format_value(binding.value, binding.unit),
-                )
+            text = render_validated_claim_text(claim)
             claims.append(
                 AnalysisClaim(
                     claim_id=claim.claim_id,
@@ -42,10 +40,11 @@ class AnalysisRenderer:
                     tool_run_ids=claim.tool_run_ids,
                     predicate_bindings=claim.predicate_bindings,
                     limitations=claim.limitations,
+                    citation_refs=(),
                 )
             )
         return AnalysisPackage(
-            analysis_schema_version="analysis-schema/3.0",
+            analysis_schema_version="analysis-schema/4.0",
             analysis_run_id=analysis_run_id,
             session_id=package.metadata.session_id,
             package_id=package.metadata.package_id,
@@ -55,17 +54,23 @@ class AnalysisRenderer:
             claims=tuple(claims),
             scope_expansion_suggestions=validated.scope_expansion_suggestions,
             overall_limitations=validated.overall_limitations,
+            literature_evidence=rag_result.evidence if rag_result else (),
+            recommendations=(
+                rag_result.package.recommendations if rag_result else ()
+            ),
+            references=rag_result.package.citations if rag_result else (),
+            references_markdown=(
+                rag_result.package.references_markdown if rag_result else ""
+            ),
+            rag_audit=rag_result.audit if rag_result else None,
             cycle_count=getattr(
                 state, "cycle_count", getattr(state, "tool_call_count", 0)
             ),
             replan_count=getattr(state, "replan_count", 0),
             model_name=model_name,
             prompt_version=prompt_version,
+            prompt_content_digest=prompt_content_digest,
         )
 
     def _format_value(self, value: float, unit: str) -> str:
-        if value.is_integer():
-            number = str(int(value))
-        else:
-            number = f"{value:.3f}".rstrip("0").rstrip(".")
-        return f"{number} {unit}"
+        return format_numeric_value(value, unit)

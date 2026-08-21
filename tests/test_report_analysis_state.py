@@ -94,11 +94,22 @@ def test_state_reducer_rejects_duplicate_hypothesis_and_semantic_request():
     action = _validated_action(package)
     reducer = AnalysisStateReducer()
     active = reducer.begin_action(SequentialAnalysisState(), action)
+    repeated_hypothesis = action.model_copy(
+        update={
+            "action": action.action.model_copy(update={"action_id": "a2"}),
+            "node": action.node.model_copy(update={"node_id": "a2"}),
+        }
+    )
 
     with pytest.raises(AnalysisStateReductionError) as duplicate_id:
-        reducer.begin_action(active, action)
+        reducer.begin_action(active, repeated_hypothesis)
 
     assert duplicate_id.value.code == "duplicate_hypothesis_id"
+
+    with pytest.raises(AnalysisStateReductionError) as duplicate_action:
+        reducer.begin_action(active, action)
+
+    assert duplicate_action.value.code == "duplicate_action_id"
 
 
 def test_state_reducer_rejects_evidence_from_another_action():

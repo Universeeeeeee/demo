@@ -88,9 +88,15 @@ class AnalysisKernel:
         predicates, values, counts, refs, quality_refs, limitations, record_set_id = dispatch[node.analysis_method](
             package, node
         )
-        tool_run_id = self._id(package.metadata.package_id, node.node_id, "tool_run")
-        provenance_id = self._id(package.metadata.package_id, node.node_id, "provenance")
-        evidence_id = self._id(package.metadata.package_id, node.node_id, "evidence")
+        tool_run_id = self._stable_id(
+            package, node, spec, dependency_evidence, "tool_run"
+        )
+        provenance_id = self._stable_id(
+            package, node, spec, dependency_evidence, "provenance"
+        )
+        evidence_id = self._stable_id(
+            package, node, spec, dependency_evidence, "evidence"
+        )
         output_payload = {
             # Keep the pre-schema-v3 semantic projection byte-identical. Stable
             # PredicateEvidence IDs are audit references, not deterministic results.
@@ -429,8 +435,34 @@ class AnalysisKernel:
             )
         )
 
-    def _id(self, package_id, node_id, kind):
-        return str(uuid.uuid5(_NAMESPACE, f"{package_id}:{node_id}:{kind}:{KERNEL_VERSION}"))
+    def _stable_id(
+        self,
+        package: ReportDataPackage,
+        node: AnalysisNode,
+        spec: AnalysisMethodSpec,
+        dependency_evidence: tuple[EvidenceItem, ...],
+        kind: str,
+    ) -> str:
+        identity = {
+            "package_id": package.metadata.package_id,
+            "package_digest": package.metadata.package_digest,
+            "tool_name": node.tool_name,
+            "analysis_method": node.analysis_method,
+            "analysis_method_version": spec.version,
+            "kernel_version": KERNEL_VERSION,
+            "inputs": node.inputs,
+            "dependency_evidence_ids": sorted(
+                {item.evidence_id for item in dependency_evidence}
+            ),
+            "id_kind": kind,
+        }
+        canonical = json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return str(uuid.uuid5(_NAMESPACE, canonical))
 
     def _digest(self, value: Any):
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

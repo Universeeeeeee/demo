@@ -6,7 +6,8 @@ import json
 import pytest
 
 from agent.report.service import ReportAnalysisError, ReportAnalysisService
-from agent.report.skill_loader import ReportAnalysisSkillLoader
+from knowledge.pipeline import degraded_rag_result
+from agent.report.skill_loader import ReportAnalysisSkillLoader, SkillLoadError
 from agent.report.state import AnalysisStateReducer
 from config.test_config import default_jump_config
 from data.subject_store import SubjectStore
@@ -120,8 +121,30 @@ class _RepairingAgent(_ServiceFakeAgent):
         error_message,
     ):
         self.repair_calls += 1
-        self.invalid_claim = False
-        return self.synthesize(observation, state, evidence)
+        item = evidence[0].items[0]
+        repaired_claim = draft.claims[0].model_copy(
+            update={
+                "text_template": "后半程触地时间增加了{difference}。",
+                "numeric_bindings": (
+                    NumericBinding(
+                        binding_id="difference",
+                        source_type="evidence",
+                        source_ref=item.evidence_id,
+                        value_key="difference",
+                    ),
+                ),
+            }
+        )
+        return draft.model_copy(update={"claims": (repaired_claim,)})
+
+
+class _LegacyFailsAfterEvidence(_ServiceFakeAgent):
+    def synthesize(self, observation, state, evidence):
+        raise RuntimeError("synthesis unavailable")
+
+
+class _ContentDigestAgent(_ServiceFakeAgent):
+    prompt_content_digest = "f" * 64
 
 
 class _SequentialServiceFakeAgent(_ServiceFakeAgent):
@@ -181,9 +204,46 @@ class _SequentialRepairingAgent(_SequentialServiceFakeAgent):
         error_code,
         error_message,
     ):
-        self.repair_calls += 1
-        self.invalid_claim = False
-        return self.synthesize(observation, state, evidence)
+        return _RepairingAgent.repair_synthesis(
+            self,
+            observation,
+            state,
+            evidence,
+            draft,
+            error_code,
+            error_message,
+        )
+
+
+class _SequentialFailsAfterEvidence(_SequentialServiceFakeAgent):
+    def decide(self, observation, state, evidence, skill_context):
+        if state.tool_call_count:
+            raise RuntimeError("failure after completed Tool call")
+        return super().decide(observation, state, evidence, skill_context)
+
+
+class _MaliciousRepairingAgent(_RepairingAgent):
+    def repair_synthesis(
+        self,
+        observation,
+        state,
+        evidence,
+        draft,
+        error_code,
+        error_message,
+    ):
+        repaired = super().repair_synthesis(
+            observation,
+            state,
+            evidence,
+            draft,
+            error_code,
+            error_message,
+        )
+        claim = repaired.claims[0].model_copy(
+            update={"text_template": "完全不同的发现为{difference}。"}
+        )
+        return repaired.model_copy(update={"claims": (claim,)})
 
 
 class _ProcessInterrupted(BaseException):
@@ -200,7 +260,7 @@ class _InterruptingRepository(ReportRepository):
             raise _ProcessInterrupted(checkpoint.phase)
 
 
-def _service(tmp_path, agent):
+def _service(tmp_path, agent, **service_kwargs):
     store = SubjectStore(tmp_path / "service.sqlite3")
     session_id = store.record_session(
         None,
@@ -208,7 +268,18 @@ def _service(tmp_path, agent):
         make_jump_report([0.2] * 6 + [0.3] * 6),
     )
     repository = ReportRepository(store)
-    return store, session_id, repository, ReportAnalysisService(repository, agent=agent)
+    return store, session_id, repository, ReportAnalysisService(
+        repository, agent=agent, **service_kwargs
+    )
+
+
+class _FakeRAGPipeline:
+    def __init__(self):
+        self.contexts = []
+
+    def run(self, context):
+        self.contexts.append(context)
+        return degraded_rag_result(context.package_digest, "fixture_degraded")
 
 
 def _statuses(store):
@@ -240,6 +311,42 @@ def test_service_returns_only_validated_rendered_analysis(tmp_path):
         DataAccessScope(),
         result.package_digest,
     )["analysis_run_id"] == result.analysis_run_id
+
+
+def test_service_runs_rag_only_after_claim_validation_and_degrades_independently(tmp_path):
+    rag_pipeline = _FakeRAGPipeline()
+    store, session_id, _, service = _service(
+        tmp_path,
+        _ServiceFakeAgent(),
+        rag_pipeline=rag_pipeline,
+    )
+
+    result = service.analyze(session_id, DataAccessScope())
+
+    assert result.analysis_schema_version == "analysis-schema/4.0"
+    assert result.claims[0].text.endswith("0.1 s。")
+    assert rag_pipeline.contexts[0].claims[0].claim_id == "c1"
+    assert rag_pipeline.contexts[0].claims[0].metric_codes == ("contact_time_s",)
+    assert rag_pipeline.contexts[0].claims[0].text.endswith("0.1 s。")
+    assert "{" not in rag_pipeline.contexts[0].claims[0].text
+    assert result.rag_audit.status == "degraded"
+    assert result.rag_audit.error_code == "fixture_degraded"
+    assert _statuses(store) == ["validated"]
+
+
+def test_service_reports_rag_initialization_degradation_without_pipeline(tmp_path):
+    store, session_id, _, service = _service(
+        tmp_path,
+        _ServiceFakeAgent(),
+        rag_unavailable_error_code="rag_initialization_failed",
+    )
+
+    result = service.analyze(session_id, DataAccessScope())
+
+    assert result.claims[0].text.endswith("0.1 s。")
+    assert result.rag_audit.status == "degraded"
+    assert result.rag_audit.error_code == "rag_initialization_failed"
+    assert _statuses(store) == ["validated"]
 
 
 def test_service_uses_sequential_loop_for_agent_with_decide(tmp_path):
@@ -385,6 +492,55 @@ def test_service_allows_one_validator_guided_synthesis_repair(tmp_path):
     assert _statuses(store) == ["validated"]
 
 
+def test_service_rejects_repair_that_rewrites_claim_semantics(tmp_path):
+    agent = _MaliciousRepairingAgent()
+    store, session_id, _, service = _service(tmp_path, agent)
+
+    with pytest.raises(ReportAnalysisError) as exc_info:
+        service.analyze(session_id, DataAccessScope())
+
+    assert exc_info.value.code == "repair_scope_violation"
+    assert _statuses(store) == ["rejected"]
+
+
+def test_failed_sequential_run_records_completed_tool_work(tmp_path):
+    store, session_id, _, service = _service(
+        tmp_path, _SequentialFailsAfterEvidence()
+    )
+
+    with pytest.raises(ReportAnalysisError):
+        service.analyze(session_id, DataAccessScope())
+
+    metrics = json.loads(_metrics_rows(store)[0])
+    assert _statuses(store) == ["failed"]
+    assert metrics["cycle_count"] == 1
+    assert metrics["agent_level_node_count"] == 1
+    assert metrics["tool_run_count"] == 1
+
+
+def test_failed_legacy_run_records_completed_tool_work(tmp_path):
+    store, session_id, _, service = _service(
+        tmp_path, _LegacyFailsAfterEvidence()
+    )
+
+    with pytest.raises(ReportAnalysisError):
+        service.analyze(session_id, DataAccessScope())
+
+    metrics = json.loads(_metrics_rows(store)[0])
+    assert _statuses(store) == ["failed"]
+    assert metrics["cycle_count"] == 1
+    assert metrics["agent_level_node_count"] == 1
+    assert metrics["tool_run_count"] == 1
+
+
+def test_analysis_package_exposes_full_prompt_content_digest(tmp_path):
+    _, session_id, _, service = _service(tmp_path, _ContentDigestAgent())
+
+    result = service.analyze(session_id, DataAccessScope())
+
+    assert result.prompt_content_digest == "f" * 64
+
+
 @pytest.mark.parametrize(
     "agent,expected_status,expected_code",
     [
@@ -415,6 +571,24 @@ def test_service_rejects_external_scope_before_any_analysis_run(tmp_path):
     assert _statuses(store) == []
 
 
+def test_initial_skill_failure_is_converted_to_report_analysis_error(tmp_path):
+    class _FailingSkillLoader:
+        def load_initial(self, test_type):
+            raise SkillLoadError("skill_missing", "skill unavailable")
+
+    store, session_id, _, service = _service(
+        tmp_path,
+        _SequentialServiceFakeAgent(),
+        skill_loader=_FailingSkillLoader(),
+    )
+
+    with pytest.raises(ReportAnalysisError) as exc_info:
+        service.analyze(session_id, DataAccessScope())
+
+    assert exc_info.value.code == "skill_missing"
+    assert _statuses(store) == []
+
+
 def test_disabled_external_tool_is_rejected_before_repository_detail_read():
     class _RepositorySpy:
         def __init__(self):
@@ -432,6 +606,36 @@ def test_disabled_external_tool_is_rejected_before_repository_detail_read():
 
     assert exc_info.value.code == "external_scope_not_implemented"
     assert repository.package_reads == 0
+
+
+def test_current_session_analysis_does_not_probe_external_scope(tmp_path):
+    store = SubjectStore(tmp_path / "repository-spy.sqlite3")
+    session_id = store.record_session(
+        None,
+        default_jump_config(),
+        make_jump_report([0.2] * 6 + [0.3] * 6),
+    )
+    wrapped = ReportRepository(store)
+
+    class _RepositorySpy:
+        def __init__(self, repository):
+            self.repository = repository
+            self.external_scope_reads = 0
+
+        def get_scope_availability(self, target_session_id):
+            self.external_scope_reads += 1
+            raise AssertionError("current-session analysis must not probe history")
+
+        def __getattr__(self, name):
+            return getattr(self.repository, name)
+
+    spy = _RepositorySpy(wrapped)
+    service = ReportAnalysisService(spy, agent=_ServiceFakeAgent())
+
+    result = service.analyze(session_id, DataAccessScope())
+
+    assert result.claims
+    assert spy.external_scope_reads == 0
 
 
 def test_service_defaults_to_ablation_b_execution_policy(tmp_path):

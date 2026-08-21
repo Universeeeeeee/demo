@@ -36,6 +36,12 @@ class AnalysisStateReducer:
         self._require_decision_budget(state)
         if state.tool_call_count >= MAX_ANALYSIS_TOOL_CALLS:
             self._fail("tool_budget_exhausted", "no analysis Tool calls remain")
+        action_id = action.action.action_id
+        if action_id in state.action_ids:
+            self._fail(
+                "duplicate_action_id",
+                f"action ID has already been used: {action_id}",
+            )
         hypothesis_id = action.action.hypothesis.hypothesis_id
         if any(
             item.target.hypothesis_id == hypothesis_id
@@ -59,6 +65,7 @@ class AnalysisStateReducer:
             update={
                 "decision_count": state.decision_count + 1,
                 "tool_call_count": state.tool_call_count + 1,
+                "action_ids": (*state.action_ids, action_id),
                 "question_ids": tuple(
                     dict.fromkeys((*state.question_ids, hypothesis_id))
                 ),
@@ -100,6 +107,11 @@ class AnalysisStateReducer:
                 "a sequential analysis action must produce exactly one Evidence item",
             )
         item = evidence.items[0]
+        if item.evidence_id in state.evidence_refs:
+            self._fail(
+                "duplicate_evidence_id",
+                f"Evidence has already been consumed: {item.evidence_id}",
+            )
         self._validate_evidence_identity(action, item)
         target = action.action.hypothesis
         predicates = [

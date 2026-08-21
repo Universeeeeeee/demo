@@ -7,6 +7,8 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from knowledge.models import Citation, LiteratureEvidence, RAGAudit, Recommendation
+
 
 TestType = Literal[
     "Jump Test",
@@ -661,6 +663,7 @@ class AnalysisState(FrozenModel):
 class SequentialAnalysisState(FrozenModel):
     decision_count: int = Field(default=0, ge=0, le=9)
     tool_call_count: int = Field(default=0, ge=0, le=5)
+    action_ids: tuple[str, ...] = ()
     question_ids: tuple[str, ...] = ()
     supported_predicates: tuple[str, ...] = ()
     rejected_predicates: tuple[str, ...] = ()
@@ -691,6 +694,8 @@ class EvidenceReviewDecision(FrozenModel):
 
 class NumericBinding(FrozenModel):
     binding_id: str = Field(
+        min_length=1,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
         description="Placeholder name used exactly as {binding_id} in text_template"
     )
     source_type: Literal["fact", "evidence"]
@@ -721,7 +726,7 @@ class LegacyPredicateBinding(FrozenModel):
 class DraftAnalysisClaim(FrozenModel):
     claim_id: str
     claim_type: Literal["descriptive", "derived", "synthesis"]
-    text_template: str
+    text_template: str = Field(min_length=1)
     fact_refs: tuple[str, ...] = Field(
         default=(),
         description="Required for descriptive claims; exact ScalarFact IDs",
@@ -737,6 +742,13 @@ class DraftAnalysisClaim(FrozenModel):
     predicate_bindings: tuple[PredicateBinding, ...] = ()
     numeric_bindings: tuple[NumericBinding, ...] = ()
     limitations: tuple[str, ...] = ()
+
+    @field_validator("text_template")
+    @classmethod
+    def require_non_blank_template(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text_template must be non-blank")
+        return value
 
 
 class ScopeExpansionSuggestion(FrozenModel):
@@ -787,6 +799,7 @@ class AnalysisClaim(FrozenModel):
     tool_run_ids: tuple[str, ...]
     predicate_bindings: tuple[PredicateBinding | LegacyPredicateBinding, ...]
     limitations: tuple[str, ...]
+    citation_refs: tuple[str, ...] = ()
 
 
 class AnalysisPackage(FrozenModel):
@@ -800,10 +813,18 @@ class AnalysisPackage(FrozenModel):
     claims: tuple[AnalysisClaim, ...]
     scope_expansion_suggestions: tuple[ScopeExpansionSuggestion, ...]
     overall_limitations: tuple[str, ...]
+    literature_evidence: tuple[LiteratureEvidence, ...] = ()
+    recommendations: tuple[Recommendation, ...] = ()
+    references: tuple[Citation, ...] = ()
+    references_markdown: str = ""
+    rag_audit: RAGAudit | None = None
     cycle_count: int
     replan_count: int
     model_name: str
     prompt_version: str
+    prompt_content_digest: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -831,8 +852,8 @@ class SequentialLoopResult(FrozenModel):
 
 class SequentialLoopCheckpoint(FrozenModel):
     checkpoint_schema_version: Literal[
-        "sequential-checkpoint/1.0"
-    ] = "sequential-checkpoint/1.0"
+        "sequential-checkpoint/1.1"
+    ] = "sequential-checkpoint/1.1"
     phase: Literal[
         "skill_loaded",
         "state_updated",
@@ -858,6 +879,9 @@ class SequentialLoopCheckpoint(FrozenModel):
     analysis_tool_registry_version: str
     analysis_method_registry_version: str
     kernel_version: str
+    prompt_content_digest: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
 
     @model_validator(mode="after")
     def validate_pending_action_phase(self):
@@ -902,6 +926,9 @@ class ResumableSequentialAnalysis(FrozenModel):
 class AnalysisRunMetrics(FrozenModel):
     model_name: str
     prompt_version: str
+    prompt_content_digest: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     observation_builder_version: str
     analysis_tool_registry_version: str
     analysis_method_registry_version: str

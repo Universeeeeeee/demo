@@ -21,12 +21,17 @@ from reporting.tools import AnalysisToolRegistry
 from tests.reporting_fixtures import make_jump_package
 
 
-def _plan(package, metric_code="contact_time_s", node_id="n1"):
+def _plan(
+    package,
+    metric_code="contact_time_s",
+    node_id="n1",
+    question_id="q1",
+):
     record_set_id = package.record_sets[0].record_set_id
     return SmallAnalysisPlan(
         questions=(
             AnalysisQuestion(
-                question_id="q1",
+                question_id=question_id,
                 description="synthetic",
                 dimensions=("temporal",),
                 metric_codes=(metric_code,),
@@ -43,7 +48,7 @@ def _plan(package, metric_code="contact_time_s", node_id="n1"):
                     "record_set_id": record_set_id,
                     "metric_codes": [metric_code],
                 },
-                question_id="q1",
+                question_id=question_id,
                 purpose="verify",
             ),
         ),
@@ -107,7 +112,12 @@ def test_conflict_can_execute_exactly_one_distinct_replan():
     agent = _FakeAgent(
         package,
         sufficient=False,
-        replan=_plan(package, metric_code="air_time_s", node_id="n2"),
+        replan=_plan(
+            package,
+            metric_code="air_time_s",
+            node_id="n2",
+            question_id="q2",
+        ),
     )
 
     result = AnalysisLoop(agent).run(_observation(package), package, DataAccessScope())
@@ -123,13 +133,15 @@ def test_duplicate_replan_is_rejected_instead_of_creating_a_third_loop():
     agent = _FakeAgent(
         package,
         sufficient=False,
-        replan=_plan(package, node_id="n2"),
+        replan=_plan(package, node_id="n2", question_id="q2"),
     )
 
     with pytest.raises(AnalysisLoopError) as exc_info:
         AnalysisLoop(agent).run(_observation(package), package, DataAccessScope())
 
     assert exc_info.value.code == "duplicate_replan_request"
+    assert exc_info.value.state.cycle_count == 1
+    assert len(exc_info.value.evidence) == 1
     assert agent.synthesize_calls == 0
 
 

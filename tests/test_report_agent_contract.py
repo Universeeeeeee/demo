@@ -2,9 +2,11 @@
 
 from agent.report.agent import ReportAgent
 from agent.report.prompts import (
+    DECISION_STAGE_TEMPLATE,
     SEQUENTIAL_PROMPT_VERSION,
     load_sequential_system_prompt,
     load_system_prompt,
+    prompt_content_digest,
 )
 from agent.report.skill_loader import ReportAnalysisSkillLoader
 from reporting.models import (
@@ -62,6 +64,19 @@ def test_constructing_report_agent_does_not_make_network_request(monkeypatch):
     monkeypatch.setattr("agent.report.agent.build_chat_model", fail)
     ReportAgent()
     assert called is False
+
+
+def test_builtin_agent_uses_readable_content_bound_prompt_identity():
+    agent = ReportAgent()
+
+    assert agent.sequential_prompt_version.startswith(
+        SEQUENTIAL_PROMPT_VERSION + "#"
+    )
+    assert len(agent.sequential_prompt_version.rsplit("#", 1)[1]) == 12
+    assert len(agent.sequential_prompt_content_digest) == 64
+    assert prompt_content_digest(
+        DECISION_STAGE_TEMPLATE, "changed"
+    ) != prompt_content_digest(DECISION_STAGE_TEMPLATE, "original")
 
 
 def test_sequential_prompt_requires_one_typed_decision_and_no_permission_fields():

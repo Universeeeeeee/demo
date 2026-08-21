@@ -22,10 +22,18 @@ from reporting.models import (
 from reporting.observation import serialize_observation
 
 from .prompts import (
+    DECISION_STAGE_TEMPLATE,
+    PLAN_STAGE_TEMPLATE,
     PROMPT_VERSION,
+    REPAIR_STAGE_TEMPLATE,
+    REVIEW_STAGE_TEMPLATE,
     SEQUENTIAL_PROMPT_VERSION,
+    SEQUENTIAL_SYNTHESIS_STAGE_TEMPLATE,
+    SYNTHESIS_STAGE_TEMPLATE,
     load_sequential_system_prompt,
     load_system_prompt,
+    prompt_content_digest,
+    readable_prompt_version,
 )
 from .skill_loader import ReportAnalysisSkillContext
 
@@ -38,6 +46,27 @@ class ReportAgent:
     def __init__(self):
         self._system_prompt = load_system_prompt()
         self._sequential_system_prompt = load_sequential_system_prompt()
+        self.prompt_content_digest = prompt_content_digest(
+            self._system_prompt,
+            PLAN_STAGE_TEMPLATE,
+            REVIEW_STAGE_TEMPLATE,
+            SYNTHESIS_STAGE_TEMPLATE,
+            REPAIR_STAGE_TEMPLATE,
+        )
+        self.sequential_prompt_content_digest = prompt_content_digest(
+            self._sequential_system_prompt,
+            self._system_prompt,
+            DECISION_STAGE_TEMPLATE,
+            SEQUENTIAL_SYNTHESIS_STAGE_TEMPLATE,
+            REPAIR_STAGE_TEMPLATE,
+        )
+        self.prompt_version = readable_prompt_version(
+            PROMPT_VERSION, self.prompt_content_digest
+        )
+        self.sequential_prompt_version = readable_prompt_version(
+            SEQUENTIAL_PROMPT_VERSION,
+            self.sequential_prompt_content_digest,
+        )
 
     def decide(
         self,
@@ -47,7 +76,7 @@ class ReportAgent:
         skill_context: ReportAnalysisSkillContext,
     ) -> AnalysisDecision:
         prompt = (
-            "阶段：Sequential Decision。基于最新状态只选择下一项动作或正常停止。\n"
+            f"{DECISION_STAGE_TEMPLATE}\n"
             f"Report Analysis Skill:\n{skill_context.instructions}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}\n"
@@ -65,7 +94,7 @@ class ReportAgent:
         state: AnalysisState,
     ) -> InvestigationDecision:
         prompt = (
-            "阶段：Initial Observation。请提出最多3个值得确定性验证的问题和小型计划。\n"
+            f"{PLAN_STAGE_TEMPLATE}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}"
         )
@@ -78,7 +107,7 @@ class ReportAgent:
         evidence: tuple[EvidenceBundle, ...],
     ) -> EvidenceReviewDecision:
         prompt = (
-            "阶段：Evidence Review。判断证据是否足够；只有冲突、质量限制或明确未解决问题时才给出一次Replan。\n"
+            f"{REVIEW_STAGE_TEMPLATE}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}\n"
             f"Evidence:\n{self._json(evidence)}"
@@ -92,7 +121,7 @@ class ReportAgent:
         evidence: tuple[EvidenceBundle, ...],
     ) -> DraftAnalysisPackage:
         prompt = (
-            "阶段：Structured Synthesis。只生成绑定Fact/Evidence的Claim。Claim文本中的数值必须使用NumericBinding占位符。\n"
+            f"{SYNTHESIS_STAGE_TEMPLATE}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}\n"
             f"Evidence:\n{self._json(evidence)}"
@@ -107,8 +136,7 @@ class ReportAgent:
         skill_context: ReportAnalysisSkillContext,
     ) -> DraftAnalysisPackage:
         prompt = (
-            "阶段：Sequential Structured Synthesis。只生成绑定Fact/Evidence的Claim。"
-            "Claim文本中的数值必须使用NumericBinding占位符。\n"
+            f"{SEQUENTIAL_SYNTHESIS_STAGE_TEMPLATE}\n"
             f"Report Analysis Skill:\n{skill_context.instructions}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}\n"
@@ -126,9 +154,7 @@ class ReportAgent:
         error_message: str,
     ) -> DraftAnalysisPackage:
         prompt = (
-            "阶段：Structured Output Repair。确定性Validator拒绝了Draft。"
-            "只修正引用、Claim类型、PredicateBinding或NumericBinding；"
-            "不得增加新发现、数值或Evidence。\n"
+            f"{REPAIR_STAGE_TEMPLATE}\n"
             f"Validation error: {error_code}: {error_message}\n"
             f"Observation:\n{serialize_observation(observation)}\n"
             f"State:\n{self._json(state)}\n"

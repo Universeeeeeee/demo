@@ -47,14 +47,16 @@ def test_renderer_injects_bound_value_and_unit_deterministically():
     second = renderer.render(validated, analysis_run_id="run_1", package=package, access_scope=DataAccessScope(), state=AnalysisState(cycle_count=1), model_name="fake", prompt_version="v1")
 
     assert first == second
-    assert first.analysis_schema_version == "analysis-schema/3.0"
+    assert first.analysis_schema_version == "analysis-schema/4.0"
     assert first.claims[0].text == "前后差值为0.1 s。"
+    assert first.claims[0].citation_refs == ()
     assert first.claims[0].predicate_bindings[0].predicate_evidence_ref == (
         "predicate-evidence-1"
     )
 
     legacy = first.model_dump(mode="json")
     legacy.pop("analysis_schema_version")
+    legacy.pop("prompt_content_digest")
     assert type(first).model_validate(legacy).analysis_schema_version == (
         "analysis-schema/1.0-legacy"
     )
@@ -69,3 +71,8 @@ def test_renderer_injects_bound_value_and_unit_deterministically():
         parsed_v2.claims[0].predicate_bindings[0],
         LegacyPredicateBinding,
     )
+
+
+def test_renderer_uses_significant_digits_for_small_nonzero_values():
+    assert AnalysisRenderer()._format_value(0.0004, "m") == "0.0004 m"
+    assert AnalysisRenderer()._format_value(0.0000004, "m") == "4e-07 m"

@@ -22,9 +22,25 @@ MAX_AGENT_LEVEL_NODES_PER_CYCLE = 3
 
 
 class AnalysisLoopError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        state: AnalysisState | None = None,
+        evidence: tuple[EvidenceBundle, ...] = (),
+    ):
         super().__init__(message)
         self.code = code
+        self.state = state
+        self.evidence = evidence
+
+
+class AnalysisLoopRuntimeError(RuntimeError):
+    def __init__(self, message: str, *, state, evidence):
+        super().__init__(message)
+        self.state = state
+        self.evidence = evidence
 
 
 class AnalysisLoop:
@@ -52,9 +68,15 @@ class AnalysisLoop:
         state = AnalysisState()
         evidence_bundles: list[EvidenceBundle] = []
         seen_request_hashes: set[str] = set()
+        seen_question_ids: set[str] = set()
+        seen_node_ids: set[str] = set()
         initial = self._agent.propose_plan(observation, state)
         validated = self._validate(initial.plan, package, access_scope)
         seen_request_hashes.update(validated.request_hashes)
+        seen_question_ids.update(
+            question.question_id for question in initial.plan.questions
+        )
+        seen_node_ids.update(node.node_id for node in initial.plan.nodes)
         first_evidence = self._tool_gateway.execute_plan(
             package, validated, access_scope
         )
@@ -69,18 +91,30 @@ class AnalysisLoop:
             replan_count=0,
         )
 
-        review = self._agent.review_evidence(
-            observation,
+        review = self._with_partial_state(
+            lambda: self._agent.review_evidence(
+                observation,
+                state,
+                tuple(evidence_bundles),
+            ),
             state,
-            tuple(evidence_bundles),
+            evidence_bundles,
         )
         if (
             not review.evidence_sufficient
             and review.replan is not None
             and self._max_replans == 1
         ):
-            validated_replan = self._validate(
-                review.replan, package, access_scope
+            validated_replan = self._with_partial_state(
+                lambda: self._validate(
+                    review.replan,
+                    package,
+                    access_scope,
+                    used_question_ids=frozenset(seen_question_ids),
+                    used_node_ids=frozenset(seen_node_ids),
+                ),
+                state,
+                evidence_bundles,
             )
             duplicate_hashes = seen_request_hashes.intersection(
                 validated_replan.request_hashes
@@ -89,9 +123,15 @@ class AnalysisLoop:
                 raise AnalysisLoopError(
                     "duplicate_replan_request",
                     "Replan repeated an already executed semantic request",
+                    state=state,
+                    evidence=tuple(evidence_bundles),
                 )
-            second_evidence = self._tool_gateway.execute_plan(
-                package, validated_replan, access_scope
+            second_evidence = self._with_partial_state(
+                lambda: self._tool_gateway.execute_plan(
+                    package, validated_replan, access_scope
+                ),
+                state,
+                evidence_bundles,
             )
             evidence_bundles.append(second_evidence)
             state = self._updated_state(
@@ -122,10 +162,14 @@ class AnalysisLoop:
                 }
             )
 
-        draft = self._agent.synthesize(
-            observation,
+        draft = self._with_partial_state(
+            lambda: self._agent.synthesize(
+                observation,
+                state,
+                tuple(evidence_bundles),
+            ),
             state,
-            tuple(evidence_bundles),
+            evidence_bundles,
         )
         return LoopResult(
             state=state,
@@ -133,9 +177,37 @@ class AnalysisLoop:
             draft=draft,
         )
 
-    def _validate(self, plan, package, access_scope):
+    def _with_partial_state(self, operation, state, evidence_bundles):
         try:
-            return self._plan_validator.validate(plan, package, access_scope)
+            return operation()
+        except AnalysisLoopError as exc:
+            exc.state = state
+            exc.evidence = tuple(evidence_bundles)
+            raise
+        except Exception as exc:
+            raise AnalysisLoopRuntimeError(
+                str(exc),
+                state=state,
+                evidence=tuple(evidence_bundles),
+            ) from exc
+
+    def _validate(
+        self,
+        plan,
+        package,
+        access_scope,
+        *,
+        used_question_ids=frozenset(),
+        used_node_ids=frozenset(),
+    ):
+        try:
+            return self._plan_validator.validate(
+                plan,
+                package,
+                access_scope,
+                used_question_ids=used_question_ids,
+                used_node_ids=used_node_ids,
+            )
         except PlanValidationError as exc:
             raise AnalysisLoopError(exc.code, str(exc)) from exc
 

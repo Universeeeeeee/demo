@@ -276,6 +276,7 @@ class ReportRepository:
         analysis_tool_registry_version: str,
         analysis_method_registry_version: str,
         kernel_version: str,
+        prompt_content_digest: str | None = None,
     ) -> ResumableSequentialAnalysis | None:
         with self._connect() as conn:
             rows = conn.execute(
@@ -305,6 +306,10 @@ class ReportRepository:
             "analysis_method_registry_version": analysis_method_registry_version,
             "kernel_version": kernel_version,
         }
+        if prompt_content_digest is not None:
+            expected_versions["prompt_content_digest"] = (
+                prompt_content_digest
+            )
         for row in rows:
             try:
                 checkpoint = SequentialLoopCheckpoint.model_validate_json(

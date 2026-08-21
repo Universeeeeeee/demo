@@ -41,6 +41,8 @@ class SequentialActionBoundary:
         access_scope: DataAccessScope,
         *,
         seen_request_hashes: frozenset[str] = frozenset(),
+        seen_action_ids: frozenset[str] = frozenset(),
+        seen_hypothesis_ids: frozenset[str] = frozenset(),
         remaining_tool_calls: int = 1,
         action_correction_count: int = 0,
     ) -> ValidatedAnalysisAction | ActionRejected:
@@ -50,6 +52,8 @@ class SequentialActionBoundary:
                 package,
                 access_scope,
                 seen_request_hashes=seen_request_hashes,
+                seen_action_ids=seen_action_ids,
+                seen_hypothesis_ids=seen_hypothesis_ids,
                 remaining_tool_calls=remaining_tool_calls,
             )
         except ActionValidationError as exc:
