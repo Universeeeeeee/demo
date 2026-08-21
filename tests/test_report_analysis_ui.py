@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from config.test_report import JumpTestReport
 from ui.views.report_view import ReportView
 
@@ -164,3 +166,87 @@ def test_switching_report_clears_previous_analysis(qtbot):
 
     assert view._analysis_result.isHidden()
     assert view._session_id == 13
+
+
+def test_schema_v4_recommendations_render_only_validated_http_references(qtbot):
+    view = ReportView(llm_client=_FakeAnalysisClient())
+    qtbot.addWidget(view)
+    view.show_validated_analysis(
+        {
+            "claims": [{"text": "可信结论。", "limitations": []}],
+            "recommendations": [
+                {
+                    "text": "建议复核动作一致性。",
+                    "citation_refs": ["cite-1"],
+                    "limitations": ["仅用于一般复核"],
+                }
+            ],
+            "references": [
+                {
+                    "citation_id": "cite-1",
+                    "title": "Reviewed <Paper>",
+                    "url": "https://example.org/paper",
+                    "locator": "Methods ¶1",
+                },
+                {
+                    "citation_id": "bad",
+                    "title": "Unsafe",
+                    "url": "javascript:alert(1)",
+                },
+            ],
+            "overall_limitations": [],
+        }
+    )
+
+    rendered = view._analysis_result.text()
+    assert "循证行动建议" in rendered
+    assert "https://example.org/paper" in rendered
+    assert "javascript:" not in rendered
+    assert "Reviewed &lt;Paper&gt;" in rendered
+    assert "建议限制：仅用于一般复核" in rendered
+
+
+@pytest.mark.parametrize(
+    "audit,expected",
+    (
+        (
+            {"status": "degraded", "error_code": "retrieval_failed"},
+            "循证建议暂时不可用",
+        ),
+        (
+            {"status": "no_evidence"},
+            "未检索到满足条件的文献证据",
+        ),
+    ),
+)
+def test_rag_audit_status_is_visible_to_user(qtbot, audit, expected):
+    view = ReportView(llm_client=_FakeAnalysisClient())
+    qtbot.addWidget(view)
+
+    view.show_validated_analysis(
+        {
+            "claims": [{"text": "可信结论。", "limitations": []}],
+            "recommendations": [],
+            "references": [],
+            "rag_audit": audit,
+            "overall_limitations": [],
+        }
+    )
+
+    assert expected in view._analysis_result.text()
+
+
+def test_missing_rag_audit_does_not_show_degradation(qtbot):
+    view = ReportView(llm_client=_FakeAnalysisClient())
+    qtbot.addWidget(view)
+
+    view.show_validated_analysis(
+        {
+            "claims": [{"text": "可信结论。", "limitations": []}],
+            "recommendations": [],
+            "references": [],
+            "overall_limitations": [],
+        }
+    )
+
+    assert "循证建议暂时不可用" not in view._analysis_result.text()

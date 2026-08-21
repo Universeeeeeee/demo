@@ -14,10 +14,12 @@ report_view.py — 测试报告页
 from __future__ import annotations
 
 import importlib
+import html
 import math
 import os
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from openpyxl import Workbook
 
@@ -815,7 +817,9 @@ class ReportView(QWidget):
         analysis_layout.addWidget(self._analysis_status)
         self._analysis_result = QLabel("")
         self._analysis_result.setWordWrap(True)
-        self._analysis_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._analysis_result.setTextFormat(Qt.RichText)
+        self._analysis_result.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self._analysis_result.setOpenExternalLinks(True)
         self._analysis_result.hide()
         analysis_layout.addWidget(self._analysis_result)
         self._analysis_panel.hide()
@@ -897,22 +901,104 @@ class ReportView(QWidget):
 
     def show_validated_analysis(self, analysis: dict) -> None:
         claims = analysis.get("claims", [])
-        lines = []
+        sections = []
+        claim_lines = []
         for claim in claims:
             text = claim.get("text", "").strip()
             if not text:
                 continue
+            text = html.escape(text)
             claim_limitations = claim.get("limitations", [])
             if claim_limitations:
-                text += "\n证据限制：" + "；".join(
-                    str(item) for item in claim_limitations
+                text += "<br><span style='color:#aeb7c5'>证据限制：" + "；".join(
+                    html.escape(str(item)) for item in claim_limitations
+                ) + "</span>"
+            claim_lines.append(f"<div style='margin-bottom:8px'>{text}</div>")
+        if claim_lines:
+            sections.append("<h3>分析结论</h3>" + "".join(claim_lines))
+
+        references = analysis.get("references", [])
+        reference_by_id = {
+            item.get("citation_id"): (index, item)
+            for index, item in enumerate(references, start=1)
+            if item.get("citation_id")
+        }
+        recommendation_lines = []
+        for recommendation in analysis.get("recommendations", []):
+            text = html.escape(str(recommendation.get("text", "")).strip())
+            if not text:
+                continue
+            links = []
+            for citation_id in recommendation.get("citation_refs", []):
+                resolved = reference_by_id.get(citation_id)
+                if resolved is not None:
+                    links.append(f"[{resolved[0]}]")
+            suffix = " " + " ".join(links) if links else ""
+            recommendation_limitations = recommendation.get(
+                "limitations", []
+            )
+            limitation_text = ""
+            if recommendation_limitations:
+                limitation_text = (
+                    "<br><span style='color:#aeb7c5'>建议限制："
+                    + "；".join(
+                        html.escape(str(item))
+                        for item in recommendation_limitations
+                    )
+                    + "</span>"
                 )
-            lines.append(text)
+            recommendation_lines.append(
+                f"<div style='margin-bottom:8px'>{text}{suffix}"
+                f"{limitation_text}</div>"
+            )
+        if recommendation_lines:
+            sections.append(
+                "<h3>循证行动建议</h3>" + "".join(recommendation_lines)
+            )
+
+        reference_lines = []
+        for index, reference in enumerate(references, start=1):
+            title = html.escape(str(reference.get("title", "参考资料")))
+            url = str(reference.get("url", ""))
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            locator = html.escape(str(reference.get("locator", "")))
+            details = f" — {locator}" if locator else ""
+            reference_lines.append(
+                f"<div>[{index}] <a href='{html.escape(url, quote=True)}'>{title}</a>{details}</div>"
+            )
+        if reference_lines:
+            sections.append("<h3>参考资料</h3>" + "".join(reference_lines))
+
+        rag_audit = analysis.get("rag_audit")
+        if isinstance(rag_audit, dict):
+            rag_status = rag_audit.get("status")
+            if rag_status == "degraded":
+                error_code = html.escape(
+                    str(rag_audit.get("error_code") or "unknown")
+                )
+                sections.append(
+                    "<div style='color:#aeb7c5'>循证建议暂时不可用，"
+                    "确定性分析不受影响。"
+                    f"（{error_code}）</div>"
+                )
+            elif rag_status == "no_evidence":
+                sections.append(
+                    "<div style='color:#aeb7c5'>未检索到满足条件的"
+                    "文献证据，因此未生成建议。</div>"
+                )
+
         limitations = analysis.get("overall_limitations", [])
         if limitations:
-            lines.append("限制：" + "；".join(str(item) for item in limitations))
+            sections.append(
+                "<div><b>限制：</b>" + "；".join(
+                    html.escape(str(item)) for item in limitations
+                )
+                + "</div>"
+            )
         self._analysis_result.setText(
-            "\n\n".join(lines) if lines else "未形成可验证的分析结论。"
+            "".join(sections) if sections else "未形成可验证的分析结论。"
         )
         self._analysis_result.show()
         self._analysis_button.setText("重新分析")

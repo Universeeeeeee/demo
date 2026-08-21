@@ -46,6 +46,45 @@ def _get_config_service() -> ConfigService:
         return _config_service
 
 
+def _build_report_rag_pipeline():
+    from knowledge.embeddings import LocalEmbeddingModel
+    from knowledge.ingestion import DEFAULT_DATA_DIR
+    from knowledge.pipeline import DeterministicRAGPipeline
+    from knowledge.release_gate import (
+        RELEASE_GATE_DISABLED,
+        RELEASE_GATE_ENABLED,
+        v1_release_status,
+    )
+    from knowledge.retrieval import HybridRetriever
+    from knowledge.store import KnowledgeStore
+
+    gate_status = v1_release_status()
+    if gate_status == RELEASE_GATE_DISABLED:
+        return None, None
+    if gate_status != RELEASE_GATE_ENABLED:
+        print(
+            "[llm_worker] RAG release gate configuration is invalid; "
+            "deterministic report analysis remains available"
+        )
+        return None, "rag_release_gate_invalid"
+    try:
+        embedder = LocalEmbeddingModel()
+        return (
+            DeterministicRAGPipeline(
+                HybridRetriever(KnowledgeStore(), embedder),
+                manifest_path=DEFAULT_DATA_DIR / "manifest.json",
+            ),
+            None,
+        )
+    except Exception:
+        print(
+            "[llm_worker] RAG initialization failed; "
+            "deterministic report analysis remains available:\n"
+            f"{traceback.format_exc()}"
+        )
+        return None, "rag_initialization_failed"
+
+
 def _get_report_service():
     global _report_service
     with _report_lock:
@@ -54,8 +93,13 @@ def _get_report_service():
             from data.subject_store import SubjectStore
             from reporting.repository import ReportRepository
 
+            rag_pipeline, rag_unavailable_error_code = (
+                _build_report_rag_pipeline()
+            )
             _report_service = ReportAnalysisService(
-                ReportRepository(SubjectStore())
+                ReportRepository(SubjectStore()),
+                rag_pipeline=rag_pipeline,
+                rag_unavailable_error_code=rag_unavailable_error_code,
             )
         return _report_service
 

@@ -21,6 +21,58 @@ def test_report_routes_are_namespaced_without_sharing_config_state():
     assert not hasattr(worker, "_agent_lock")
 
 
+def test_report_rag_construction_failure_is_isolated(monkeypatch):
+    monkeypatch.setattr(
+        "knowledge.release_gate.v1_release_status", lambda: "enabled"
+    )
+
+    class _FailingEmbedding:
+        def __init__(self):
+            raise RuntimeError("embedding unavailable")
+
+    monkeypatch.setattr(
+        "knowledge.embeddings.LocalEmbeddingModel", _FailingEmbedding
+    )
+
+    pipeline, error_code = worker._build_report_rag_pipeline()
+
+    assert pipeline is None
+    assert error_code == "rag_initialization_failed"
+
+
+def test_report_rag_catalog_construction_failure_is_isolated(monkeypatch):
+    monkeypatch.setattr(
+        "knowledge.release_gate.v1_release_status", lambda: "enabled"
+    )
+    monkeypatch.setattr(
+        "knowledge.embeddings.LocalEmbeddingModel", lambda: object()
+    )
+
+    class _FailingPipeline:
+        def __init__(self, *args, **kwargs):
+            raise ValueError("catalog invalid")
+
+    monkeypatch.setattr(
+        "knowledge.pipeline.DeterministicRAGPipeline", _FailingPipeline
+    )
+
+    pipeline, error_code = worker._build_report_rag_pipeline()
+
+    assert pipeline is None
+    assert error_code == "rag_initialization_failed"
+
+
+def test_report_rag_invalid_enabled_gate_is_reported(monkeypatch):
+    monkeypatch.setattr(
+        "knowledge.release_gate.v1_release_status", lambda: "invalid"
+    )
+
+    pipeline, error_code = worker._build_report_rag_pipeline()
+
+    assert pipeline is None
+    assert error_code == "rag_release_gate_invalid"
+
+
 def test_report_request_accepts_only_session_and_scope_schema():
     request = worker._parse_report_request(
         {
