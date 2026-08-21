@@ -1,0 +1,18 @@
+{
+  "baseline_version": "sports-rag-retrieval/1.4",
+  "eval_version": "sports-rag-eval/1.0",
+  "corpus_version": "sports-rag-corpus/1.4",
+  "question_count": 30,
+  "metrics": {
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "precision_at_5": 0.5333333333333334,
+    "mrr": 0.9,
+    "ndcg_at_10": 0.9282691723824853
+  },
+  "hard_gates": {
+    "metadata_leakage": 0,
+    "forbidden_population_leakage": 0,
+    "disabled_scenario_evidence": 0
+  }
+}

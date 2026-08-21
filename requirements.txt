@@ -10,3 +10,5 @@ python-dotenv
 pytest
 requests
 mediapipe
+fastembed==0.8.0
+pypdf==6.16.1

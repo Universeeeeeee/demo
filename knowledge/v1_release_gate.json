@@ -1,0 +1,11 @@
+{
+  "gate_version": "sports-rag-v1/1.2",
+  "retrieval_baseline_passed": true,
+  "metadata_gates_passed": true,
+  "automated_generator_e2e_passed": true,
+  "human_groundedness_review_passed": false,
+  "enabled": false,
+  "review_artifact": "release_artifacts/sports-rag-v1-groundedness.json",
+  "release_fingerprint": "",
+  "note": "Keep production RAG disabled until the reviewed DeepSeek outputs contain zero unsupported recommendations."
+}
