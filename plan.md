@@ -159,9 +159,9 @@ ReportDataPackage
 - Kernel程序错误、快照损坏和版本不兼容属于硬错误，不交给Agent解释，不进行无意义的相同重试。
 - Claim校验失败时保留全部已验证Evidence，只允许修正Claim一次；最终报告仍然原子发布，不显示部分结果。
 
-**未来文献RAG与角标引用扩展**：
+**运动表现 RAG V1（Deterministic RAG）**：
 
-RAG不进入当前MVP实现，但当前架构必须保留独立扩展边界。RAG用于给已由本次数据Evidence支持的结论补充指标定义、研究背景、常见解释和方法学限制，不得替代确定性Tool证明本次记录中的数值、趋势、侧别差异或跨指标关系。
+RAG 已按独立 `knowledge` 子系统实现。它只在确定性 Claim 校验完成后执行，用文献 Evidence 生成一般行动建议；不得替代 Analysis Tool 证明本次记录中的数值、趋势、侧别差异或跨指标关系。生产启用由版本化 Release Gate 控制，真实 DeepSeek 输出的人工 Groundedness 审查未通过前保持关闭。
 
 ```text
 Analysis Evidence
@@ -171,13 +171,38 @@ Literature Evidence
   → 支撑如何理解该模式及其适用限制
 ```
 
-- [ ] 后期新增独立`KnowledgeRetrievalGateway`与`RetrieveKnowledgeAction`，不把RAG塞入`analyze_current_session`、`compare_longitudinal`或`compare_cohort`。
-- [ ] RAG默认在确定性分析形成候选Claim之后按需执行，避免文献先验主导本次数据模式发现；检索预算与Analysis Tool预算分开。
-- [ ] 文献结果建模为独立`LiteratureEvidence`，至少保存文献ID、题名、作者、年份、DOI/来源URI、原文片段、页码或段落定位、片段Digest、语料库版本和检索方法版本。
-- [ ] Claim分别保存本次数据`evidence_refs`和文献`citation_refs`。Citation只能支撑定义、背景、解释或限制，不能支撑本次数据事实，也不能把相关性扩展为因果、诊断、伤病预测或训练处方。
-- [ ] Agent只输出`CitationBinding`占位引用，不自行编号。确定性Renderer按首次出现顺序去重并生成上标角标及报告末尾参考文献列表。
-- [ ] Citation Validator检查每个角标可解析到文献片段、来源定位完整、Claim片段与引用支持类型匹配；RAG失败时删除文献解释，不得使已经完成的本次记录分析失效。
-- [ ] Skill版本、RAG语料库快照、检索/重排版本和Citation Provenance进入运行审计；它们不进入Analysis Kernel的结果语义`output_digest`。
+- [x] 独立实现扁平 `KnowledgeSource / Document / DocumentVersion / Chunk / QuerySpec / Evidence / Citation / Recommendation / RAGAudit`，Retriever 与 Agent 解耦。
+- [x] 稳定 `document_id` 与独立 `version_id`；`chunk_id` 使用 `document_id + chunker_version + logical_position + content_hash`。摄取改为事务式增量 upsert，未变化内容不重新 Embedding。
+- [x] 确定性 QueryPlanner 在 ClaimValidator 后运行；先按 domain、metric_codes、population、support_type、recommendation_allowed 硬过滤，再执行 FTS5 + Dense Top-20 和 RRF(k=60)。LLM 不决定检索、不改写 Query、不访问网页。
+- [x] PydanticAI + DeepSeek 推荐生成器配置 `retries=0`；只允许单次生成，Validator 失败的建议直接删除并审计，不 regenerate。
+- [x] Citation 完全由代码从 Evidence 和来源目录生成；模型 Schema 不接受 URL/DOI/Citation 字段。URL 仅允许 HTTP(S)，UI 对标题与链接做 HTML 转义和协议白名单检查。
+- [x] `analysis-schema/4.0` 增量增加 `literature_evidence / recommendations / references / references_markdown / rag_audit`，旧字段及 v1-v3 读取兼容。
+- [x] RAG 异常只生成 `degraded` 审计和空建议，不影响确定性 Claim、Kernel digest 或报告发布。
+- [ ] 完成真实 DeepSeek 输出的逐条人工 Groundedness 审查，将不受 Evidence 支持的建议数确认到 0 后，才把 `knowledge/v1_release_gate.json` 切换为启用。
+
+**2026-08-14 RAG V1 实施进展**：
+
+- [x] 核心全文由 6 篇扩展到 9 篇，新增健康青年步态效度、纵跳训练 Meta-analysis 和跑步力量训练 Meta-analysis；当前 508 个结构化 Chunk。
+- [x] 冻结 30 问 Retriever baseline：Recall@5/10 1.000、Precision@5 0.533、MRR 0.900、nDCG@10 0.928。后续改动不得低于 `knowledge/retrieval_baseline.json`。
+- [x] 五个当前启用的 domain/intent 场景 Evidence Coverage 为 100%，metadata leakage 与禁止人群 leakage 均为 0；未覆盖场景保持 disabled。
+- [x] 增加 30 个跨三种报告模式的固定端到端 Fixture，覆盖正常、无 Evidence、非法引用、禁止剂量、错误人群、解析失败和重复执行。
+- [x] 完成 30 个合成 Fixture 的真实 DeepSeek 导出：30/30 调用成功，Validator 放行 48 条、删除 35 条；67 条 Citation 全部可解析。抽检发现 Introduction 研究动机可能被模型误当成当前结论，故 Groundedness 门继续关闭。
+- [x] `chunker/2.2` 已把 Introduction/Background 从 Recommendation Evidence 中排除；修复后本地 Evidence Coverage 仍为 100%，泄漏仍为 0。第二轮真实模型复测受账户用量上限阻塞，待恢复后重跑。
+- [x] 完整回归通过：717 passed、12 subtests passed。
+- [ ] 唯一未通过的 Release Gate 是真实模型输出的人工 Groundedness 复核；因此代码与 UI 已具备 Schema v4 能力，但 Worker 暂不启用生产 RAG Pipeline。
+
+**2026-08-15 证据链与 RAG 可靠性修复**：
+
+- [x] Kernel 语义 ID 显式绑定 `package_id + package_digest`、方法/Kernel 版本、规范化输入和依赖 Evidence；同快照重试稳定，不同请求或快照不碰撞，五种 Kernel 的既有 `output_digest` 保持不变。
+- [x] 序贯与旧循环增加跨轮次 Action/Question/Node 唯一性约束；Checkpoint 升至 `sequential-checkpoint/1.1`，旧运行中 Checkpoint 不恢复。
+- [x] Claim 强制 NumericBinding 来源、Evidence/ToolRun 精确绑定、重复 ID 拒绝和严格模板解析；Renderer 与 RAG 共用三位有效数字文本渲染，V1 `citation_refs` 固定为空。
+- [x] RAG 使用已渲染 Claim；Pipeline 初始化失败独立降级，运行期故障仍走原有降级路径；Recommendation 增加 URL、DOI、Markdown 和伪引用令牌表面校验。
+- [x] 增加规范化冻结审查工件 promotion、完整 Release fingerprint 和 fail-closed Gate；生产 Gate 仍保持关闭，不生成虚假审查工件。
+- [x] 内置 Agent 的 decision/synthesis/repair Prompt 使用内容指纹，自定义 Agent 保持旧版本兼容；失败指标从异常状态或最新 Checkpoint 恢复已完成工作量。
+- [x] Claim Repair 按错误码白名单和指标集合不变量约束；首次 Skill 加载错误纳入统一 `ReportAnalysisError` 边界。
+- [x] UI 展示 RAG degraded/no-evidence 状态及 Recommendation limitations；本轮补强后的全量回归为 756 passed。
+- [x] Numeric Repair 逐位置校验原数值/单位与绑定后的规范渲染结果，禁止借同一 Evidence 改写数值；旧 AnalysisLoop 失败保留 partial metrics，AnalysisPackage 暴露完整 Prompt digest。
+- [x] Groundedness promotion 强制完整覆盖冻结 benchmark case，并绑定 catalog、manifest、Recommendation Prompt 与 case 内容摘要；Gate 主动关闭与启用后校验失败使用不同状态。
 
 **实施顺序与完成标准**：
 
@@ -219,7 +244,7 @@ Literature Evidence
 - [x] 序贯综合调用会重新显式注入当前完整Skill Context，避免无状态模型在调查阶段加载Evidence指南后，综合阶段实际看不到该指南。没有新接口的Fake/兼容Agent继续使用原三参数`synthesize()`。
 - [x] `ReportAnalysisService`对实现`decide()`的Agent启用新序贯循环、Checkpoint Sink和可恢复运行查询；旧Agent对象继续走旧Plan循环作为兼容入口。HTTP `/report/analyze`、`/report/latest`、Worker路由和UI协议未改变。
 - [x] Service已验证跨请求恢复：数据库预留`running + action_accepted`后，新请求复用同一Run ID，先执行待处理确定性动作，再继续决策与原子发布；不会创建第二条分析运行。
-- [x] Renderer保持AnalysisPackage对外字段不变，序贯Tool调用数兼容映射到现有`cycle_count`，`replan_count`为零。运行审计使用独立Sequential Prompt版本。
+- [x] Renderer保持既有AnalysisPackage字段兼容，并增量暴露可选完整`prompt_content_digest`；序贯Tool调用数兼容映射到现有`cycle_count`，`replan_count`为零。运行审计使用独立Sequential Prompt版本。
 - [x] 已完成一次真实模型首决策烟雾测试：对固定Jump合成记录返回`NextAnalysisAction`，选择`analyze_current_session + verify_temporal_change + contact_time_s + increase`，结构化联合Schema解析成功。
 - [x] 已完成一次真实模型完整序贯烟雾测试：3次Agent决策、2次确定性Tool调用，假设状态分别为`supported`和`not_supported`，以`no_high_value_hypothesis`正常停止，生成1条Draft Claim并通过ClaimValidator。该单案例只证明运行闭环，不代表Benchmark效果或领域准确率。
 - [x] Claim阶段Checkpoint已扩展到`draft_generated`与`claim_repair_pending`。中断恢复复用原State、Evidence和Draft，不重复Tool或首次综合；Validator引导修正仍最多一次，修正后的Draft再次Checkpoint后再验证。跨请求故障注入证明同一Run只综合一次、只修正一次并最终原子发布。
@@ -227,6 +252,89 @@ Literature Evidence
 - [x] B配置正式联网Benchmark完成12类固定合成案例×3次，结果保存于`benchmark_results/report_agent_sequential_b_12x3_20260811.json`：有效运行率`100% (36/36)`，Expected Predicate Recall `92.59% (25/27)`，决策断言通过率`96.53%`，P50 `17.875 s`，P95 `47.931 s`，满足既定三项发布门槛。`co_change`和排除稳健性各有一次未召回；存在一次`239.524 s`极端延迟，虽不改变P95结论，但需要独立的生产超时控制。
 - [x] 本阶段Report Agent、Service、Worker与UI聚焦回归为`147 passed`；Qt用例通过`QT_QPA_PLATFORM=offscreen`执行。
 - [ ] 仍需完成Repository权限Spy与组合故障验收、生产HTTP截止时间/综合保留时间控制，以及去标识化真实记录和专家标注实验；合成Benchmark不能解释为真实运动分析准确率。
+
+**2026-08-19 Agent 模块当前待办（本节为后续实施入口）**：
+
+### Config Agent / 参数配置
+
+- [x] 节拍器暂不属于当前硬件和 Agent 能力范围。Config Agent 不生成
+  `metronome_enabled / metronome_bpm`，默认保持关闭；后续若硬件接入，另立
+  参数、UI、运行时和验收任务。
+- [x] 离线 RuleEngine 已覆盖三种已支持测试：`Jump Test`、`Treadmill
+  Gait Test`、`Treadmill Running Test`。按测试类型返回对应的
+  `TestConfig / TreadmillGaitConfig / TreadmillRunningConfig`，使用参数 Schema
+  的测试类型默认值；Jump 的年龄/训练水平规则继续保留，跑步机使用明确的
+  3.0/6.0 km/h 模式默认值，三种输出统一通过 `validate_runtime_config()`；未知
+  测试类型不再静默降级为 Jump。规则引擎和服务层回归已覆盖三种模式及档案规则。
+- [x] `External impulse` 已从 Agent Jump 结构化输出、活动参数 Schema 和 UI
+  生成路径删除，默认停止改为 `Status change`；历史配置若仍携带该值会在统一
+  运行时校验中明确拒绝。`config/Opto_parameters.json` 仅作为原始厂商资料保留，
+  不属于 Iron Jump 的活动能力声明。
+- [x] 三次并行采样不再随机选择。三次都必须生成配置，且用户意图字段一致才
+  采用第一份确定性结果；停止方式、次数/时长、位置/起跳脚、跑步机速度和方向
+  等意图字段不一致时追问。底层滤波、足长过滤和自动过滤等技术字段不参与追问，
+  模型输出会被基于运动档案的 RuleEngine 策略覆盖。已增加“滤波值三份不同仍
+  采用规则值”和“用户意图不同必须追问”的回归测试。
+- [ ] 完成 Config Agent 指令矩阵（建议首轮 30 条，三种模式各 10 条）：
+  明确需求、缺停止条件、缺速度/方向、模糊自然语言、互相冲突、非法范围、
+  时间格式、已移除能力请求、跑步机步态/跑步模式混淆和当前配置查询。每条冻结
+  期望测试类型、关键字段、允许追问与禁止输出；统计配置成功率、关键字段
+  完全正确率、追问必要性/有效率、非法配置拦截率和 P50/P95 延迟。三次采样
+  的每个候选配置与最终决策均保存，保证结果可复核。
+- [x] Config Agent 和规则引擎已有模式级默认工厂，不再以 Jump 默认配置作为
+  跑步机配置基底；未知测试类型会明确失败。
+
+### Report Agent / 报告生成
+
+- [ ] 评估序贯路径的延迟成本并建立对照：旧 DAG 一次规划 vs 序贯每轮一次
+  决策。当前固定 Benchmark 为 P50≈17.9s、P95≈47.9s，存在约239.5s极端值；
+  序贯路径预计因增加模型往返而更慢，但换取逐步证据约束。验收同时记录决策
+  轮数、Tool 次数、综合耗时和失败前已完成工作量。
+- [ ] 增加生产级服务端总截止时间：以当前 P95 和极端值实测为依据，默认
+  `REPORT_ANALYSIS_DEADLINE_SECONDS = 90`。调查阶段最多使用约70秒，至少保留
+  20秒给综合、一次 Claim Repair 和原子持久化；达到 deadline 后停止新的 Agent
+  决策，保存最新 Checkpoint/partial metrics，并返回结构化 `analysis_timeout`。
+  Worker/客户端 timeout 应略高于服务端 deadline（建议105秒）以保留响应传输和
+  清理时间。实现必须同时使用单次模型请求 timeout 和整个运行的 wall-clock
+  cancellation：PydanticAI 官方说明 `ModelSettings.timeout` 只限制单次模型请求，
+  整体 `agent.run()` 需要 `asyncio.timeout()`/取消令牌；LangGraph 的公开设计也将
+  run timeout、node timeout 与 step limit 分开。不能只在同步 Service 外层事后
+  检查时间。同步 HTTP 网关常见约29–30秒上限，因此若未来经 API Gateway 部署，
+  90秒任务必须改为流式或异步作业；当前本地 Worker 不受该网关上限。参考：
+  https://github.com/pydantic/pydantic-ai/blob/main/docs/timeouts.md 、
+  https://docs.langchain.com/oss/python/langgraph/fault-tolerance 、
+  https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html 。
+  后续若真实 Benchmark 显示 P95 漂移，必须重新冻结该值并更新验收。
+- [ ] 完成 Repository 权限 Spy 验收：使用记录所有读取调用的 SubjectStore/
+  Repository spy，验证当前记录分析只读取目标 session 的 snapshot、当前 scope
+  和必要能力信息；不得读取其他 session 明细、subject history、team candidates
+  或执行任意 SQL。组合注入模型异常、Tool 异常、Checkpoint 恢复和 RAG 降级，
+  仍须保持未授权读取数为0，并保存调用审计。已完成最小 Service Spy：当前
+  session 分析不再调用会统计历史/团队候选的 `get_scope_availability()`；其余
+  四类组合故障与底层 SubjectStore 调用清单仍待验收。
+- [ ] 完成去标识化真实运动数据验证。每条记录至少需要：不可逆受试者 ID、
+  测试类型、完整 config snapshot、原始/处理后 Report snapshot、package digest、
+  质量与缺失标记、测试时间段和设备/版本信息。Jump、Treadmill Gait、Treadmill
+  Running 各建立覆盖正常、质量不足、左右差异、时序变化、跨指标变化和无结论
+  的样本；建议每种模式先收集不少于30条作为工程试验集，正式稳定性估计再扩展
+  到50–100条。每条由两名独立运动/生物力学专家按 Claim、数值、Evidence 来源、
+  支持状态和限制条件标注，分歧经第三人裁决，并冻结标注协议和版本。
+- [ ] 真实数据验收指标至少包括：Claim 发现率、数值绝对/相对误差、Evidence/
+  Fact 引用准确率、unsupported Claim 放行率、`inconclusive` 误判率、专家间
+  一致性、重复运行稳定性、P50/P95/P99 延迟和失败恢复后的指标完整性。合成
+  Benchmark 只作为工程门，不替代该验收。
+
+### RAG 生产启用门
+
+- [ ] RAG 确定性表面校验、Release fingerprint 和人工 Groundedness 审查全部
+  通过后，才允许开启 `knowledge/v1_release_gate.json`。必须先完成冻结 30 个
+  benchmark case 的逐条人工审查，所有 review 行为 `supported`、unsupported 数
+  为0，catalog/manifest/Prompt/case digest 与当前运行一致，再执行 promotion 和
+  fingerprint 校验。
+- [ ] 开启前执行一次 canary：仅对内部或显式启用的报告生成 RAG 建议，确认
+  `degraded/no_evidence` UI、审计、引用协议和确定性 Claim 不受影响；canary
+  回归通过后再将 gate `enabled=true`。任何内容漂移、审查缺失或运行期故障都必须
+  自动回退为 degraded，不得静默生成无来源建议。
 
 ### 2.3 论文主实验（P0）
 
@@ -247,7 +355,8 @@ Literature Evidence
 
 ### 2.5 硬件和设备扩展
 
-- `External impulse`：补充 `E_STATUS_REPORT` 转发和自动停止链路。
+- `External impulse` 已确定不会由当前硬件支持，并已从产品配置能力中永久移除；
+  不再规划 `E_STATUS_REPORT` 转发或自动停止链路。
 - 多米段级联：参数化 LED 数量、空间坐标、距离映射和聚类逻辑，替换单段 96 LED 假设。
 
 ### 2.6 相机路线
