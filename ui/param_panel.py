@@ -49,7 +49,7 @@ QLabel#ParamFieldLabel {
     color: #9da8b8;
     background: transparent;
     border: none;
-    font-size: 12px;
+    font-size: 13px;
 }
 QComboBox,
 QSpinBox,

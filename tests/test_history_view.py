@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qtpy.QtWidgets import QApplication, QInputDialog
+from qtpy.QtWidgets import QApplication, QLabel, QInputDialog
 
 from config.test_config import TestConfig as _TestConfig
 from config.test_report import JumpTestReport
@@ -82,6 +82,19 @@ class HistoryViewTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmpdir.cleanup()
+
+    def test_history_view_uses_readable_visual_hierarchy(self):
+        view = HistoryView(self.store)
+        view.show()
+        QApplication.processEvents()
+        title = view.findChild(QLabel, "HistoryTitle")
+
+        self.assertEqual(title.text(), "历史记录")
+        self.assertGreaterEqual(title.font().pixelSize(), 22)
+        self.assertGreaterEqual(view._session_table.font().pixelSize(), 14)
+        self.assertGreaterEqual(
+            view._session_table.verticalHeader().defaultSectionSize(), 48
+        )
 
     def test_load_subject_lists_sessions_and_emits_selected_config(self):
         subject_id = self.store.create_subject("Alice", 1990)

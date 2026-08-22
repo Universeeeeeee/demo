@@ -53,7 +53,7 @@ QLabel#PageTitle {
 }
 QLabel#PageSubtitle {
     color: #8f9bad;
-    font-size: 11px;
+    font-size: 13px;
 }
 QFrame#AthleteToolbar,
 QFrame#AthleteTableCard {

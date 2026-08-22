@@ -31,7 +31,7 @@ QLabel#PageTitle {
 }
 QLabel#PageSubtitle {
     color: #8f9bad;
-    font-size: 11px;
+    font-size: 13px;
 }
 QLabel#ModeLabel {
     color: #8ecf78;
@@ -39,7 +39,7 @@ QLabel#ModeLabel {
     border: 1px solid #294b32;
     border-radius: 7px;
     padding: 7px 11px;
-    font-size: 11px;
+    font-size: 13px;
 }
 QFrame#SettingsCard {
     background: #121923;
@@ -53,11 +53,11 @@ QLabel#CardTitle {
 }
 QLabel#FieldLabel {
     color: #8f9bad;
-    font-size: 11px;
+    font-size: 13px;
 }
 QLabel#FieldValue {
     color: #dce2eb;
-    font-size: 11px;
+    font-size: 13px;
 }
 QPushButton {
     min-height: 32px;

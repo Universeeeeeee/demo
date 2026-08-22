@@ -44,6 +44,7 @@ SHELL_QSS = """
 QWidget#ApplicationShell {
     background: #0c1119;
     color: #e7ebf2;
+    font-size: 13px;
 }
 QFrame#ApplicationSidebar {
     background: #0e141d;
@@ -91,7 +92,7 @@ QLabel#NavLabel[active="true"] {
 }
 QLabel#LocalModeNote {
     color: #697587;
-    font-size: 10px;
+    font-size: 12px;
 }
 QFrame#ShellContent {
     background: #0c1119;

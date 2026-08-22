@@ -67,7 +67,7 @@ QLabel#PageTitle {
 }
 QLabel#PageSubtitle {
   color: #8f9bad;
-  font-size: 11px;
+  font-size: 13px;
 }
 QLabel#SummaryTitle {
   color: #f2f5f9;
@@ -85,7 +85,7 @@ QLabel#SummaryText {
 }
 QLabel#SummaryHint {
   color: #7f8a9a;
-  font-size: 12px;
+  font-size: 13px;
 }
 QLabel#SummarySectionLabel {
   color: #dfe5ee;
@@ -109,7 +109,7 @@ QLabel#FilterState {
 }
 QLabel#FilterDetails {
   color: #9eabba;
-  font-size: 12px;
+  font-size: 13px;
   padding: 0 0 5px 10px;
 }
 QFrame#DeviceStatusCard {
@@ -221,7 +221,7 @@ QDialog#NewSubjectDialog {
 }
 QDialog#NewSubjectDialog QLabel {
   color: #dfe5ee;
-  font-size: 12px;
+  font-size: 13px;
 }
 QDialog#NewSubjectDialog QLineEdit,
 QDialog#NewSubjectDialog QComboBox,
@@ -360,7 +360,7 @@ class SetupView(QWidget):
         mode_layout.addWidget(self._btn_mode_manual)
         mode_layout.addStretch()
         self._mode_status_chip = QLabel("")
-        self._mode_status_chip.setStyleSheet("color: #8f9bad; font-size: 10px;")
+        self._mode_status_chip.setStyleSheet("color: #8f9bad; font-size: 12px;")
         mode_layout.addWidget(self._mode_status_chip)
         config_layout.addWidget(mode_bar)
 
@@ -482,7 +482,7 @@ class SetupView(QWidget):
 
         label = QLabel("测试对象")
         label.setMinimumWidth(64)
-        label.setStyleSheet("font-size: 12px; font-weight: 700; color: #eef2f8;")
+        label.setStyleSheet("font-size: 13px; font-weight: 700; color: #eef2f8;")
 
         self._subject_search = QLineEdit()
         self._subject_search.setPlaceholderText("搜索姓名")
@@ -495,7 +495,7 @@ class SetupView(QWidget):
         identity_label = QLabel("测试身份")
         identity_label.setMinimumWidth(64)
         identity_label.setStyleSheet(
-            "font-size: 12px; font-weight: 700; color: #eef2f8;"
+            "font-size: 13px; font-weight: 700; color: #eef2f8;"
         )
         self._team_identity_combo = QComboBox()
         self._team_identity_combo.setMinimumWidth(180)

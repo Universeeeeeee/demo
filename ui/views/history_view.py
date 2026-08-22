@@ -7,6 +7,7 @@ history_view.py — 受试者历史记录页
 from __future__ import annotations
 
 import logging
+from html import escape
 from typing import Any
 
 from qtpy.QtCore import Signal, Qt
@@ -33,20 +34,31 @@ HISTORY_QSS = """
 QWidget#HistoryViewRoot {
     background: #0c1119;
     color: #e7ebf2;
+    font-size: 14px;
 }
 QLabel#HistoryTitle {
     color: #f5f7fb;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 700;
 }
 QLabel#HistoryContext {
     color: #aeb7c5;
-    font-size: 12px;
+    font-size: 13px;
 }
 QLabel#DetailTitle {
     color: #f2f5fa;
-    font-size: 13px;
-    font-weight: 650;
+    font-size: 18px;
+    font-weight: 700;
+}
+QFrame#HistoryDetailCard {
+    background: #121923;
+    border: 1px solid #293442;
+    border-radius: 8px;
+}
+QLabel#HistoryDetailText {
+    color: #dfe5ee;
+    font-size: 14px;
+    background: transparent;
 }
 QTableWidget {
     background: #121923;
@@ -57,6 +69,14 @@ QTableWidget {
     gridline-color: #26313f;
     selection-background-color: #273446;
     selection-color: white;
+    font-size: 14px;
+}
+QTableWidget::item {
+    padding: 8px 10px;
+}
+QTableWidget::item:selected {
+    background: #26364a;
+    color: white;
 }
 QHeaderView::section {
     background: #171f2b;
@@ -64,6 +84,8 @@ QHeaderView::section {
     border: none;
     border-bottom: 1px solid #2b3543;
     padding: 8px;
+    font-size: 13px;
+    font-weight: 600;
 }
 QPushButton {
     min-height: 34px;
@@ -108,13 +130,13 @@ class HistoryView(QWidget):
         self.setObjectName("HistoryViewRoot")
         self.setStyleSheet(HISTORY_QSS)
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 15, 20, 15)
+        main_layout.setContentsMargins(24, 18, 24, 20)
         main_layout.setSpacing(12)
 
         header_layout = QHBoxLayout()
         header_layout.setSpacing(12)
 
-        title = MLabel("结果")
+        title = MLabel("历史记录")
         title.setObjectName("HistoryTitle")
         self._subject_label = MLabel("未选择受试者")
         self._subject_label.setObjectName("HistoryContext")
@@ -122,8 +144,12 @@ class HistoryView(QWidget):
         self._btn_return = MPushButton("返回测试")
         self._btn_return.clicked.connect(self.return_setup)
 
-        header_layout.addWidget(title)
-        header_layout.addWidget(self._subject_label, 1)
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(3)
+        title_layout.addWidget(title)
+        title_layout.addWidget(self._subject_label)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch(1)
         header_layout.addWidget(self._btn_return)
         main_layout.addLayout(header_layout)
 
@@ -138,7 +164,9 @@ class HistoryView(QWidget):
         self._session_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._session_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._session_table.verticalHeader().setVisible(False)
+        self._session_table.verticalHeader().setDefaultSectionSize(48)
         self._session_table.horizontalHeader().setStretchLastSection(True)
+        self._session_table.horizontalHeader().setMinimumHeight(42)
         self._session_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeToContents
         )
@@ -158,15 +186,10 @@ class HistoryView(QWidget):
         content_layout.addWidget(self._session_table, 5)
 
         detail_frame = QFrame()
-        detail_frame.setStyleSheet(
-            "QFrame { "
-            "  background-color: rgba(35, 35, 40, 0.65); "
-            "  border-radius: 6px; "
-            "}"
-        )
+        detail_frame.setObjectName("HistoryDetailCard")
         detail_layout = QVBoxLayout(detail_frame)
-        detail_layout.setContentsMargins(14, 12, 14, 12)
-        detail_layout.setSpacing(8)
+        detail_layout.setContentsMargins(18, 16, 18, 16)
+        detail_layout.setSpacing(12)
         detail_title = QLabel("记录摘要")
         detail_title.setObjectName("DetailTitle")
         detail_layout.addWidget(detail_title)
@@ -174,9 +197,7 @@ class HistoryView(QWidget):
         self._detail_label = QLabel("请选择一条历史记录。")
         self._detail_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self._detail_label.setWordWrap(True)
-        self._detail_label.setStyleSheet(
-            "font-size: 11pt; color: #e0e0e0; line-height: 150%;"
-        )
+        self._detail_label.setObjectName("HistoryDetailText")
         self._detail_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         detail_layout.addWidget(self._detail_label, 1)
 
@@ -332,40 +353,40 @@ class HistoryView(QWidget):
     def _show_session_detail(self, session: SessionRecord) -> None:
         config = session.config
         summary = session.report_summary
-        lines = [
+        info_lines = [
             f"运动员: {self._session_subject_name(session)}",
             f"测试身份: {self._session_identity_name(session)}",
             f"测试时间: {session.started_at[:16]}",
             f"测试类型: {session.test_type}",
             f"结束原因: {_finish_reason_label(session.finish_reason)}",
-            "",
-            "参数摘要:",
-            *_config_detail_lines(config),
-            "",
-            "结果摘要:",
-            _session_summary(session),
         ]
+        config_lines = _config_detail_lines(config)
+        result_lines = [_session_summary(session)]
         if session.total_jumps is not None:
-            lines.append(f"总跳跃: {session.total_jumps} 次")
+            result_lines.append(f"总跳跃: {session.total_jumps} 次")
         if summary.get("touch_count") is not None:
-            lines.append(f"触地次数: {summary['touch_count']}")
+            result_lines.append(f"触地次数: {summary['touch_count']}")
         if summary.get("lift_count") is not None:
-            lines.append(f"腾空次数: {summary['lift_count']}")
+            result_lines.append(f"腾空次数: {summary['lift_count']}")
         if summary.get("std_jump_height") is not None:
-            lines.append(f"跳高标准差: {summary['std_jump_height']:.3f} m")
+            result_lines.append(f"跳高标准差: {summary['std_jump_height']:.3f} m")
         if summary.get("min_air_time") is not None and summary.get("max_air_time") is not None:
-            lines.append(
+            result_lines.append(
                 f"腾空范围: {summary['min_air_time']:.3f} - {summary['max_air_time']:.3f} s"
             )
         if (
             summary.get("min_contact_time") is not None
             and summary.get("max_contact_time") is not None
         ):
-            lines.append(
+            result_lines.append(
                 f"触地范围: {summary['min_contact_time']:.3f} - "
                 f"{summary['max_contact_time']:.3f} s"
             )
-        self._detail_label.setText("\n".join(lines))
+        self._detail_label.setText(
+            _detail_section_html("测试信息", info_lines)
+            + _detail_section_html("参数摘要", config_lines)
+            + _detail_section_html("结果摘要", result_lines)
+        )
 
     def _on_load_config_clicked(self) -> None:
         session = self._selected_session()
@@ -469,6 +490,17 @@ def _finish_reason_label(reason: str | None) -> str:
     if not reason:
         return "-"
     return labels.get(reason, reason)
+
+
+def _detail_section_html(title: str, lines: list[str]) -> str:
+    rows = "".join(
+        f"<div style='margin-bottom:5px;'>{escape(line)}</div>" for line in lines
+    )
+    return (
+        "<div style='margin-bottom:16px;'>"
+        f"<div style='color:#ff9a3d;font-weight:700;margin-bottom:8px;'>{escape(title)}</div>"
+        f"{rows}</div>"
+    )
 
 
 def _config_detail_lines(config: Any) -> list[str]:
