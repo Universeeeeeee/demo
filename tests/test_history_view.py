@@ -96,6 +96,39 @@ class HistoryViewTest(unittest.TestCase):
             view._session_table.verticalHeader().defaultSectionSize(), 48
         )
 
+    def test_history_view_filters_by_athlete_and_test_type(self):
+        alice_id = self.store.create_subject("Alice", 1990)
+        bob_id = self.store.create_subject("Bob", 1992)
+        self.store.record_session(alice_id, _TestConfig(), _jump_report())
+        self.store.record_session(
+            bob_id,
+            TreadmillGaitConfig(
+                stop_type="End of Time",
+                test_length="05:00",
+                treadmill_speed=5.5,
+                direction="Interface side",
+            ),
+            _treadmill_gait_report(),
+        )
+        view = HistoryView(self.store)
+
+        view.load_all()
+        view._athlete_filter.setCurrentIndex(view._athlete_filter.findText("Alice"))
+
+        self.assertEqual(view._session_table.rowCount(), 1)
+        self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
+
+        view._athlete_filter.setCurrentIndex(0)
+        treadmill_index = next(
+            index
+            for index in range(view._test_type_filter.count())
+            if "Treadmill" in view._test_type_filter.itemText(index)
+        )
+        view._test_type_filter.setCurrentIndex(treadmill_index)
+
+        self.assertEqual(view._session_table.rowCount(), 1)
+        self.assertEqual(view._session_table.item(0, 0).text(), "Bob")
+
     def test_load_subject_lists_sessions_and_emits_selected_config(self):
         subject_id = self.store.create_subject("Alice", 1990)
         result = self.store.search_subjects("Alice")[0]
@@ -185,7 +218,7 @@ class HistoryViewTest(unittest.TestCase):
 
         self.assertEqual(self.store.get_session(session_id).subject_id, subject_id)
         self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
-        self.assertEqual(view._session_table.item(0, 1).text(), "临时测试")
+        self.assertEqual(view._session_table.item(0, 1).text(), "个人")
 
     def test_link_temporary_session_disambiguates_same_name_subjects(self):
         first_id = self.store.create_subject("Alice", 1990)
@@ -247,8 +280,9 @@ class HistoryViewTest(unittest.TestCase):
         self.assertEqual(view._session_table.horizontalHeaderItem(1).text(), "测试身份")
         self.assertEqual(
             {view._session_table.item(row, 1).text() for row in range(3)},
-            {"Alpha", "个人", "临时测试"},
+            {"Alpha", "个人"},
         )
+        self.assertEqual(view._session_table.columnCount(), 5)
 
         view.load_team(self.store.search_teams("Alpha")[0])
 
@@ -307,7 +341,7 @@ class HistoryViewTest(unittest.TestCase):
         view.load_all()
 
         self.assertEqual(view._session_table.item(0, 0).text(), "Alice")
-        self.assertEqual(view._session_table.item(0, 1).text(), "临时测试")
+        self.assertEqual(view._session_table.item(0, 1).text(), "个人")
 
 
 if __name__ == "__main__":

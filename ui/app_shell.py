@@ -94,6 +94,12 @@ QLabel#LocalModeNote {
     color: #697587;
     font-size: 12px;
 }
+QComboBox QAbstractItemView {
+    background-color: #1a2230;
+    color: #e7ebf2;
+    selection-background-color: #34445a;
+    selection-color: white;
+}
 QFrame#ShellContent {
     background: #0c1119;
     border: none;

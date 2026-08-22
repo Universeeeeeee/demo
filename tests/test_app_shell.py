@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QPalette
 from qtpy.QtTest import QSignalSpy
-from qtpy.QtWidgets import QLabel
+from qtpy.QtWidgets import QApplication, QLabel
 
 from ui.app_shell import (
     MODULE_ATHLETES,
@@ -13,6 +14,7 @@ from ui.app_shell import (
     MODULE_TEST,
     ApplicationShell,
 )
+from ui.views.athletes_view import AthletesView
 
 
 def test_shell_has_fixed_application_navigation(qtbot):
@@ -73,3 +75,15 @@ def test_navigation_uses_larger_icons_labels_and_row_spacing(qtbot):
         QLabel, "NavGlyph"
     ).property("active")
     assert buttons[1].geometry().top() - buttons[0].geometry().bottom() >= 10
+
+
+def test_shell_keeps_combo_popup_text_readable(qtbot):
+    athletes = AthletesView(None)
+    shell = ApplicationShell(athletes)
+    qtbot.addWidget(shell)
+    shell.show()
+    QApplication.processEvents()
+
+    popup_text = athletes._team_filter.view().palette().color(QPalette.Text)
+
+    assert popup_text.lightness() > 160

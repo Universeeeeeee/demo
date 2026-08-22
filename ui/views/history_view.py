@@ -10,9 +10,9 @@ import logging
 from html import escape
 from typing import Any
 
-from qtpy.QtCore import Signal, Qt
+from qtpy.QtCore import QSignalBlocker, Signal, Qt
 from qtpy.QtWidgets import (
-    QAbstractItemView, QFrame, QHeaderView, QHBoxLayout, QLabel,
+    QAbstractItemView, QComboBox, QFrame, QHeaderView, QHBoxLayout, QLabel,
     QInputDialog, QMessageBox, QSizePolicy, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -59,6 +59,15 @@ QLabel#HistoryDetailText {
     color: #dfe5ee;
     font-size: 14px;
     background: transparent;
+}
+QComboBox#HistoryFilter {
+    min-width: 150px;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background: #1a2230;
+    color: #e7ebf2;
 }
 QTableWidget {
     background: #121923;
@@ -153,12 +162,27 @@ class HistoryView(QWidget):
         header_layout.addWidget(self._btn_return)
         main_layout.addLayout(header_layout)
 
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+        filter_layout.addStretch(1)
+        filter_layout.addWidget(QLabel("运动员"))
+        self._athlete_filter = QComboBox()
+        self._athlete_filter.setObjectName("HistoryFilter")
+        self._athlete_filter.currentIndexChanged.connect(self._populate_sessions)
+        filter_layout.addWidget(self._athlete_filter)
+        filter_layout.addWidget(QLabel("测试类型"))
+        self._test_type_filter = QComboBox()
+        self._test_type_filter.setObjectName("HistoryFilter")
+        self._test_type_filter.currentIndexChanged.connect(self._populate_sessions)
+        filter_layout.addWidget(self._test_type_filter)
+        main_layout.addLayout(filter_layout)
+
         content_layout = QHBoxLayout()
         content_layout.setSpacing(12)
 
-        self._session_table = QTableWidget(0, 6)
+        self._session_table = QTableWidget(0, 5)
         self._session_table.setHorizontalHeaderLabels(
-            ["运动员", "测试身份", "时间", "测试类型", "结束原因", "结果摘要"]
+            ["运动员", "测试身份", "时间", "测试类型", "结束原因"]
         )
         self._session_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._session_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -178,9 +202,6 @@ class HistoryView(QWidget):
         )
         self._session_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeToContents
-        )
-        self._session_table.horizontalHeader().setSectionResizeMode(
-            4, QHeaderView.ResizeToContents
         )
         self._session_table.itemSelectionChanged.connect(self._on_selection_changed)
         content_layout.addWidget(self._session_table, 5)
@@ -241,6 +262,7 @@ class HistoryView(QWidget):
             self._set_empty_state("读取结果失败。")
             QMessageBox.warning(self, "结果", f"读取失败：{exc}")
             return
+        self._refresh_filters()
         self._populate_sessions()
 
     def load_subject(self, result: SubjectSearchResult | None) -> None:
@@ -264,6 +286,7 @@ class HistoryView(QWidget):
             QMessageBox.warning(self, "历史记录", f"读取失败：{exc}")
             return
 
+        self._refresh_filters()
         self._populate_sessions()
 
     def load_team(self, team: TeamProfile) -> None:
@@ -280,12 +303,14 @@ class HistoryView(QWidget):
             self._set_empty_state("读取团队历史失败。")
             QMessageBox.warning(self, "团队历史", f"读取失败：{exc}")
             return
+        self._refresh_filters()
         self._populate_sessions()
 
     def _populate_sessions(self) -> None:
+        sessions = self._filtered_sessions()
         self._session_table.blockSignals(True)
         self._session_table.setRowCount(0)
-        for row, session in enumerate(self._sessions):
+        for row, session in enumerate(sessions):
             self._session_table.insertRow(row)
             values = [
                 self._session_subject_name(session),
@@ -293,7 +318,6 @@ class HistoryView(QWidget):
                 session.started_at[:16],
                 session.test_type,
                 _finish_reason_label(session.finish_reason),
-                _session_summary(session),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -301,12 +325,17 @@ class HistoryView(QWidget):
                 self._session_table.setItem(row, column, item)
         self._session_table.blockSignals(False)
 
-        if self._sessions:
+        if sessions:
             self._session_table.selectRow(0)
-            self._show_session_detail(self._sessions[0])
+            self._show_session_detail(sessions[0])
             self._btn_load_config.setEnabled(True)
-            self._btn_open_report.setEnabled(bool(self._sessions[0].report_detail))
-            self._btn_link_subject.setEnabled(self._sessions[0].subject_id is None)
+            self._btn_open_report.setEnabled(bool(sessions[0].report_detail))
+            self._btn_link_subject.setEnabled(sessions[0].subject_id is None)
+        elif self._sessions:
+            self._detail_label.setText("没有符合筛选条件的测试记录。")
+            self._btn_load_config.setEnabled(False)
+            self._btn_open_report.setEnabled(False)
+            self._btn_link_subject.setEnabled(False)
         else:
             message = (
                 "该团队暂无历史测试。"
@@ -319,8 +348,36 @@ class HistoryView(QWidget):
             )
             self._set_empty_state(message)
 
+    def _refresh_filters(self) -> None:
+        with QSignalBlocker(self._athlete_filter), QSignalBlocker(
+            self._test_type_filter
+        ):
+            self._athlete_filter.clear()
+            self._athlete_filter.addItem("全部运动员", None)
+            athlete_names = {
+                self._session_subject_name(item) for item in self._sessions
+            }
+            for name in sorted(athlete_names):
+                self._athlete_filter.addItem(name, name)
+
+            self._test_type_filter.clear()
+            self._test_type_filter.addItem("全部测试类型", None)
+            for test_type in sorted({item.test_type for item in self._sessions}):
+                self._test_type_filter.addItem(test_type, test_type)
+
+    def _filtered_sessions(self) -> list[SessionRecord]:
+        athlete = self._athlete_filter.currentData()
+        test_type = self._test_type_filter.currentData()
+        return [
+            session
+            for session in self._sessions
+            if (athlete is None or self._session_subject_name(session) == athlete)
+            and (test_type is None or session.test_type == test_type)
+        ]
+
     def _set_empty_state(self, message: str) -> None:
         self._sessions = []
+        self._refresh_filters()
         self._session_table.setRowCount(0)
         self._detail_label.setText(message)
         self._btn_load_config.setEnabled(False)
@@ -471,13 +528,9 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _session_identity_name(session: SessionRecord) -> str:
-        if session.is_temporary:
-            return "临时测试"
         if session.team_id is not None:
             return session.team_snapshot.get("name") or "团队测试"
-        if session.subject_id is not None:
-            return "个人"
-        return "临时测试"
+        return "个人"
 
 
 def _finish_reason_label(reason: str | None) -> str:
