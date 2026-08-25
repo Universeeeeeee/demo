@@ -34,3 +34,11 @@ def test_stream_fps_uses_real_timestamps():
 
     assert module.stream_fps(deque()) == 0.0
     assert module.stream_fps(deque([1.0, 1.1, 1.2])) == pytest.approx(10.0)
+
+
+def test_macos_validator_rejects_unverified_mediapipe_before_native_startup():
+    module = importlib.import_module("tools.mac_mediapipe_validator")
+
+    module.validate_macos_mediapipe_version("0.10.35")
+    with pytest.raises(RuntimeError, match="mediapipe==0.10.35"):
+        module.validate_macos_mediapipe_version("1.0.1")

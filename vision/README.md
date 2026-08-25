@@ -11,6 +11,13 @@ only checks whether MediaPipe keeps the anatomical left and right lower limbs
 stable over time. It does not connect to the optical grid, classify contact,
 calculate gait parameters, write CSV, or record video.
 
+Install the Mac-validated dependency set. Do not use MediaPipe 1.0.1 for this
+tool: it aborts inside the native Metal graph before Python can catch an error.
+
+```bash
+python -m pip install -r requirements-mac-mediapipe.txt
+```
+
 ```bash
 python tools/mac_mediapipe_validator.py \
   --camera-index 0 \

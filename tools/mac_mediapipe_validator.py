@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import sys
 import threading
 import time
@@ -13,6 +14,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+SUPPORTED_MAC_MEDIAPIPE_VERSION = "0.10.35"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +56,16 @@ def stream_fps(timestamps: deque[float]) -> float:
         return 0.0
     elapsed = timestamps[-1] - timestamps[0]
     return (len(timestamps) - 1) / elapsed if elapsed > 0 else 0.0
+
+
+def validate_macos_mediapipe_version(version_text: str) -> None:
+    if version_text != SUPPORTED_MAC_MEDIAPIPE_VERSION:
+        raise RuntimeError(
+            "Mac验证工具要求mediapipe=="
+            f"{SUPPORTED_MAC_MEDIAPIPE_VERSION}，当前为{version_text}。"
+            "请执行：python -m pip install --force-reinstall "
+            f"mediapipe=={SUPPORTED_MAC_MEDIAPIPE_VERSION}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,6 +127,22 @@ def run(args: argparse.Namespace) -> int:
             self._bridge.status_changed.connect(self._on_status)
             self._bridge.finished.connect(self._on_finished)
 
+            try:
+                validate_macos_mediapipe_version(
+                    importlib.metadata.version("mediapipe")
+                )
+                self._capture = _open_mac_camera(
+                    cv2,
+                    args.camera_index,
+                    args.width,
+                    args.height,
+                    args.camera_fps,
+                )
+            except Exception as exc:
+                self._capture = None
+                self._on_status(f"error:{exc}")
+                return
+
             self._worker = threading.Thread(
                 target=self._capture_loop,
                 name="MacMediaPipeValidator",
@@ -123,16 +153,9 @@ def run(args: argparse.Namespace) -> int:
         def _capture_loop(self) -> None:
             adapter = MediaPipePoseAdapter(Path(args.model).expanduser())
             analyzer = LegIdentityAnalyzer()
-            capture = None
+            capture = self._capture
             try:
                 adapter.open()
-                capture = _open_mac_camera(
-                    cv2,
-                    args.camera_index,
-                    args.width,
-                    args.height,
-                    args.camera_fps,
-                )
                 self._bridge.status_changed.emit("ready")
                 camera_times: deque[float] = deque(maxlen=90)
                 pose_times: deque[float] = deque(maxlen=60)
@@ -167,6 +190,7 @@ def run(args: argparse.Namespace) -> int:
             finally:
                 if capture is not None:
                     capture.release()
+                    self._capture = None
                 adapter.close()
                 self._bridge.finished.emit()
 
