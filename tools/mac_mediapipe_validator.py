@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def run(args: argparse.Namespace) -> int:
     import cv2
-    from qtpy.QtCore import QObject, Signal, Slot, Qt
+    from qtpy.QtCore import QObject, QTimer, Signal, Slot, Qt
     from qtpy.QtGui import QImage, QKeySequence, QPixmap, QShortcut
     from qtpy.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
@@ -126,6 +126,13 @@ def run(args: argparse.Namespace) -> int:
             self._bridge.frame_ready.connect(self._on_frame)
             self._bridge.status_changed.connect(self._on_status)
             self._bridge.finished.connect(self._on_finished)
+
+            QTimer.singleShot(0, self._start_capture)
+
+        @Slot()
+        def _start_capture(self) -> None:
+            if self._closing:
+                return
 
             try:
                 validate_macos_mediapipe_version(
@@ -300,7 +307,8 @@ def _open_mac_camera(cv2, index: int, width: int, height: int, fps: int):
     if not capture.isOpened():
         capture.release()
         raise RuntimeError(
-            f"无法打开相机索引 {index}；请检查macOS相机权限或尝试其他索引"
+            f"无法打开相机索引 {index}；请在macOS“系统设置 → 隐私与安全性 → "
+            "相机”中允许当前终端使用相机，或尝试其他索引"
         )
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
