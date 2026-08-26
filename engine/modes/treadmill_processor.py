@@ -119,7 +119,10 @@ class TreadmillProcessor:
             self._toe_offset_cm = fl * 0.5
 
         self._cluster_tracker = ClusterTracker()
-        self._contact_tracker = ContactBasedGaitTracker(min_step_interval=0.05)
+        self._contact_tracker = ContactBasedGaitTracker(
+            min_step_interval=0.05,
+            ignore_initial_contacts=True,
+        )
         self._accumulator = self._make_accumulator()
         self._cycle_builder = GaitCycleBuilder()
         self._label_to_side: dict[str, str] = {}

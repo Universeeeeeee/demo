@@ -203,6 +203,31 @@ def test_contact_tracker_emits_touch_then_lift_for_confirmed_contact():
     assert tracker.active_contacts == {}
 
 
+def test_contact_tracker_ignores_startup_contact_and_accepts_new_contact():
+    tracker = ContactBasedGaitTracker(
+        contact_confirm_frames=2,
+        contact_lift_miss_frames=2,
+        min_step_interval=0.0,
+        max_contact_age=1.0,
+        min_cluster_length=10.0,
+        max_centroid_jitter=10.0,
+        jitter_window=2,
+        ignore_initial_contacts=True,
+    )
+    initial = {"track_id": 1, "centroid_cm": 20.0, "length_cm": 15.0}
+    new_step = {"track_id": 2, "centroid_cm": 45.0, "length_cm": 15.0}
+
+    assert tracker.process_frame(0.0, [initial]) == []
+    assert tracker.process_frame(0.1, [initial]) == []
+    assert tracker.process_frame(0.2, [initial, new_step]) == []
+    events = tracker.process_frame(0.3, [initial, new_step])
+
+    assert [event.kind for event in events] == ["touch"]
+    assert events[0].contact.contact_id == 2
+    assert events[0].contact.foot_label == "A"
+    assert tracker.touch_count == 1
+
+
 def test_gait_report_defaults_visual_timeline_to_empty_tuple():
     report = GaitTestReport(
         touch_count=0,

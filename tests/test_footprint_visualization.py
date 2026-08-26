@@ -94,6 +94,26 @@ def test_build_visual_frame_preserves_unknown_foot_measurements():
     assert foot.length_cm is None
 
 
+def test_build_visual_frame_hides_ignored_startup_contact():
+    tracker = ContactBasedGaitTracker(
+        contact_confirm_frames=1,
+        min_step_interval=0.0,
+        max_contact_age=1.0,
+        min_cluster_length=10.0,
+        max_centroid_jitter=10.0,
+        jitter_window=1,
+        ignore_initial_contacts=True,
+    )
+    tracker.process_frame(
+        0.0,
+        [{"track_id": 1, "centroid_cm": 21.0, "length_cm": 14.0}],
+    )
+
+    frame = build_visual_frame(0.0, [0] * 96, tracker)
+
+    assert frame.feet == ()
+
+
 def test_timeline_recorder_uses_fixed_cadence_without_event_boundary_inserts():
     tracker = ContactBasedGaitTracker(arm_frames=1)
     recorder = FootprintTimelineRecorder(interval_s=0.10)

@@ -1494,6 +1494,46 @@ def _feed_frames(
         processor.process_raw_frame(bits, rel_time=t, abs_time=t)
 
 
+@pytest.mark.parametrize(
+    ("config_type", "mode_name"),
+    [
+        (TreadmillGaitConfig, "treadmill_gait"),
+        (TreadmillRunningConfig, "treadmill_running"),
+    ],
+)
+def test_treadmill_ignores_startup_contact_and_starts_new_steps_from_left(
+    config_type, mode_name
+):
+    config = config_type(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    processor = TreadmillProcessor(config, mode_name=mode_name)
+    initial_bits = _contact_bits(10, 25)
+    initial_and_new_bits = initial_bits.copy()
+    initial_and_new_bits[40:56] = [1] * 16
+
+    _feed_frames(processor, initial_bits, start_s=0.00, count=12)
+    events = []
+    for offset in range(8):
+        time_s = 0.20 + offset * 0.01
+        events.extend(
+            processor.process_raw_frame(
+                initial_and_new_bits,
+                rel_time=time_s,
+                abs_time=time_s,
+            )
+        )
+
+    touches = [event for event in events if event.kind == "touch"]
+    assert len(touches) == 1
+    assert touches[0].contact.foot_label == "A"
+    assert processor._contact_side[touches[0].contact.contact_id] == "left"
+    assert processor.make_status_snapshot(0.28)["touch_count"] == 1
+
+
 def test_treadmill_processor_makes_live_status_snapshot_from_rows():
     config = TreadmillGaitConfig(
         stop_type="Software command",

@@ -86,6 +86,8 @@ def build_visual_frame(
     for contact in sorted(
         active_contacts.values(), key=lambda item: item.contact_id
     ):
+        if getattr(contact, "is_initial_baseline", False):
+            continue
         status = contact.status
         if status not in _VALID_STATUSES:
             continue
