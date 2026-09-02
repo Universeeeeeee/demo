@@ -907,10 +907,12 @@ class ExecutionView(QWidget):
     def _on_start(self):
         if self._device_state == "error":
             self._device_label.setText("● 正在重新连接设备...")
+            self.btn_start.setText("正在重连…")
         else:
             self._mode_label.setText(
                 f"{'纵跳测试' if self._mode == '纵跳' else '步态分析'} · 正在启动"
             )
+            self.btn_start.setText("正在启动…")
         self.btn_start.setEnabled(False)
         self.start_requested.emit()
 

@@ -75,6 +75,29 @@ def test_connected_device_runs_one_automatic_led_health_sample(qtbot, monkeypatc
     controller.discard()
 
 
+def test_prepare_reuses_device_connected_from_setup(qtbot, monkeypatch):
+    monkeypatch.setattr(session_controller, "UsbWorker", _FakeUsbWorker)
+    controller = session_controller.SessionController()
+
+    controller.ensure_device_connected()
+    qtbot.waitUntil(lambda: controller.device_state == "connected")
+    setup_worker = controller._worker
+    setup_thread = controller._thread
+
+    controller.prepare(default_jump_config())
+
+    assert controller._worker is setup_worker
+    assert controller._thread is setup_thread
+    assert not setup_worker.stopped
+    assert controller.device_state == "connected"
+    assert controller.engine is not None
+
+    controller.start()
+    qtbot.waitUntil(lambda: controller.is_running)
+    assert controller.device_state == "streaming"
+    controller.stop()
+
+
 def test_prepare_connects_but_does_not_start_session(qtbot, monkeypatch):
     monkeypatch.setattr(session_controller, "UsbWorker", _FakeUsbWorker)
     controller = session_controller.SessionController()

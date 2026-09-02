@@ -2,7 +2,7 @@
 
 ## 1. 当前状态
 
-V1 Deterministic RAG 已完成代码实现、检索基线、自动化 Generator/E2E Benchmark、`analysis-schema/4.0` 和报告 UI。生产开关仍为关闭状态，因为真实 DeepSeek 输出尚未完成人工 Groundedness 逐条复核；系统通过 `knowledge/v1_release_gate.json` 失败关闭，不会把自动化测试冒充人工审查。
+V1 Deterministic RAG 已完成代码实现、检索基线、自动化 Generator/E2E Benchmark、`analysis-schema/4.0` 和报告 UI。2026-08-27 完成当前冻结版本的真实 DeepSeek Groundedness 逐条审查并生成受版本控制的发布产物，生产开关已通过 `knowledge/v1_release_gate.json` 开启。
 
 固定链路：
 
@@ -125,11 +125,9 @@ SQLite 使用 sources、documents、document_versions、chunks、embeddings、�
 
 硬门槛已通过：无 Evidence 建议通过数为 0、非法引用通过数为 0、禁止内容通过数为 0、Citation 映射测试为 100%、metadata leakage 为 0、禁止人群 leakage 为 0。完整项目回归为 `717 passed, 12 subtests passed`。
 
-尚未完成的是使用真实 DeepSeek 对固定样本生成建议并进行人工 Groundedness 逐条审查。只有“不受 Evidence 支持的 Recommendation 数 = 0”后，才能将 Release Gate 的 `human_groundedness_review_passed` 与 `enabled` 改为 true。
+2026-08-27 使用真实 DeepSeek 重新运行当前 `live-generator-groundedness/1.1` 的 30 个固定 Fixture：27 例正常完成，3 例按既定失败关闭策略降级且没有输出建议；Validator 放行 35 条建议、删除 40 条不合格候选建议，49 条 Citation 均可解析。逐条 Groundedness 审查未发现无 Evidence 支撑的已放行建议，因此 `unsupported_recommendation_count=0`。审查结果已通过 promotion 流程固化为 `knowledge/release_artifacts/sports-rag-v1-groundedness.json`，并由 release fingerprint 绑定当前 catalog、manifest、Prompt、Benchmark 与运行版本。
 
-已实际运行 30 个合成 Fixture 的 Live DeepSeek 导出：30/30 调用完成且无传输或解析错误，Validator 放行 48 条建议、删除 35 条候选建议；删除原因主要为禁止内容和 Evidence 支持类型不匹配。67 条 Citation 均可解析，所有 Recommendation 的 Citation 引用都能回到结构化来源。审阅文件位于忽略目录 `data/knowledge/groundedness_review.json`。
-
-抽检发现至少一类 Groundedness 风险：模型可能引用论文 Introduction 中“此前尚未验证”的研究动机，却忽略同一论文 Results 已完成的验证，从而生成时态过期的表述。这证明 Citation 可解析不等于 Recommendation 被 Evidence 正确支持。`chunker/2.2` 已将 Introduction/Background 从 Recommendation Evidence 中确定性排除；本地复核确认跑步步频检索只剩 Limitations/Procedures 以及训练综述的 Abstract。修复后的第二轮 30 案例 DeepSeek 复测因账户用量上限被拒绝，不能绕过执行，所以 Release Gate 继续关闭，待额度恢复后重新生成并人工复核。
+此前抽检发现的 Introduction 时态过期风险继续由 `chunker/2.2` 的确定性过滤控制：Introduction/Background 不得进入 Recommendation Evidence。运行中的 Generator 或解析失败仍只影响新增 RAG 字段，不影响原有确定性报告。
 
 ## 8. Schema 与 UI
 
@@ -145,7 +143,7 @@ SQLite 使用 sources、documents、document_versions、chunks、embeddings、�
 - Claim 保留 `citation_refs` 作为 V2 Grounding 通过后的正式入口；V1
   确定性锁定为空，不允许根据 Recommendation 引用做间接映射。
 
-Report Service 的调用点固定在 ClaimValidator 之后、Renderer 之前。UI 已支持“循证行动建议”和“参考资料”，只渲染结构化 Citation 中经过 HTML 转义且协议为 HTTP(S) 的链接。Worker 在 Release Gate 未通过时不构造生产 RAG Pipeline，因此当前用户界面行为保持安全关闭。
+Report Service 的调用点固定在 ClaimValidator 之后、Renderer 之前。UI 已支持“循证行动建议”和“参考资料”，只渲染结构化 Citation 中经过 HTML 转义且协议为 HTTP(S) 的链接。当前 Release Gate 已通过，Worker 会在启动时构造生产 RAG Pipeline；工件或指纹后续发生漂移时仍会失败关闭并保留原有确定性分析。
 
 正式发布使用“确定性 Citation 表面校验 + 冻结版本 + 人工
 Groundedness 门”。本地生成的 `data/knowledge/groundedness_review.json`

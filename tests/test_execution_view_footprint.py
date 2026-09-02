@@ -331,6 +331,7 @@ def test_execution_view_waits_for_device_and_session_started(qtbot):
 
     view._on_start()
     assert not view.btn_start.isEnabled()
+    assert view.btn_start.text() == "正在启动…"
     assert not view.btn_start.isHidden()
     assert view.btn_pause.isHidden()
 

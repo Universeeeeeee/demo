@@ -131,27 +131,38 @@ class SessionController(QObject):
 
         调用此方法后进入设备准备阶段；正式采集仍需调用 start()。
         """
-        # 如果有上一次的残留资源，先清理
-        self._cleanup()
+        # 配置页会提前连接设备以显示状态。复用这个已运行的
+        # worker/thread，避免点击后在 UI 线程同步停止、等待再重连。
+        reuse_device = (
+            self._engine is None
+            and self._worker is not None
+            and self._thread is not None
+            and self._thread.isRunning()
+        )
+        prepared_device_state = self._device_state
+        if not reuse_device:
+            # 如果有上一次的残留会话资源，先清理
+            self._cleanup()
 
         self._config = config
         self._finish_reason = None
         self._is_paused = False
         self._start_pending = False
-        self._device_state = "connecting"
+        self._device_state = prepared_device_state if reuse_device else "connecting"
 
-        # 1. 创建线程
-        self._thread = QThread()
+        if not reuse_device:
+            # 1. 创建线程
+            self._thread = QThread()
 
-        # 2. 创建 L1: USB 采集层
-        self._worker = UsbWorker(
-            dll_path=self._dll_path,
-            vid=self._vid,
-            pid=self._pid,
-            timeout_ms=self._timeout_ms,
-            chunk_size=self._chunk_size,
-        )
-        self._worker.moveToThread(self._thread)
+            # 2. 创建 L1: USB 采集层
+            self._worker = UsbWorker(
+                dll_path=self._dll_path,
+                vid=self._vid,
+                pid=self._pid,
+                timeout_ms=self._timeout_ms,
+                chunk_size=self._chunk_size,
+            )
+            self._worker.moveToThread(self._thread)
 
         # 3. 创建 L2: 算法引擎层
         self._engine = GaitEngine(config=config)
@@ -172,26 +183,36 @@ class SessionController(QObject):
         self._engine.test_finished.connect(self._on_engine_finished)
 
         # 6. 连接 L1 → Controller (设备消息, 节流)
-        self._worker.data_received.connect(self._on_device_message)
-        self._worker.device_state_changed.connect(self._on_device_state)
-        if hasattr(self._worker, "led_health_changed"):
-            self._worker.led_health_changed.connect(self._on_led_health)
-        if hasattr(self._worker, "refresh_led_health"):
-            self.refresh_led_health_requested.connect(
-                self._worker.refresh_led_health
-            )
+        # 复用配置页 worker 时这些连接已经存在，不重复绑定。
+        if not reuse_device:
+            self._worker.data_received.connect(self._on_device_message)
+            self._worker.device_state_changed.connect(self._on_device_state)
+            if hasattr(self._worker, "led_health_changed"):
+                self._worker.led_health_changed.connect(self._on_led_health)
+            if hasattr(self._worker, "refresh_led_health"):
+                self.refresh_led_health_requested.connect(
+                    self._worker.refresh_led_health
+                )
 
         # 7. 准备阶段只连接设备；采集由用户点击后单独触发
-        self.connect_device_requested.connect(self._worker.connect_device)
+        if not reuse_device:
+            self.connect_device_requested.connect(self._worker.connect_device)
         self.start_capture_requested.connect(self._worker.start_capture)
         self.engine_start_requested.connect(self._engine.begin_session)
         self.engine_pause_requested.connect(self._engine.pause_session)
         self.engine_resume_requested.connect(self._engine.resume_session)
-        self._thread.started.connect(self._worker.connect_device)
-        self._thread.finished.connect(self._worker.deleteLater)
-
-        self.device_state_changed.emit("connecting", "正在连接设备...")
-        self._thread.start()
+        if reuse_device:
+            if self._device_state == "connected":
+                self.device_state_changed.emit("connected", "设备已连接")
+            elif self._device_state in {"disconnected", "error"}:
+                self._device_state = "connecting"
+                self.device_state_changed.emit("connecting", "正在连接设备...")
+                self.connect_device_requested.emit()
+        else:
+            self._thread.started.connect(self._worker.connect_device)
+            self._thread.finished.connect(self._worker.deleteLater)
+            self.device_state_changed.emit("connecting", "正在连接设备...")
+            self._thread.start()
         log.info("Session prepared: %s", config.test_type)
 
     def start(self):
