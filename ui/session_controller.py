@@ -43,9 +43,21 @@ class SessionController(QObject):
 
     # ---- 转发给 ExecutionView 的实时数据信号 ----
     hop_event = Signal(object)              # FootEvent (纵跳)
+    jump_quality_notice = Signal(dict)      # 纵跳质量提示
     gait_step_event = Signal(object)        # GaitStepEvent (步态)
     gait_snapshot = Signal(dict)            # 步态状态快照 (~10Hz)
+    footprint_visual_frame = Signal(dict)   # canonical footprint frame
     device_message = Signal(str)            # 设备消息 (节流)
+    device_state_changed = Signal(str, str)  # state, user-facing detail
+    led_health_changed = Signal(dict)        # LED 通断/闪烁诊断
+
+    # ---- queued commands into the worker thread ----
+    connect_device_requested = Signal()
+    start_capture_requested = Signal()
+    engine_start_requested = Signal(float)
+    engine_pause_requested = Signal()
+    engine_resume_requested = Signal()
+    refresh_led_health_requested = Signal()
 
     # ---- 生命周期信号 → MainWindow ----
     session_started = Signal()
@@ -71,26 +83,26 @@ class SessionController(QObject):
         self._start_time: Optional[float] = None
         self._finish_reason: Optional[str] = None
         self._is_running = False
+        self._is_paused = False
+        self._start_pending = False
+        self._device_state = "disconnected"
 
     # ------------------------------------------------------------------
     #  公共方法
     # ------------------------------------------------------------------
 
-    def prepare(self, config: AnyTestConfig):
-        """创建后台资源（QThread + UsbWorker + GaitEngine），但不启动。
+    def ensure_device_connected(self):
+        """Connect the USB device for setup-page status without capturing."""
+        if self._thread is not None and self._thread.isRunning():
+            if self._device_state in {"connected", "connecting", "streaming"}:
+                return
+            self._device_state = "connecting"
+            self.device_state_changed.emit("connecting", "正在连接设备...")
+            self.connect_device_requested.emit()
+            return
 
-        调用此方法后，资源已就绪，等待 start() 启动线程。
-        """
-        # 如果有上一次的残留资源，先清理
-        self._cleanup()
-
-        self._config = config
-        self._finish_reason = None
-
-        # 1. 创建线程
+        self._device_state = "connecting"
         self._thread = QThread()
-
-        # 2. 创建 L1: USB 采集层
         self._worker = UsbWorker(
             dll_path=self._dll_path,
             vid=self._vid,
@@ -99,9 +111,62 @@ class SessionController(QObject):
             chunk_size=self._chunk_size,
         )
         self._worker.moveToThread(self._thread)
+        self._worker.data_received.connect(self._on_device_message)
+        self._worker.device_state_changed.connect(self._on_device_state)
+        if hasattr(self._worker, "led_health_changed"):
+            self._worker.led_health_changed.connect(self._on_led_health)
+        if hasattr(self._worker, "refresh_led_health"):
+            self.refresh_led_health_requested.connect(
+                self._worker.refresh_led_health
+            )
+        self.connect_device_requested.connect(self._worker.connect_device)
+        self._thread.started.connect(self._worker.connect_device)
+        self._thread.finished.connect(self._worker.deleteLater)
+
+        self.device_state_changed.emit("connecting", "正在连接设备...")
+        self._thread.start()
+
+    def prepare(self, config: AnyTestConfig):
+        """Create resources and connect the device, without starting capture.
+
+        调用此方法后进入设备准备阶段；正式采集仍需调用 start()。
+        """
+        # 配置页会提前连接设备以显示状态。复用这个已运行的
+        # worker/thread，避免点击后在 UI 线程同步停止、等待再重连。
+        reuse_device = (
+            self._engine is None
+            and self._worker is not None
+            and self._thread is not None
+            and self._thread.isRunning()
+        )
+        prepared_device_state = self._device_state
+        if not reuse_device:
+            # 如果有上一次的残留会话资源，先清理
+            self._cleanup()
+
+        self._config = config
+        self._finish_reason = None
+        self._is_paused = False
+        self._start_pending = False
+        self._device_state = prepared_device_state if reuse_device else "connecting"
+
+        if not reuse_device:
+            # 1. 创建线程
+            self._thread = QThread()
+
+            # 2. 创建 L1: USB 采集层
+            self._worker = UsbWorker(
+                dll_path=self._dll_path,
+                vid=self._vid,
+                pid=self._pid,
+                timeout_ms=self._timeout_ms,
+                chunk_size=self._chunk_size,
+            )
+            self._worker.moveToThread(self._thread)
 
         # 3. 创建 L2: 算法引擎层
         self._engine = GaitEngine(config=config)
+        self._engine.paused = True
         self._engine.moveToThread(self._thread)
 
         # 4. 连接 L1 → L2 (同线程 DirectConnection, 零开销)
@@ -111,54 +176,127 @@ class SessionController(QObject):
 
         # 5. 连接 L2 → Controller (跨线程 QueuedConnection, 低频)
         self._engine.hop_event.connect(self._on_hop_event)
+        self._engine.jump_quality_notice.connect(self._on_jump_quality_notice)
         self._engine.gait_step_event.connect(self._on_gait_step_event)
         self._engine.gait_status_snapshot.connect(self._on_gait_snapshot)
+        self._engine.footprint_visual_frame.connect(self._on_footprint_visual_frame)
         self._engine.test_finished.connect(self._on_engine_finished)
 
         # 6. 连接 L1 → Controller (设备消息, 节流)
-        self._worker.data_received.connect(self._on_device_message)
+        # 复用配置页 worker 时这些连接已经存在，不重复绑定。
+        if not reuse_device:
+            self._worker.data_received.connect(self._on_device_message)
+            self._worker.device_state_changed.connect(self._on_device_state)
+            if hasattr(self._worker, "led_health_changed"):
+                self._worker.led_health_changed.connect(self._on_led_health)
+            if hasattr(self._worker, "refresh_led_health"):
+                self.refresh_led_health_requested.connect(
+                    self._worker.refresh_led_health
+                )
 
-        # 7. 线程启动时 → 启动 USB 采集
-        self._thread.started.connect(self._worker.start)
-        self._thread.finished.connect(self._worker.deleteLater)
-
+        # 7. 准备阶段只连接设备；采集由用户点击后单独触发
+        if not reuse_device:
+            self.connect_device_requested.connect(self._worker.connect_device)
+        self.start_capture_requested.connect(self._worker.start_capture)
+        self.engine_start_requested.connect(self._engine.begin_session)
+        self.engine_pause_requested.connect(self._engine.pause_session)
+        self.engine_resume_requested.connect(self._engine.resume_session)
+        if reuse_device:
+            if self._device_state == "connected":
+                self.device_state_changed.emit("connected", "设备已连接")
+            elif self._device_state in {"disconnected", "error"}:
+                self._device_state = "connecting"
+                self.device_state_changed.emit("connecting", "正在连接设备...")
+                self.connect_device_requested.emit()
+        else:
+            self._thread.started.connect(self._worker.connect_device)
+            self._thread.finished.connect(self._worker.deleteLater)
+            self.device_state_changed.emit("connecting", "正在连接设备...")
+            self._thread.start()
         log.info("Session prepared: %s", config.test_type)
 
     def start(self):
-        """启动后台线程，开始数据采集。"""
-        if self._thread is None:
+        """Start formal acquisition after the device has been prepared."""
+        if self._thread is None or not self._thread.isRunning():
             log.warning("start() called but no session prepared")
+            return
+        if self._device_state != "connected":
+            log.warning("start() called while device state is %s", self._device_state)
+            self.device_state_changed.emit(
+                self._device_state,
+                "设备尚未就绪，不能开始采集。",
+            )
+            return
+        if self._is_running or self._start_pending:
             return
 
         self._start_time = time.perf_counter()
-        if self._engine:
-            self._engine.set_start_time(self._start_time)
+        self._is_paused = False
+        self._start_pending = True
+        self.engine_start_requested.emit(self._start_time)
+        self.start_capture_requested.emit()
+        log.info("Session capture requested")
 
-        self._is_running = True
-        self._thread.start()
-        self.session_started.emit()
-        log.info("Session started")
+    def retry_device(self):
+        """Retry device connection while remaining in the prepared screen."""
+        if self._thread is None or not self._thread.isRunning():
+            return
+        if self._is_running or self._start_pending:
+            return
+        self._device_state = "connecting"
+        self.device_state_changed.emit("connecting", "正在重新连接设备...")
+        self.connect_device_requested.emit()
+
+    def refresh_led_health(self):
+        """Refresh the lightweight LED health sample without starting a test."""
+        if self._worker is None:
+            self.ensure_device_connected()
+            return
+        if self._device_state == "connected":
+            self.refresh_led_health_requested.emit()
+        elif self._device_state in {"disconnected", "error"}:
+            self.ensure_device_connected()
 
     def pause(self):
-        """暂停数据处理（引擎跳过帧，USB 继续采集）。"""
-        if self._engine:
-            self._engine.paused = True
+        """Pause processing and the active test clock."""
+        if self._engine and not self._is_paused:
+            self._is_paused = True
+            self.engine_pause_requested.emit()
 
     def resume(self):
-        """恢复数据处理。"""
-        if self._engine:
-            self._engine.paused = False
+        """Resume processing from the frozen test clock."""
+        if self._engine and self._is_paused:
+            self._is_paused = False
+            self.engine_resume_requested.emit()
 
-    def stop(self):
+    def toggle_pause(self):
+        if self._is_paused:
+            self.resume()
+        else:
+            self.pause()
+
+    def stop(self, reason: str | None = None):
         """停止会话，构造 TestReport 并发射 session_finished 信号。"""
         if not self._is_running:
             return
 
+        if reason is not None:
+            self._finish_reason = reason
         self._is_running = False
+        self._is_paused = False
         report = self._do_stop(self._finish_reason or "manual")
 
         if report is not None:
             self.session_finished.emit(report)
+
+    def discard(self):
+        """Discard a prepared, non-running session without creating a report."""
+        if self._is_running:
+            raise RuntimeError("cannot discard a running session")
+        self._cleanup()
+        self._config = None
+        self._start_time = None
+        self._finish_reason = None
 
     @property
     def is_running(self) -> bool:
@@ -177,6 +315,10 @@ class SessionController(QObject):
     def start_time(self) -> Optional[float]:
         return self._start_time
 
+    @property
+    def device_state(self) -> str:
+        return self._device_state
+
     # ------------------------------------------------------------------
     #  内部信号处理
     # ------------------------------------------------------------------
@@ -184,6 +326,10 @@ class SessionController(QObject):
     @Slot(object)
     def _on_hop_event(self, ev):
         self.hop_event.emit(ev)
+
+    @Slot(dict)
+    def _on_jump_quality_notice(self, notice: dict):
+        self.jump_quality_notice.emit(notice)
 
     @Slot(object)
     def _on_gait_step_event(self, ev):
@@ -193,18 +339,41 @@ class SessionController(QObject):
     def _on_gait_snapshot(self, snapshot):
         self.gait_snapshot.emit(snapshot)
 
+    @Slot(dict)
+    def _on_footprint_visual_frame(self, frame):
+        self.footprint_visual_frame.emit(frame)
+
     @Slot(str)
     def _on_device_message(self, msg):
         self.device_message.emit(msg)
+
+    @Slot(str, str)
+    def _on_device_state(self, state: str, message: str):
+        self._device_state = state
+        if state == "streaming" and self._start_pending:
+            self._start_pending = False
+            self._is_running = True
+            self.session_started.emit()
+            log.info("Session started")
+        elif state == "error" and self._start_pending:
+            self._start_pending = False
+            self._start_time = None
+            if self._engine is not None:
+                self._engine.paused = True
+        self.device_state_changed.emit(state, message)
+        if state == "connected" and not self._is_running and not self._start_pending:
+            self.refresh_led_health()
+
+    @Slot(dict)
+    def _on_led_health(self, result: dict):
+        self.led_health_changed.emit(result)
 
     @Slot(str)
     def _on_engine_finished(self, reason: str):
         """GaitEngine 自动停止回调（跳跃次数达标 / 时间到）。"""
         log.info("Engine auto-stop: %s", reason)
         self._finish_reason = reason
-        # 延迟执行 stop，确保最后一个事件处理完毕
-        from qtpy.QtCore import QTimer
-        QTimer.singleShot(200, self.stop)
+        self.stop(reason)
 
     # ------------------------------------------------------------------
     #  内部实现
@@ -258,10 +427,26 @@ class SessionController(QObject):
         if self._is_running:
             self._is_running = False
             self._do_stop("cleanup")
+            return
+
+        if self._worker:
+            try:
+                self._worker.stop()
+            except Exception:
+                log.exception("Error stopping prepared USB worker")
+        if self._thread and self._thread.isRunning():
+            try:
+                self._thread.quit()
+                self._thread.wait(2000)
+            except Exception:
+                log.exception("Error stopping prepared engine thread")
 
         self._thread = None
         self._worker = None
         self._engine = None
+        self._is_paused = False
+        self._start_pending = False
+        self._device_state = "disconnected"
 
     @staticmethod
     def _parse_int_env(name: str, default: int) -> int:

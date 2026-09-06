@@ -1,0 +1,231 @@
+{
+  "benchmark_schema_version": "report-agent-benchmark/2.0-sequential",
+  "model_name": "deepseek-v4-flash",
+  "prompt_version": "report-agent-sequential-system/3.0",
+  "observation_builder_version": "agent-observation/1.0",
+  "analysis_tool_registry_version": "analysis-tool-registry/1.0",
+  "analysis_method_registry_version": "analysis-method-registry/1.0",
+  "kernel_version": "analysis-kernel/1.0",
+  "skill": {
+    "name": "report-analysis",
+    "version": "report-analysis-skill/0.5"
+  },
+  "ablation": {
+    "include_sketch": true,
+    "include_compact_series": true,
+    "include_screening_cues": false,
+    "max_replans": 0
+  },
+  "repetitions": 1,
+  "case_count": 1,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 1.0,
+  "hidden_pattern_precision": null,
+  "precision_unavailable_reason": "Benchmark cases define expected predicates but not the complete allowed predicate set; extra supported predicates cannot be classified as false positives",
+  "legacy_raw_predicate_match_ratio": 0.5,
+  "validated_run_rate": 1.0,
+  "decision_assertion_pass_rate": 1.0,
+  "p50_elapsed_ms": 17372,
+  "p95_elapsed_ms": 17372,
+  "runs": [
+    {
+      "case_id": "side_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase"
+      ],
+      "cycle_count": 2,
+      "replan_count": 0,
+      "decision_trace": {
+        "initial_decision": {
+          "decision_type": "analyze",
+          "action_id": "temporal_change_contact_time",
+          "hypothesis": {
+            "hypothesis_id": "h1",
+            "statement": "Contact time increases across temporal segments during the session (from 0.20s in early segments to ~0.265s in later segments).",
+            "dimensions": [
+              "temporal"
+            ],
+            "metric_codes": [
+              "contact_time_s"
+            ],
+            "target_predicate": "increase",
+            "reason": "Visible temporal change: early segments mean contact time 0.20s, later segments mean ~0.265s, while step_length remains constant at 70cm across all segments.",
+            "success_condition": "Temporal analysis verifies that contact_time_s increases across temporal segments with sufficient separation."
+          },
+          "tool_name": "analyze_current_session",
+          "analysis_method": "verify_temporal_change",
+          "inputs": {
+            "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+            "metric_codes": [
+              "contact_time_s"
+            ]
+          },
+          "purpose": "Verify the clearest visible pattern: contact_time_s increases across temporal segments while step_length remains constant."
+        },
+        "evidence_review": null,
+        "skill_audit": {
+          "skill_name": "report-analysis",
+          "skill_version": "report-analysis-skill/0.5",
+          "loaded_references": [
+            "references/gait.md"
+          ],
+          "content_digest": "7716b1ec73e9c287ebca04115e0fa3d77668f15a232878a519b0206ef11e7b8e"
+        },
+        "sequential_decisions": [
+          {
+            "decision_type": "analyze",
+            "action_id": "temporal_change_contact_time",
+            "hypothesis": {
+              "hypothesis_id": "h1",
+              "statement": "Contact time increases across temporal segments during the session (from 0.20s in early segments to ~0.265s in later segments).",
+              "dimensions": [
+                "temporal"
+              ],
+              "metric_codes": [
+                "contact_time_s"
+              ],
+              "target_predicate": "increase",
+              "reason": "Visible temporal change: early segments mean contact time 0.20s, later segments mean ~0.265s, while step_length remains constant at 70cm across all segments.",
+              "success_condition": "Temporal analysis verifies that contact_time_s increases across temporal segments with sufficient separation."
+            },
+            "tool_name": "analyze_current_session",
+            "analysis_method": "verify_temporal_change",
+            "inputs": {
+              "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+              "metric_codes": [
+                "contact_time_s"
+              ]
+            },
+            "purpose": "Verify the clearest visible pattern: contact_time_s increases across temporal segments while step_length remains constant."
+          },
+          {
+            "decision_type": "analyze",
+            "action_id": "a2",
+            "hypothesis": {
+              "hypothesis_id": "h2",
+              "statement": "Contact time increase is concentrated on one side (left shows 0.31s while right stays at 0.22s in later segments).",
+              "dimensions": [
+                "temporal",
+                "side"
+              ],
+              "metric_codes": [
+                "contact_time_s"
+              ],
+              "target_predicate": "concentrated_on_side",
+              "reason": "Side-segment data shows in later segments left contact_time_s is 0.31 (fixed) while right is 0.22 (fixed), suggesting the overall temporal increase is side-concentrated rather than symmetric.",
+              "success_condition": "Side analysis verifies a significant difference in contact_time_s between left and right sides."
+            },
+            "tool_name": "analyze_current_session",
+            "analysis_method": "verify_side_segment_difference",
+            "inputs": {
+              "record_set_id": "ff1e3ed0-54f2-5e0a-8ae0-8365cc3e9151",
+              "metric_codes": [
+                "contact_time_s"
+              ]
+            },
+            "purpose": "Determine whether the verified temporal increase in contact_time_s is concentrated on one side or symmetric across both sides."
+          },
+          {
+            "decision_type": "stop",
+            "reason_code": "evidence_sufficient",
+            "reason": "Both high-value hypotheses about contact_time_s have been tested and supported by conclusive evidence: (1) contact time increases across temporal segments from 0.20s to 0.265s (increase supported), and (2) this increase is concentrated on the left side (0.31s) while the right side stays near 0.22s (concentrated_on_side supported). step_length_cm is constant (70.0 everywhere), and only contact_time_s among populated metrics shows variation. All other metrics are unpopulated (0 counts), excluding cross-metric co-change or further segment comparisons as high-value. Exclusion robustness is not applicable since there are no excluded records (excluded_records: 0). No further untested high-value hypotheses remain for the current session.",
+            "unresolved_hypothesis_ids": []
+          }
+        ],
+        "synthesis_trace": [
+          {
+            "stage": "initial",
+            "draft": {
+              "summary": "Sequential Structured Synthesis: 基于两项确定性Evidence形成派生Claim。temporal evidence (3faf428d) 证实 contact_time_s 随时间上升（increase），side-segment evidence (70ca520d) 证实上升集中在左侧。两者分别绑定supported predicate evidence，并使用evidence数值占位符。",
+              "claims": [
+                {
+                  "claim_id": "c1_contact_time_increase",
+                  "claim_type": "derived",
+                  "text_template": "整个会话内接触时间随时间上升，后半段的平均接触时间较前半段增长约{diff}s。",
+                  "fact_refs": [],
+                  "evidence_refs": [
+                    "3faf428d-a816-580b-a86d-ee402e5cfd8d"
+                  ],
+                  "tool_run_ids": [
+                    "b2e2b142-85ac-5845-9c2a-9700860ed3d9"
+                  ],
+                  "predicate_bindings": [
+                    {
+                      "predicate": "increase",
+                      "predicate_evidence_ref": "254a2a0e-949d-5896-8a3c-9ad8189363b3"
+                    }
+                  ],
+                  "numeric_bindings": [
+                    {
+                      "binding_id": "diff",
+                      "source_type": "evidence",
+                      "source_ref": "3faf428d-a816-580b-a86d-ee402e5cfd8d",
+                      "value_key": "difference"
+                    }
+                  ],
+                  "limitations": [
+                    "上升代表会话内时间模式，不推断疲劳、机制或损伤风险。"
+                  ]
+                },
+                {
+                  "claim_id": "c2_contact_time_left_concentrated",
+                  "claim_type": "derived",
+                  "text_template": "接触时间的整体上升主要集中在左侧，左侧变化约{left_chg}s而右侧仅约{right_chg}s。",
+                  "fact_refs": [],
+                  "evidence_refs": [
+                    "70ca520d-089e-5054-936e-e8afcbd135d8"
+                  ],
+                  "tool_run_ids": [
+                    "1e8daa5a-1bdf-58ae-ad1c-47391acf7ea4"
+                  ],
+                  "predicate_bindings": [
+                    {
+                      "predicate": "concentrated_on_side",
+                      "predicate_evidence_ref": "cc4f9d38-a4b0-5ad1-8e8d-51fd228e8bef"
+                    }
+                  ],
+                  "numeric_bindings": [
+                    {
+                      "binding_id": "left_chg",
+                      "source_type": "evidence",
+                      "source_ref": "70ca520d-089e-5054-936e-e8afcbd135d8",
+                      "value_key": "left_change"
+                    },
+                    {
+                      "binding_id": "right_chg",
+                      "source_type": "evidence",
+                      "source_ref": "70ca520d-089e-5054-936e-e8afcbd135d8",
+                      "value_key": "right_change"
+                    }
+                  ],
+                  "limitations": [
+                    "不对称不作为病理、疲劳或治疗需求解读。"
+                  ]
+                }
+              ],
+              "scope_expansion_suggestions": [],
+              "overall_limitations": [
+                "本期仅current_session数据可访问，未进行跨会话纵向或队列对比。",
+                "step_length 在整个会话保持恒定，未纳入变化分析。",
+                "未进行排除敏感性验证，因为quality_summary显示excluded_records为0，无排除记录可验证。"
+              ]
+            }
+          }
+        ]
+      },
+      "decision_assertions": {
+        "bounded_initial_action": true,
+        "acceptable_first_action": true,
+        "no_initial_exclusion_robustness": true,
+        "cross_metric_inputs_show_change": true
+      },
+      "elapsed_ms": 17372
+    }
+  ]
+}

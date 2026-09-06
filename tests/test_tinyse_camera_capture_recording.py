@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -126,6 +127,28 @@ class TinySeCameraCaptureRecordingTest(unittest.TestCase):
             self.assertFalse(capture.is_record_busy)
         finally:
             tinyse_camera.mjpg_to_avi = original_converter
+
+    def test_analysis_frame_timing_preserves_sample_callback_and_decode_times(self):
+        capture = TinySeCameraCapture(preview_fps=30)
+        capture._mirror = False
+        capture.analysis_frame_ready = _Emitter()
+        capture.analysis_frame_timed_ready = _Emitter()
+        capture.frame_ready = _Emitter()
+        frame = object()
+
+        with (
+            patch.object(tinyse_camera.time, "perf_counter", return_value=100.012),
+            patch.object(tinyse_camera.cv2, "imdecode", return_value=frame),
+        ):
+            capture._on_mjpg_frame(b"jpeg", 7, 1.25, 100.0)
+
+        self.assertEqual(capture.analysis_frame_ready.values, [(frame, 100.012)])
+        emitted_frame, timing = capture.analysis_frame_timed_ready.values[0]
+        self.assertIs(emitted_frame, frame)
+        self.assertEqual(timing.frame_index, 7)
+        self.assertEqual(timing.sample_time_s, 1.25)
+        self.assertEqual(timing.callback_time_s, 100.0)
+        self.assertEqual(timing.decoded_at_s, 100.012)
 
 
 if __name__ == "__main__":

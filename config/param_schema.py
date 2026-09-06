@@ -314,6 +314,8 @@ class ParamSchema:
 
     def _validate_range(self, p: ParamDef, val: Any, errors: list[str]):
         """校验数值参数的范围。"""
+        if p.default is not None and val == p.default:
+            return
         range_str = p.range_str
         if not range_str or range_str.startswith("{"):
             return  # dict 格式的 range 暂不做自动校验

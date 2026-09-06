@@ -1,0 +1,69 @@
+{
+  "repetitions": 1,
+  "case_count": 4,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 0.6666666666666666,
+  "hidden_pattern_precision": 0.18181818181818182,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21909
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported",
+        "decrease",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 22589
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18592
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23190
+    }
+  ]
+}

@@ -4,9 +4,8 @@ param_panel.py — Jump Test 参数配置面板
 动态生成表单控件，处理 stop_type 联动显隐，
 对外提供 get_config() -> TestConfig 接口。
 
-使用 dayu_widgets 保持 UI 风格统一:
-  - MLabel:       标签
-  - MDivider:     分组标题
+使用局部深色 QSS，避免依赖主窗口的全局 Dayu 主题:
+  - QLabel:       标签和分组标题
   - MSpinBox:     整数输入
   - MTimeEdit:    时间输入 (mm:ss)
   - MSwitch:      布尔开关
@@ -19,17 +18,95 @@ from __future__ import annotations
 from qtpy.QtCore import QSignalBlocker, Signal, Qt, QTime
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox,
-    QDoubleSpinBox, QSizePolicy,
+    QDoubleSpinBox, QLabel, QSizePolicy,
 )
 
-from dayu_widgets.divider import MDivider
-from dayu_widgets.label import MLabel
 from dayu_widgets.spin_box import MSpinBox, MTimeEdit
 from dayu_widgets.switch import MSwitch
 from dayu_widgets.collapse import MSectionItem
 
 from config.param_schema import ParamSchema, ParamDef, get_schema
 from config.test_config import AnyTestConfig, TestConfig, config_from_dict
+
+
+PARAM_PANEL_QSS = """
+QWidget#ParamPanelRoot {
+    background: #121923;
+    color: #e7ebf2;
+}
+QLabel#ParamSectionTitle {
+    color: #f2f5fa;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 2px 0 6px 2px;
+}
+QWidget#ParamFormRow {
+    background: #171f2b;
+    border: 1px solid #293442;
+    border-radius: 8px;
+}
+QLabel#ParamFieldLabel {
+    color: #9da8b8;
+    background: transparent;
+    border: none;
+    font-size: 13px;
+}
+QComboBox,
+QSpinBox,
+QDoubleSpinBox,
+QTimeEdit {
+    min-height: 34px;
+    border: 1px solid #354151;
+    border-radius: 6px;
+    background: #1a2230;
+    color: #e7ebf2;
+    padding: 0 9px;
+    font-size: 13px;
+    selection-background-color: #ff7a00;
+}
+QComboBox:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QTimeEdit:hover {
+    border-color: #59677a;
+}
+QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QTimeEdit:focus {
+    border-color: #ff7a00;
+}
+QComboBox QAbstractItemView {
+    background: #1a2230;
+    color: #e7ebf2;
+    border: 1px solid #354151;
+    selection-background-color: #273446;
+}
+QAbstractSpinBox::up-button,
+QAbstractSpinBox::down-button {
+    width: 22px;
+    background: #202a38;
+    border-left: 1px solid #354151;
+}
+QWidget#ParamFilterSection {
+    background: transparent;
+    color: #d9dee8;
+}
+QWidget#ParamFilterSection QWidget#title {
+    min-height: 34px;
+    background: #151d28;
+    border: 1px solid #293442;
+    border-radius: 6px;
+}
+QWidget#ParamFilterSection QWidget#title QLabel {
+    color: #cfd6e3;
+    background: transparent;
+    border: none;
+}
+QWidget#ParamFilterContent {
+    background: transparent;
+}
+"""
 
 
 class ParamPanel(QWidget):
@@ -63,7 +140,10 @@ class ParamPanel(QWidget):
 
     # 各测试类型 Layer3 滤波参数的创建顺序
     _LAYER3_ORDER: dict[str, list[str]] = {
-        "Jump Test": ["min_contact_time", "min_flight_time", "max_flight_time"],
+        "Jump Test": [
+            "min_contact_time", "min_flight_time", "max_flight_time",
+            "flight_time_review_threshold",
+        ],
         "Treadmill Gait Test": [
             "min_contact_time", "min_flight_time", "max_flight_time",
             "step_length_calculation", "min_step_length", "min_foot_length",
@@ -78,6 +158,9 @@ class ParamPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("ParamPanelRoot")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(PARAM_PANEL_QSS)
 
         self._schema: ParamSchema = get_schema()
         self._test_type: str = "Jump Test"
@@ -211,7 +294,9 @@ class ParamPanel(QWidget):
         main_layout.setSpacing(10)
 
         # ===== 基础配置 =====
-        main_layout.addWidget(MDivider("基础配置"))
+        section_title = QLabel("基础配置")
+        section_title.setObjectName("ParamSectionTitle")
+        main_layout.addWidget(section_title)
 
         # 测试模式：独占整行
         test_type_combo = self._create_enum_widget("test_type")
@@ -225,6 +310,7 @@ class ParamPanel(QWidget):
 
         # ===== Layer 3: 滤波参数 (折叠, 2 列网格) =====
         self._filter_container = QWidget()
+        self._filter_container.setObjectName("ParamFilterContent")
         self._filter_grid = QGridLayout(self._filter_container)
         self._filter_grid.setContentsMargins(4, 4, 4, 4)
         self._filter_grid.setSpacing(10)
@@ -232,6 +318,7 @@ class ParamPanel(QWidget):
         self._filter_section = MSectionItem(
             title="滤波参数", widget=self._filter_container, expand=False
         )
+        self._filter_section.setObjectName("ParamFilterSection")
         main_layout.addWidget(self._filter_section)
 
         # ===== Layer 4: 可选参数 (折叠, 2 列网格) =====
@@ -257,6 +344,7 @@ class ParamPanel(QWidget):
             title="可选参数", widget=optional_container, expand=False
         )
         main_layout.addWidget(self._optional_section)
+        self._optional_section.hide()
 
         # ===== 弹性空间 =====
         main_layout.addStretch()
@@ -396,31 +484,15 @@ class ParamPanel(QWidget):
     def _create_form_row(self, label_text: str, widget: QWidget) -> QWidget:
         """创建 FormRow: 卡片风格，标签在上、控件在下。"""
         row = QWidget()
-        row.setStyleSheet(
-            "QWidget { "
-            "  background-color: rgba(45, 45, 50, 0.7); "
-            "  border-radius: 8px; "
-            "}"
-        )
+        row.setObjectName("ParamFormRow")
 
         layout = QVBoxLayout(row)
         layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(4)
 
-        label = MLabel(label_text)
+        label = QLabel(label_text)
+        label.setObjectName("ParamFieldLabel")
         label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        label.setStyleSheet(
-            "font-size: 11pt; color: #999999; "
-            "background: transparent; border: none;"
-        )
-
-        # 控件字号增大
-        widget.setStyleSheet(
-            widget.styleSheet() + """
-            font-size: 13pt;
-            min-height: 32px;
-            """
-        )
 
         layout.addWidget(label)
         layout.addWidget(widget)
@@ -449,12 +521,19 @@ class ParamPanel(QWidget):
         """为枚举参数创建 QComboBox，选项从 schema 获取。"""
         combo = QComboBox()
         values = self._schema.get_enum_values(param_name, self._test_type)
+        if param_name == "test_type":
+            values = [
+                test_type
+                for test_type in self._LAYER2_ORDER
+                if test_type in values
+            ]
         combo.addItems(values)
 
         # 设置默认值
         param_def = self._schema.get_param_def(param_name)
-        if param_def and param_def.default:
-            idx = combo.findText(str(param_def.default))
+        default = self._default_for_param(param_name, param_def)
+        if default is not None:
+            idx = combo.findText(str(default))
             if idx >= 0:
                 combo.setCurrentIndex(idx)
 
@@ -480,9 +559,10 @@ class ParamPanel(QWidget):
 
         # 特殊处理: 当 schema default 低于 range 下限时（如 automatic_data_filter
         # 的 default=0, range=10-90），扩展下限以容纳默认值。
-        if param_def and param_def.default is not None:
+        default = self._default_for_param(param_name, param_def)
+        if default is not None:
             try:
-                default_val = int(param_def.default)
+                default_val = int(default)
                 if default_val < lo:
                     lo = default_val
             except (ValueError, TypeError):
@@ -491,9 +571,9 @@ class ParamPanel(QWidget):
         spinbox.setRange(lo, hi)
 
         # 设置默认值
-        if param_def and param_def.default is not None:
+        if default is not None:
             try:
-                spinbox.setValue(int(param_def.default))
+                spinbox.setValue(int(default))
             except (ValueError, TypeError):
                 pass
 
@@ -527,10 +607,8 @@ class ParamPanel(QWidget):
         spinbox.setDecimals(1)
 
         # 设置默认值：优先 schema default，否则从 dataclass 字段默认值获取
-        default = None
-        if param_def.default is not None:
-            default = param_def.default
-        elif param_name != "treadmill_speed":
+        default = self._default_for_param(param_name, param_def)
+        if default is None and param_name != "treadmill_speed":
             # automatic_data_filter 特殊处理：range 10-90 但 default=0（关闭）
             # 从 dataclass 获取默认值
             default = self._get_dataclass_default(param_name)
@@ -544,6 +622,15 @@ class ParamPanel(QWidget):
         spinbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._widgets[param_name] = spinbox
         return spinbox
+
+    def _default_for_param(self, param_name: str, param_def: ParamDef | None) -> object | None:
+        """Return schema default, resolving per-test defaults when present."""
+        if param_def is None:
+            return None
+        default = param_def.default
+        if isinstance(default, dict):
+            return default.get(self._test_type)
+        return default
 
     def _get_dataclass_default(self, param_name: str) -> object | None:
         """从当前 test_type 对应的配置 dataclass 读取字段默认值。"""

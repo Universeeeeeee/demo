@@ -269,7 +269,7 @@ SYSTEM_PROMPT = """\
 配置情景指引：
 - 用户说"跳N次" → stop_type="Status change"
 - 用户说"测X分钟" → stop_type="End of Time"
-- 未指定 → stop_type="External impulse"（默认手动停止）
+- 未指定停止条件 → 追问跳跃次数或测试时长
 - 纵跳模式默认双脚起跳，starting_foot="Not defined"，reply_message 中说"双脚跳跃"不要写"未指定"
 
 沉默规则：

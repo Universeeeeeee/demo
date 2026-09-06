@@ -1,0 +1,109 @@
+import ast
+import importlib
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PATH = ROOT / "tools/vision_diagnostic.py"
+
+
+class VisionDiagnosticContractTests(unittest.TestCase):
+    def test_parser_accepts_tinyse_model_and_csv_output(self):
+        module = importlib.import_module("tools.vision_diagnostic")
+
+        args = module.build_parser().parse_args(
+            [
+                "--camera",
+                "tinyse",
+                "--model",
+                r"C:\Iron_Jump\models\pose_landmarker_full.task",
+                "--output",
+                "vision-results.csv",
+                "--interval-ms",
+                "100",
+            ]
+        )
+
+        self.assertEqual(args.camera, "tinyse")
+        self.assertTrue(args.model.endswith("pose_landmarker_full.task"))
+        self.assertEqual(args.output, "vision-results.csv")
+        self.assertEqual(args.interval_ms, 100)
+
+    def test_live_entry_exists_and_reuses_isolated_camera_window(self):
+        live_path = ROOT / "tools/vision_live.py"
+        source = live_path.read_text(encoding="utf-8")
+
+        self.assertIn("tools.vision_diagnostic", source)
+        self.assertIn("main", source)
+
+    def test_window_uses_timer_for_continuous_events(self):
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertIn("self._event_timer = QTimer(self)", source)
+        self.assertIn("self._event_timer.timeout.connect(self._submit_event)", source)
+        self.assertIn("self._event_timer.start(args.interval_ms)", source)
+
+    def test_import_does_not_load_qt_or_camera(self):
+        sys.modules.pop("tools.vision_diagnostic", None)
+        before = set(sys.modules)
+
+        importlib.import_module("tools.vision_diagnostic")
+
+        loaded = set(sys.modules) - before
+        self.assertFalse(any(name == "qtpy" or name.startswith("qtpy.") for name in loaded))
+        self.assertFalse(any(name.startswith("camera.") for name in loaded))
+
+    def test_source_uses_only_camera_and_vision_project_interfaces(self):
+        tree = ast.parse(PATH.read_text(encoding="utf-8"))
+        imported_roots = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".")[0])
+
+        self.assertNotIn("engine", imported_roots)
+        self.assertNotIn("ui", imported_roots)
+        self.assertNotIn("hardware", imported_roots)
+        self.assertNotIn("config", imported_roots)
+        self.assertIn("camera", imported_roots)
+        self.assertIn("vision", imported_roots)
+
+    def test_csv_schema_contains_timing_label_confidence_and_reason(self):
+        module = importlib.import_module("tools.vision_diagnostic")
+
+        self.assertEqual(
+            module.CSV_FIELDS,
+            (
+                "event_id",
+                "event_time_s",
+                "decided_at_s",
+                "label",
+                "confidence",
+                "reason",
+                "candidate_label",
+                "latency_ms",
+            ),
+        )
+
+    def test_live_defaults_reduce_cpu_load_and_use_reference_threshold(self):
+        module = importlib.import_module("tools.vision_diagnostic")
+        args = module.build_parser().parse_args(["--model", "pose.task"])
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertEqual(args.interval_ms, 250)
+        self.assertIn("inference_interval_ms=80", source)
+        self.assertIn("min_confidence=0.65", source)
+
+    def test_live_preview_draws_timestamp_aligned_pose_nodes(self):
+        source = PATH.read_text(encoding="utf-8")
+
+        self.assertIn("self._service.pose_ready.connect", source)
+        self.assertIn("draw_pose_overlay", source)
+        self.assertIn("analysis_frame_ready.connect(self._on_analysis_frame)", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

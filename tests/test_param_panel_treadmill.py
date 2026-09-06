@@ -116,6 +116,35 @@ class TestParamPanelTreadmill:
         assert "filter_gaitr_in" not in self._panel._widgets
         assert "filter_gaitr_out" not in self._panel._widgets
 
+    def test_manual_form_exposes_only_supported_modes_and_triggers(self) -> None:
+        test_types = self._panel._widgets["test_type"]
+        assert [
+            test_types.itemText(index) for index in range(test_types.count())
+        ] == [
+            "Jump Test",
+            "Treadmill Gait Test",
+            "Treadmill Running Test",
+        ]
+        assert "External impulse" not in [
+            self._panel._widgets["start_type"].itemText(index)
+            for index in range(self._panel._widgets["start_type"].count())
+        ]
+        assert not self._panel._optional_section.isVisible()
+
+    def test_manual_form_owns_a_dark_theme_without_global_dayu_theme(self) -> None:
+        self._panel.resize(900, 600)
+        self._panel.show()
+        QApplication.processEvents()
+
+        assert self._panel.objectName() == "ParamPanelRoot"
+        assert "#121923" in self._panel.styleSheet()
+        assert self._panel.grab().toImage().pixelColor(5, 5).lightness() < 80
+        assert all(
+            row.objectName() == "ParamFormRow"
+            for name, row in self._panel._rows.items()
+            if name != "metronome_enabled"
+        )
+
     # ------------------------------------------------------------------
     #  get_config() returns correct type
     # ------------------------------------------------------------------
@@ -136,18 +165,32 @@ class TestParamPanelTreadmill:
         assert config.treadmill_speed == 8.5
         assert config.direction == "Opposite side"
 
-    def test_treadmill_initial_defaults_are_three_kmh_and_opposite_side(self) -> None:
+    def test_treadmill_gait_defaults_to_walking_speed_and_opposite_direction(self) -> None:
         self._select_test_type("Treadmill Gait Test")
 
         speed_widget = self._panel._widgets["treadmill_speed"]
         direction_widget = self._panel._widgets["direction"]
         assert isinstance(speed_widget, QDoubleSpinBox)
         assert isinstance(direction_widget, QComboBox)
-        assert speed_widget.value() == 3.0
-        assert direction_widget.currentText() == "Opposite side"
 
         config = self._panel.get_config()
+        assert speed_widget.value() == 3.0
+        assert direction_widget.currentText() == "Opposite side"
         assert config.treadmill_speed == 3.0
+        assert config.direction == "Opposite side"
+
+    def test_treadmill_running_defaults_to_running_speed_and_opposite_direction(self) -> None:
+        self._select_test_type("Treadmill Running Test")
+
+        speed_widget = self._panel._widgets["treadmill_speed"]
+        direction_widget = self._panel._widgets["direction"]
+        assert isinstance(speed_widget, QDoubleSpinBox)
+        assert isinstance(direction_widget, QComboBox)
+
+        config = self._panel.get_config()
+        assert speed_widget.value() == 6.0
+        assert direction_widget.currentText() == "Opposite side"
+        assert config.treadmill_speed == 6.0
         assert config.direction == "Opposite side"
 
     def test_get_config_returns_compatible_after_jump_switch(self) -> None:

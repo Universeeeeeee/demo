@@ -1,0 +1,536 @@
+{
+  "repetitions": 3,
+  "case_count": 12,
+  "release_sample_requirement_met": true,
+  "hidden_pattern_recall": 0.7878787878787878,
+  "hidden_pattern_precision": 0.29545454545454547,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 27017
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21604
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19423
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21749
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 32632
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23785
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 22014
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23471
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20166
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "invalid_numeric_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "invalid numeric Evidence: eeb68dfb-aba0-5d66-a287-fd806d2b66d8",
+      "elapsed_ms": 20844
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 22973
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "decrease",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21810
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19966
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 31780
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 22183
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21428
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20664
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "transient"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23828
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21943
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21918
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20050
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21437
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "forbidden_claim_language",
+      "error_type": "ReportAnalysisError",
+      "error_message": "forbidden term in claim: 导致",
+      "elapsed_ms": 19169
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 18218
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 19625
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19940
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21723
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17426
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "unknown_question",
+      "error_type": "ReportAnalysisError",
+      "error_message": "unknown question: q_contact_temporal_change",
+      "elapsed_ms": 6140
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 16491
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17201
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 24873
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 17339
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 24142
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21846
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "decrease"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 24839
+    }
+  ]
+}

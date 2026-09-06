@@ -75,6 +75,17 @@ class FootEvent:
     time: float
     ratio: float
     centroid_cm: Optional[float]
+    quality_flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DetectorQualityNotice:
+    """不构成 touch/lift 的检测质量事件。"""
+
+    kind: str
+    time: float
+    cluster_length: int
+    ratio: float
 
 
 # ===================== 检测器（与 cluster_test.py 一致）=====================
@@ -90,6 +101,8 @@ class SingleFootDetector:
         touch_ratio_threshold: float = 0.05,
         lift_ratio_threshold: float = 0.05,
         confirm_samples: int = 10,
+        touch_min_cluster_length: int = 4,
+        touch_max_cluster_length: int = 50,
     ) -> None:
         self.cols = cols
         self.spacing_cm = spacing_cm
@@ -97,6 +110,8 @@ class SingleFootDetector:
         self.touch_ratio_threshold = touch_ratio_threshold
         self.lift_ratio_threshold = lift_ratio_threshold
         self.confirm_samples = confirm_samples
+        self.touch_min_cluster_length = touch_min_cluster_length
+        self.touch_max_cluster_length = touch_max_cluster_length
         self._reset_state()
 
     def process(self, frames: Sequence[LedFrame]) -> List[FootEvent]:
@@ -116,15 +131,44 @@ class SingleFootDetector:
     def reset(self) -> None:
         self._reset_state()
 
+    def begin_resync(self) -> None:
+        """丢弃跨暂停的转换语义，等待稳定帧只建立基线。"""
+        self._state = "resync"
+        self._touch_streak = 0
+        self._lift_streak = 0
+        self._resync_ground_streak = 0
+        self._resync_air_streak = 0
+        self._prev_time = None
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def last_primary_cluster(self) -> Optional[Cluster]:
+        return self._last_primary_cluster
+
+    def pop_quality_notices(self) -> List[DetectorQualityNotice]:
+        notices = list(self._quality_notices)
+        self._quality_notices.clear()
+        return notices
+
     def _reset_state(self) -> None:
         self._state = "air"
         self._touch_streak = 0
         self._lift_streak = 0
         self._prev_ratio = 0.0
         self._prev_time: Optional[float] = None
+        self._last_primary_cluster: Optional[Cluster] = None
+        self._quality_notices: List[DetectorQualityNotice] = []
+        self._oversize_streak = 0
+        self._oversize_notice_emitted = False
+        self._resync_ground_streak = 0
+        self._resync_air_streak = 0
 
     def _process_frame(self, frame: LedFrame) -> List[FootEvent]:
-        cluster = self._extract_primary_cluster(frame.bits)
+        cluster = self._extract_primary_cluster(frame.bits, min_length=1)
+        self._last_primary_cluster = cluster
         ratio = cluster.ratio if cluster else 0.0
         centroid = cluster.centroid_cm if cluster else None
         dt = max(frame.timestamp - (self._prev_time or frame.timestamp), 1e-3)
@@ -132,14 +176,60 @@ class SingleFootDetector:
         self._prev_ratio = ratio
         events: List[FootEvent] = []
 
+        cluster_length = cluster.length if cluster else 0
+        oversized = cluster_length > self.touch_max_cluster_length
+        if oversized:
+            self._oversize_streak += 1
+            if (
+                self._oversize_streak >= self.confirm_samples
+                and not self._oversize_notice_emitted
+            ):
+                self._quality_notices.append(
+                    DetectorQualityNotice(
+                        kind="contact_cluster_above_limit",
+                        time=frame.timestamp,
+                        cluster_length=cluster_length,
+                        ratio=ratio,
+                    )
+                )
+                self._oversize_notice_emitted = True
+        else:
+            self._oversize_streak = 0
+            self._oversize_notice_emitted = False
+
+        if self._state == "resync":
+            ground_condition = (
+                self.touch_min_cluster_length
+                <= cluster_length
+                <= self.touch_max_cluster_length
+            )
+            air_condition = cluster_length < self.touch_min_cluster_length
+            if ground_condition:
+                self._resync_ground_streak += 1
+                self._resync_air_streak = 0
+                if self._resync_ground_streak >= self.confirm_samples:
+                    self._state = "ground"
+                    self._resync_ground_streak = 0
+            elif air_condition:
+                self._resync_air_streak += 1
+                self._resync_ground_streak = 0
+                if self._resync_air_streak >= self.confirm_samples:
+                    self._state = "air"
+                    self._resync_air_streak = 0
+            else:
+                self._resync_ground_streak = 0
+                self._resync_air_streak = 0
+            return events
+
         touch_condition = (
             self._state == "air"
-            and ratio >= self.touch_ratio_threshold
-            and ratio < 0.38
+            and self.touch_min_cluster_length
+            <= cluster_length
+            <= self.touch_max_cluster_length
         )
         lift_condition = (
             self._state == "ground"
-            and (ratio <= self.lift_ratio_threshold or cluster is None)
+            and cluster_length < self.touch_min_cluster_length
         )
 
         if touch_condition:
@@ -161,7 +251,9 @@ class SingleFootDetector:
             self._lift_streak = max(0, self._lift_streak - 1)
         return events
 
-    def _extract_primary_cluster(self, bits: Sequence[int]) -> Optional[Cluster]:
+    def _extract_primary_cluster(
+        self, bits: Sequence[int], min_length: int = 10
+    ) -> Optional[Cluster]:
         active = [idx for idx, val in enumerate(bits) if val]
         if not active:
             return None
@@ -169,7 +261,7 @@ class SingleFootDetector:
         if not clusters:
             return None
         primary_cluster = max(clusters, key=lambda cl: cl.length)
-        if primary_cluster.length < 10:
+        if primary_cluster.length < min_length:
             return None
         return primary_cluster
 

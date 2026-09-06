@@ -14,14 +14,11 @@ from config.treadmill_report import CorrectionSource, RowStatus, TreadmillStepRe
 from engine.modes.treadmill_accumulator import (
     TreadmillAccumulator,
     _PartialRow,
-    belt_speed_cm_s,
     belt_speed_m_s,
     normalize_foot_side,
+    step_length_from_time_cm,
     step_reference_cm,
-    step_length_result,
-    stride_length_result,
 )
-from engine.modes.treadmill_v2 import TreadmillContactSnapshot
 
 
 class TreadmillGaitAccumulator(TreadmillAccumulator):
@@ -35,12 +32,7 @@ class TreadmillGaitAccumulator(TreadmillAccumulator):
         self._last_lift_time_s: float | None = None
 
     def record_touch(
-        self,
-        time_s: float,
-        side: str,
-        heel_cm: float,
-        toe_cm: float,
-        snapshot: TreadmillContactSnapshot | None = None,
+        self, time_s: float, side: str, heel_cm: float, toe_cm: float
     ) -> None:
         """Record a foot-down event without flushing the other active foot."""
         if not self._first_contact_resolved:
@@ -57,35 +49,11 @@ class TreadmillGaitAccumulator(TreadmillAccumulator):
         if self._last_touch_time_s is not None:
             step_time_s = time_s - self._last_touch_time_s
 
-        previous_snapshot = self._last_touch_snapshot
-        previous_same_side = self._last_touch_snapshot_by_side.get(foot_side)
-        gait_cycle_s: float | None = None
-        if previous_same_side is not None:
-            gait_cycle_s = time_s - previous_same_side.time_s
-
         flight_time_s: float | None = None
         if not self._active and self._last_lift_time_s is not None:
             gap_s = time_s - self._last_lift_time_s
             if gap_s > 0:
                 flight_time_s = gap_s
-
-        reference_cm = (
-            snapshot.reference_x_cm
-            if snapshot is not None
-            else step_reference_cm(self._config, heel_cm, toe_cm)
-        )
-        step_result = step_length_result(
-            self._config,
-            previous_snapshot,
-            snapshot,
-            step_time_s,
-        )
-        stride_result = stride_length_result(
-            self._config,
-            previous_same_side,
-            snapshot,
-            gait_cycle_s,
-        )
 
         partial = _PartialRow(
             side=foot_side,
@@ -94,23 +62,11 @@ class TreadmillGaitAccumulator(TreadmillAccumulator):
             toe_cm=toe_cm,
             step_time_s=step_time_s,
             flight_time_s=flight_time_s,
-            step_length_cm=step_result.length_cm,
-            step_reference_cm=reference_cm,
-            gait_cycle_s=gait_cycle_s,
-            snapshot=snapshot,
-            step_length_result=step_result,
-            stride_length_result=stride_result,
-            step_prev_reference_cm=(
-                previous_snapshot.reference_x_cm
-                if previous_snapshot is not None
-                else None
-            ),
+            step_length_cm=step_length_from_time_cm(self._config, step_time_s),
+            step_reference_cm=step_reference_cm(self._config, heel_cm, toe_cm),
         )
         self._active[foot_side] = partial
         self._last_touch_time_s = time_s
-        self._last_touch_snapshot = snapshot
-        if snapshot is not None and foot_side in ("left", "right"):
-            self._last_touch_snapshot_by_side[foot_side] = snapshot
 
     def record_lift(self, time_s: float, side: str) -> None:
         """Record a foot-up event and finalize that foot's active row."""
@@ -185,19 +141,40 @@ class TreadmillGaitAccumulator(TreadmillAccumulator):
         if contact_time_s is not None:
             single_support_s = max(contact_time_s - double_support_s, 0.0)
 
-        speed_m_s = belt_speed_m_s(self._config) if row_status != "no_step" else None
-        distance_cm = speed_m_s * time_s * 100.0 if speed_m_s is not None else None
+        speed_m_s: float | None = None
+        if row_status != "no_step":
+            # Spatial correction: override step_length with belt_distance + drift
+            spatial_cm = self._spatial_correction_cm(
+                partial.step_reference_cm, partial.side
+            )
+            if (
+                partial.step_time_s is not None
+                and partial.step_time_s > 0
+                and partial.step_length_cm is not None
+            ):
+                partial.step_length_cm = (
+                    belt_speed_m_s(self._config) * partial.step_time_s * 100.0
+                    + spatial_cm
+                )
+                speed_m_s = partial.step_length_cm / 100.0 / partial.step_time_s
+            else:
+                speed_m_s = belt_speed_m_s(self._config)
+
+            # Update spatial tracking for next step (valid rows only)
+            if row_status == "valid":
+                self._last_step_reference_cm = partial.step_reference_cm
+                self._last_step_side = partial.side
+
+        distance_cm = (
+            belt_speed_m_s(self._config) * time_s * 100.0
+            if row_status != "no_step" else None
+        )
         cadence_steps_per_s = (
             1.0 / partial.step_time_s
             if partial.step_time_s is not None and partial.step_time_s > 0
             else None
         )
-        stride_length_cm = (
-            partial.stride_length_result.length_cm
-            if partial.stride_length_result is not None
-            else None
-        )
-        length = partial.step_length_result
+        stride_length_cm = None
 
         result = TreadmillStepResult(
             index=self._next_index,
@@ -213,25 +190,9 @@ class TreadmillGaitAccumulator(TreadmillAccumulator):
             contact_time_s=contact_time_s,
             flight_time_s=partial.flight_time_s,
             step_time_s=partial.step_time_s,
-            gait_cycle_s=partial.gait_cycle_s,
             step_length_cm=partial.step_length_cm,
             step_reference_cm=partial.step_reference_cm,
             stride_length_cm=stride_length_cm,
-            belt_speed_cm_s=belt_speed_cm_s(self._config),
-            belt_distance_cm=length.belt_distance_cm if length is not None else None,
-            foot_ref_x_prev_cm=partial.step_prev_reference_cm,
-            foot_ref_x_curr_cm=(
-                partial.snapshot.reference_x_cm
-                if partial.snapshot is not None
-                else partial.step_reference_cm
-            ),
-            device_delta_cm=length.device_delta_cm if length is not None else None,
-            direction_sign=length.direction_sign if length is not None else None,
-            step_length_method=length.method if length is not None else None,
-            foot_ref_source=(
-                partial.snapshot.source if partial.snapshot is not None else None
-            ),
-            length_quality=length.quality if length is not None else None,
             speed_m_s=speed_m_s,
             cadence_steps_per_s=cadence_steps_per_s,
             double_support_s=double_support_s,

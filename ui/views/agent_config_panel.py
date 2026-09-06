@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 import traceback
+from datetime import datetime
 from html import escape
 
 from markdown_it import MarkdownIt
-from qtpy.QtCore import Qt, Signal, QThread, QTimer
+from qtpy.QtCore import Qt, QSignalBlocker, Signal, QThread, QTimer
+from qtpy.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QComboBox, QTextEdit,
-    QFrame, QSizePolicy,
+    QFrame, QScrollArea, QSizePolicy,
 )
 
 from dayu_widgets.label import MLabel
@@ -18,11 +20,11 @@ from dayu_widgets.line_edit import MLineEdit
 from dayu_widgets.push_button import MPushButton
 from dayu_widgets.spin_box import MDoubleSpinBox, MSpinBox
 
-from agent.models import AthleteProfile
-from agent.rule_engine import RuleEngine
+from agent.config.models import AthleteProfile
+from agent.config.rule_engine import RuleEngine
 from config.test_config import AnyTestConfig, config_from_dict
 from data.subject_store import SubjectSearchResult, SubjectStore
-from ui.llm_client import LLMWorkerClient
+from ui.llm_client import AgentWorkerClient
 
 
 log = logging.getLogger(__name__)
@@ -34,8 +36,8 @@ QWidget#AgentConfigPanelRoot {
   background: transparent;
 }
 QFrame#AgentCard {
-  background-color: rgba(32, 37, 48, 0.90);
-  border: 1px solid rgba(95, 105, 125, 0.30);
+  background-color: rgba(32, 37, 48, 0.72);
+  border: none;
   border-radius: 8px;
 }
 QLabel#CardTitle {
@@ -57,12 +59,37 @@ QLabel#FieldLabel {
   background: transparent;
   border: none;
 }
+QLabel#ServiceStatus {
+  color: #9da8b8;
+  background: transparent;
+  border: none;
+  font-size: 10pt;
+}
 QTextEdit {
-  border: 1px solid rgba(105, 115, 135, 0.32);
+  border: none;
   border-radius: 8px;
-  background-color: rgba(31, 36, 47, 0.86);
+  background-color: rgba(17, 24, 34, 0.58);
   color: #e7ebf2;
   padding: 12px;
+}
+QScrollArea#SuggestionConfigScroll,
+QScrollArea#SuggestionConfigScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar:vertical {
+  width: 8px;
+  border: none;
+  background: transparent;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar::handle:vertical {
+  min-height: 28px;
+  border-radius: 4px;
+  background: #3a485a;
+}
+QScrollArea#SuggestionConfigScroll QScrollBar::add-line:vertical,
+QScrollArea#SuggestionConfigScroll QScrollBar::sub-line:vertical {
+  height: 0;
 }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
   min-height: 32px;
@@ -71,6 +98,12 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
   background-color: rgba(43, 48, 60, 0.96);
   color: #e7ebf2;
   padding: 0 8px;
+}
+QComboBox QAbstractItemView {
+  background: #1a2230;
+  color: #e7ebf2;
+  border: 1px solid #354151;
+  selection-background-color: #273446;
 }
 QPushButton {
   min-height: 34px;
@@ -88,6 +121,11 @@ QPushButton#PanelPrimaryButton {
   border-color: #ff850f;
   color: white;
   font-weight: 700;
+}
+QPushButton#PanelPrimaryButton:disabled {
+  background-color: #252d38;
+  border-color: #303a47;
+  color: #768294;
 }
 QPushButton#PromptChip {
   min-height: 30px;
@@ -107,7 +145,7 @@ class _LLMHttpWorker(QThread):
     finished = Signal(object, str)  # (AnyTestConfig | None, reply_text)
     error = Signal(str)
 
-    def __init__(self, client: LLMWorkerClient, message: str, athlete: AthleteProfile,
+    def __init__(self, client: AgentWorkerClient, message: str, athlete: AthleteProfile,
                  request_id: int = 0, agent_mode: str = "jump"):
         super().__init__()
         self._client = client
@@ -147,11 +185,12 @@ class AgentConfigPanel(QWidget):
     """智能配置面板：生成建议配置，确认后交给 SetupView。"""
 
     config_confirmed = Signal(object)  # AnyTestConfig
+    profile_changed = Signal()
 
     def __init__(
         self,
         subject_store: SubjectStore | None = None,
-        llm_client: LLMWorkerClient | None = None,
+        llm_client: AgentWorkerClient | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -167,13 +206,16 @@ class AgentConfigPanel(QWidget):
         self._worker_status_timer = QTimer(self)
         self._worker_status_timer.setInterval(1000)
         self._worker_status_timer.timeout.connect(self._poll_llm_worker)
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._ensure_llm_worker_started)
         self._active_request_id = 0
 
         self._build_ui()
         self._connect_signals()
         self.set_subject_result(None)
         self._sync_mode_state()
-        QTimer.singleShot(0, self._ensure_llm_worker_started)
+        self._startup_timer.start(0)
 
     # ------------------------------------------------------------------
     # Public API
@@ -183,32 +225,55 @@ class AgentConfigPanel(QWidget):
         self._active_request_id += 1
         self._clear_pending_config()
         self._history = []
-        if result is None or self._subject_store is None:
+        if result is None:
             self._fill_athlete_fields(
                 AthleteProfile(age=30, weight=70, height=170, level="intermediate")
             )
+            self._age_spin.setEnabled(True)
             self._profile_note.setText("未选择受试者，请填写基础信息。仅用于本次配置。")
             self._history_label.setText("历史记录：暂无")
             return
 
-        try:
-            self._history = self._subject_store.get_recent_history(result.subject.id)
-            profile = self._subject_store.subject_to_athlete_profile(
-                result.subject, self._history,
-            )
-        except Exception:
-            log.exception("Failed to load subject profile for agent panel")
-            profile = AthleteProfile(age=30, weight=70, height=170)
+        if self._subject_store is None:
             self._history = []
+            profile = AthleteProfile(
+                age=max(0, datetime.now().year - result.subject.birth_year),
+                weight=float(result.subject.weight_kg or 0.0),
+                height=float(result.subject.height_cm or 0.0),
+                level=result.subject.level,
+                focus_side=result.subject.focus_side,
+            )
+        else:
+            try:
+                self._history = self._subject_store.get_recent_history(result.subject.id)
+                profile = self._subject_store.subject_to_athlete_profile(
+                    result.subject, self._history,
+                )
+            except Exception:
+                log.exception("Failed to load subject profile for agent panel")
+                profile = AthleteProfile(age=30, weight=70, height=170)
+                self._history = []
 
         self._fill_athlete_fields(profile)
-        self._profile_note.setText("已从受试者档案自动填入，可修改。仅用于本次配置。")
+        self._age_spin.setEnabled(False)
+        self._profile_note.setText("已从受试者档案自动填入。年龄仅可在运动员管理中修改。")
         count_text = f"最近 {len(self._history)} 次已加载" if self._history else "暂无"
         self._history_label.setText(f"历史记录：{count_text}")
 
     def current_test_type(self) -> str:
         """Return the test type currently selected in the assistant panel."""
         return self._test_type_combo.currentText()
+
+    def current_profile_snapshot(self) -> dict:
+        """Return the editable, session-scoped athlete values."""
+        profile = self._current_athlete_profile()
+        return {
+            "age": profile.age,
+            "weight_kg": float(profile.weight),
+            "height_cm": float(profile.height),
+            "level": profile.level,
+            "focus_side": profile.focus_side,
+        }
 
     # ------------------------------------------------------------------
     # UI
@@ -218,11 +283,14 @@ class AgentConfigPanel(QWidget):
         self.setObjectName("AgentConfigPanelRoot")
         self.setStyleSheet(AGENT_PANEL_QSS)
 
-        main_layout = QHBoxLayout(self)
+        main_layout = QGridLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(12)
+        self._main_layout = main_layout
+        self._compact_layout: bool | None = None
 
         profile_card = self._create_card()
+        self._profile_card = profile_card
         profile_layout = QVBoxLayout(profile_card)
         profile_layout.setContentsMargins(16, 14, 16, 14)
         profile_layout.setSpacing(10)
@@ -270,34 +338,33 @@ class AgentConfigPanel(QWidget):
         self._history_label.setStyleSheet("color: #aaaaaa;")
         profile_layout.addWidget(self._history_label)
         profile_layout.addStretch()
-        profile_card.setMinimumWidth(260)
-        profile_card.setMaximumWidth(320)
-        main_layout.addWidget(profile_card)
 
         chat_card = self._create_card()
+        self._chat_card = chat_card
         chat_layout = QVBoxLayout(chat_card)
         chat_layout.setContentsMargins(16, 14, 16, 14)
         chat_layout.setSpacing(10)
 
         header = QHBoxLayout()
-        header.addWidget(self._card_title("配置助手"))
+        self._assistant_title = self._card_title("配置助手")
+        self._assistant_title.setMinimumWidth(
+            self._assistant_title.sizeHint().width()
+        )
+        header.addWidget(self._assistant_title)
         header.addStretch()
         self._test_type_combo = QComboBox()
         self._test_type_combo.addItem("Jump Test", "jump")
         self._test_type_combo.addItem("Treadmill Gait Test", "treadmill_gait")
         self._test_type_combo.addItem("Treadmill Running Test", "treadmill_running")
+        self._test_type_combo.setMinimumWidth(150)
         self._test_type_combo.setMaximumWidth(190)
         header.addWidget(self._test_type_combo)
-        self._mode_combo = QComboBox()
-        self._mode_combo.addItems(["在线 LLM", "离线规则"])
-        self._mode_combo.setMaximumWidth(125)
-        header.addWidget(self._mode_combo)
-        self._status_label = MLabel("")
-        self._status_label.setStyleSheet(
-            "color: #d9e0ec; background: transparent; border: none;"
-        )
-        header.addWidget(self._status_label)
         chat_layout.addLayout(header)
+
+        self._status_label = MLabel("")
+        self._status_label.setObjectName("ServiceStatus")
+        self._status_label.setWordWrap(True)
+        chat_layout.addWidget(self._status_label)
 
         self._chat_display = QTextEdit()
         self._chat_display.setReadOnly(True)
@@ -311,13 +378,17 @@ class AgentConfigPanel(QWidget):
         )
         chat_layout.addWidget(self._chat_display, 1)
 
-        chip_layout = QHBoxLayout()
-        for text in ("入门用户 3 次纵跳", "普通用户 5 次纵跳", "按 1 分钟测试", "轻量测试"):
+        chip_layout = QGridLayout()
+        chip_layout.setHorizontalSpacing(8)
+        chip_layout.setVerticalSpacing(8)
+        for index, text in enumerate(
+            ("入门 3 次", "常规 5 次", "1 分钟测试", "轻量测试")
+        ):
             chip = MPushButton(text)
             chip.setObjectName("PromptChip")
             chip.clicked.connect(lambda _, value=text: self._chat_input.setText(value))
-            chip_layout.addWidget(chip)
-        chip_layout.addStretch()
+            row, column = divmod(index, 2)
+            chip_layout.addWidget(chip, row, column)
         chat_layout.addLayout(chip_layout)
 
         input_layout = QHBoxLayout()
@@ -326,15 +397,13 @@ class AgentConfigPanel(QWidget):
         self._send_btn = MPushButton("发送").primary()
         self._send_btn.setObjectName("PanelPrimaryButton")
         self._reset_btn = MPushButton("重置对话")
-        self._offline_btn = MPushButton("生成离线推荐")
         input_layout.addWidget(self._chat_input, 1)
         input_layout.addWidget(self._send_btn)
         input_layout.addWidget(self._reset_btn)
-        input_layout.addWidget(self._offline_btn)
         chat_layout.addLayout(input_layout)
-        main_layout.addWidget(chat_card, 1)
 
         suggestion_card = self._create_card()
+        self._suggestion_card = suggestion_card
         suggestion_layout = QVBoxLayout(suggestion_card)
         suggestion_layout.setContentsMargins(16, 14, 16, 14)
         suggestion_layout.setSpacing(10)
@@ -346,37 +415,97 @@ class AgentConfigPanel(QWidget):
         self._suggestion_text.setStyleSheet(
             "font-size: 10.5pt; color: #d0d6e2; background: transparent; border: none;"
         )
-        suggestion_layout.addWidget(self._suggestion_text, 1)
+        suggestion_scroll = QScrollArea()
+        suggestion_scroll.setObjectName("SuggestionConfigScroll")
+        suggestion_scroll.setWidgetResizable(True)
+        suggestion_scroll.setFrameShape(QFrame.NoFrame)
+        suggestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        suggestion_scroll.setWidget(self._suggestion_text)
+        suggestion_layout.addWidget(suggestion_scroll, 1)
 
         self._confirm_btn = MPushButton("确认使用此配置").primary()
         self._confirm_btn.setObjectName("PanelPrimaryButton")
         self._confirm_btn.setMinimumHeight(42)
         self._confirm_btn.setEnabled(False)
         suggestion_layout.addWidget(self._confirm_btn)
-        suggestion_card.setMinimumWidth(300)
-        suggestion_card.setMaximumWidth(360)
-        main_layout.addWidget(suggestion_card)
+        self._apply_responsive_layout(self.width() < 820)
 
     def _connect_signals(self) -> None:
         self._test_type_combo.currentIndexChanged.connect(self._clear_pending_config)
         self._test_type_combo.currentIndexChanged.connect(lambda *_: self._sync_mode_state())
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._send_btn.clicked.connect(self._on_send_message)
         self._chat_input.returnPressed.connect(self._on_send_message)
         self._reset_btn.clicked.connect(self._on_reset_chat)
-        self._offline_btn.clicked.connect(self._on_offline_generate)
         self._confirm_btn.clicked.connect(self._on_confirm_clicked)
         self._age_spin.valueChanged.connect(self._clear_pending_config)
-        self._weight_spin.valueChanged.connect(self._clear_pending_config)
-        self._height_spin.valueChanged.connect(self._clear_pending_config)
-        self._level_combo.currentIndexChanged.connect(self._clear_pending_config)
-        self._focus_combo.currentIndexChanged.connect(self._clear_pending_config)
+        self._weight_spin.valueChanged.connect(self._on_profile_input_changed)
+        self._height_spin.valueChanged.connect(self._on_profile_input_changed)
+        self._level_combo.currentIndexChanged.connect(self._on_profile_input_changed)
+        self._focus_combo.currentIndexChanged.connect(self._on_profile_input_changed)
 
     def _create_card(self) -> QFrame:
         frame = QFrame()
         frame.setObjectName("AgentCard")
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         return frame
+
+    def resizeEvent(self, event) -> None:
+        self._apply_responsive_layout(event.size().width() < 820)
+        super().resizeEvent(event)
+
+    def _apply_responsive_layout(self, compact: bool) -> None:
+        if self._compact_layout is compact:
+            return
+        self._compact_layout = compact
+
+        for card in (
+            self._profile_card,
+            self._chat_card,
+            self._suggestion_card,
+        ):
+            self._main_layout.removeWidget(card)
+
+        if compact:
+            self._profile_card.setMinimumWidth(220)
+            self._profile_card.setMaximumWidth(250)
+            self._profile_card.setSizePolicy(
+                QSizePolicy.Preferred, QSizePolicy.Expanding
+            )
+            self._suggestion_card.setMinimumWidth(0)
+            self._suggestion_card.setMaximumWidth(16777215)
+            self._suggestion_card.setSizePolicy(
+                QSizePolicy.Expanding, QSizePolicy.Expanding
+            )
+
+            self._main_layout.addWidget(self._profile_card, 0, 0, 2, 1)
+            self._main_layout.addWidget(self._chat_card, 0, 1)
+            self._main_layout.addWidget(self._suggestion_card, 1, 1)
+            self._main_layout.setColumnStretch(0, 0)
+            self._main_layout.setColumnStretch(1, 1)
+            self._main_layout.setColumnStretch(2, 0)
+            self._main_layout.setRowStretch(0, 2)
+            self._main_layout.setRowStretch(1, 1)
+            return
+
+        self._profile_card.setMinimumWidth(220)
+        self._profile_card.setMaximumWidth(230)
+        self._profile_card.setSizePolicy(
+            QSizePolicy.Preferred, QSizePolicy.Expanding
+        )
+        self._suggestion_card.setMinimumWidth(250)
+        self._suggestion_card.setMaximumWidth(270)
+        self._suggestion_card.setSizePolicy(
+            QSizePolicy.Preferred, QSizePolicy.Expanding
+        )
+
+        self._main_layout.addWidget(self._profile_card, 0, 0)
+        self._main_layout.addWidget(self._chat_card, 0, 1)
+        self._main_layout.addWidget(self._suggestion_card, 0, 2)
+        self._main_layout.setColumnStretch(0, 0)
+        self._main_layout.setColumnStretch(1, 1)
+        self._main_layout.setColumnStretch(2, 0)
+        self._main_layout.setRowStretch(0, 1)
+        self._main_layout.setRowStretch(1, 0)
 
     @staticmethod
     def _card_title(text: str) -> MLabel:
@@ -397,19 +526,47 @@ class AgentConfigPanel(QWidget):
         layout.addWidget(label_widget, row, 0)
         layout.addWidget(widget, row, 1)
 
+    def _append_chat_entry(self, label: str, body_html: str) -> None:
+        document = self._chat_display.document()
+        scrollbar = self._chat_display.verticalScrollBar()
+        follow_new_entries = scrollbar.value() == scrollbar.maximum()
+        cursor = QTextCursor(document)
+        cursor.movePosition(QTextCursor.End)
+        if not document.isEmpty():
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+        cursor.insertHtml(f"<b>{escape(label)}:</b> ")
+        cursor.insertHtml(body_html)
+        if follow_new_entries:
+            scrollbar.setValue(scrollbar.maximum())
+
     # ------------------------------------------------------------------
     # State helpers
     # ------------------------------------------------------------------
 
     def _fill_athlete_fields(self, profile: AthleteProfile) -> None:
-        self._age_spin.setValue(profile.age)
-        self._weight_spin.setValue(float(profile.weight or 0.0))
-        self._height_spin.setValue(float(profile.height or 0.0))
-        index = self._level_combo.findText(profile.level)
-        if index >= 0:
-            self._level_combo.setCurrentIndex(index)
-        focus_index = self._focus_combo.findData(profile.focus_side)
-        self._focus_combo.setCurrentIndex(max(focus_index, 0))
+        widgets = (
+            self._age_spin,
+            self._weight_spin,
+            self._height_spin,
+            self._level_combo,
+            self._focus_combo,
+        )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        try:
+            self._age_spin.setValue(profile.age)
+            self._weight_spin.setValue(float(profile.weight or 0.0))
+            self._height_spin.setValue(float(profile.height or 0.0))
+            index = self._level_combo.findText(profile.level)
+            if index >= 0:
+                self._level_combo.setCurrentIndex(index)
+            focus_index = self._focus_combo.findData(profile.focus_side)
+            self._focus_combo.setCurrentIndex(max(focus_index, 0))
+        finally:
+            del blockers
+
+    def _on_profile_input_changed(self, *_args) -> None:
+        self._clear_pending_config()
+        self.profile_changed.emit()
 
     def _current_athlete_profile(self) -> AthleteProfile:
         return AthleteProfile(
@@ -432,30 +589,27 @@ class AgentConfigPanel(QWidget):
         self._suggestion_text.setText("运动档案已变化，请重新生成建议配置。")
 
     def _sync_mode_state(self) -> None:
-        online = self._mode_combo.currentIndex() == 0
         busy = self._llm_worker is not None and self._llm_worker.isRunning()
         if self._llm_client is not None and not self._llm_client.is_running:
             self._worker_ready = False
-        self._offline_btn.setEnabled(not online and not busy)
-        self._chat_input.setEnabled(online and not busy and self._worker_ready)
-        self._send_btn.setEnabled(online and not busy and self._worker_ready)
-        self._reset_btn.setEnabled(not busy and (not online or self._worker_ready))
-        if online:
-            if self._llm_client is None:
-                self._status_label.setText("智能服务未初始化。")
-            elif self._worker_error:
-                self._status_label.setText(f"智能模块初始化失败：{self._worker_error}")
-            elif not self._worker_ready:
-                self._status_label.setText("在线 LLM · 初始化中")
-            elif busy:
-                self._status_label.setText("在线 LLM · 生成中")
-            else:
-                self._status_label.setText("在线 LLM · 已就绪")
+        self._chat_input.setEnabled(not busy and self._worker_ready)
+        self._send_btn.setEnabled(not busy and self._worker_ready)
+        self._reset_btn.setEnabled(not busy and self._worker_ready)
+        if self._llm_client is None:
+            status = "智能服务不可用，请使用手动配置。"
+        elif self._worker_error:
+            status = f"智能服务初始化失败：{self._worker_error}"
+        elif busy:
+            status = "正在生成建议配置…"
+        elif not self._worker_ready:
+            status = "智能服务初始化中…"
         else:
-            self._status_label.setText("离线规则 · 可用")
+            status = ""
+        self._status_label.setText(status)
+        self._status_label.setVisible(bool(status))
 
     def _ensure_llm_worker_started(self) -> None:
-        if self._mode_combo.currentIndex() != 0 or self._llm_client is None:
+        if self._llm_client is None:
             self._sync_mode_state()
             return
         if self._worker_ready:
@@ -493,12 +647,6 @@ class AgentConfigPanel(QWidget):
     # Slots
     # ------------------------------------------------------------------
 
-    def _on_mode_changed(self, _index: int) -> None:
-        if self._mode_combo.currentIndex() == 0:
-            self._ensure_llm_worker_started()
-            return
-        self._sync_mode_state()
-
     def _on_send_message(self) -> None:
         if self._llm_worker is not None and self._llm_worker.isRunning():
             return
@@ -516,7 +664,7 @@ class AgentConfigPanel(QWidget):
         self._worker_ready = True
         self._worker_error = None
 
-        self._chat_display.append(f"<b>你:</b> {message}")
+        self._append_chat_entry("你", escape(message))
 
         self._chat_input.clear()
         self._active_request_id += 1
@@ -530,7 +678,8 @@ class AgentConfigPanel(QWidget):
         self._llm_worker.error.connect(self._on_llm_error)
         self._chat_input.setEnabled(False)
         self._send_btn.setEnabled(False)
-        self._status_label.setText("正在生成建议...")
+        self._status_label.setText("正在生成建议配置…")
+        self._status_label.show()
         self._llm_worker.start()
 
     def _on_llm_finished(self, config, reply: str) -> None:
@@ -542,11 +691,10 @@ class AgentConfigPanel(QWidget):
             if worker is not None:
                 worker.deleteLater()
             return
-        self._chat_display.append("<b>AI:</b> ")
-        self._chat_display.insertHtml(_md_to_html(reply))
+        self._append_chat_entry("AI", _md_to_html(reply))
 
         if config is not None:
-            self._set_pending_config(config, "在线 LLM 已生成建议配置。")
+            self._set_pending_config(config, "智能服务已生成建议配置。")
 
         self._llm_worker = None
         self._sync_mode_state()
@@ -574,14 +722,15 @@ class AgentConfigPanel(QWidget):
         self._chat_display.clear()
 
     def _on_offline_generate(self) -> None:
-        if self._current_agent_mode() != "jump":
-            self._chat_display.append(
-                "<b>AI:</b> 离线规则暂不支持跑步机模式，请使用在线 LLM 或手动配置。"
-            )
-            return
+        test_types = {
+            "jump": "Jump Test",
+            "treadmill_gait": "Treadmill Gait Test",
+            "treadmill_running": "Treadmill Running Test",
+        }
         try:
             config = self._rule_engine.configure(
-                "Jump Test", self._current_athlete_profile(),
+                test_types[self._current_agent_mode()],
+                self._current_athlete_profile(),
             )
         except Exception as e:
             self._chat_display.append(f"<b>错误:</b> 离线推荐失败：{e}")
@@ -609,12 +758,10 @@ class AgentConfigPanel(QWidget):
         stop_labels = {
             "Status change": "按跳跃次数结束",
             "End of Time": f"按测试时长结束（{config.test_length}）",
-            "External impulse": "手动控制结束",
             "Software command": "软件指令停止",
         }
         start_labels = {
             "Status change": "踩上设备后开始",
-            "External impulse": "手动开始",
         }
         position_labels = {
             "Inside area": "设备内",

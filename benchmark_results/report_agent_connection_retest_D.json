@@ -1,0 +1,51 @@
+{
+  "repetitions": 1,
+  "case_count": 3,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 1.0,
+  "hidden_pattern_precision": 0.4,
+  "runs": [
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20244
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 22756
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20294
+    }
+  ]
+}

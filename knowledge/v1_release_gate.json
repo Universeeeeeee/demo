@@ -1,0 +1,11 @@
+{
+  "gate_version": "sports-rag-v1/1.2",
+  "retrieval_baseline_passed": true,
+  "metadata_gates_passed": true,
+  "automated_generator_e2e_passed": true,
+  "human_groundedness_review_passed": true,
+  "enabled": true,
+  "review_artifact": "release_artifacts/sports-rag-v1-groundedness.json",
+  "release_fingerprint": "f8902556dc8e9cc44f95eee7d01ad323d11c97b012f232c14a2ee6430b07cab0",
+  "note": "V1 production RAG enabled after the frozen DeepSeek Groundedness review found zero unsupported recommendations."
+}

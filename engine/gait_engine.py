@@ -49,6 +49,11 @@ try:
 except ImportError:
     from contact_tracker import ContactBasedGaitTracker, GaitStepEvent
 
+try:
+    from .footprint_visualization import FootprintTimelineRecorder
+except ImportError:
+    from footprint_visualization import FootprintTimelineRecorder
+
 # 模式处理器
 try:
     from .modes.jump_processor import JumpProcessor
@@ -81,10 +86,12 @@ class GaitEngine(QObject):
 
     # === 高级事件信号 (跨线程发往 UI，低频: 每秒 2~5 次) ===
     hop_event = Signal(object)            # FootEvent, 纵跳模式的触地/腾空
+    jump_quality_notice = Signal(dict)    # 纵跳非计数质量提示
     gait_step_event = Signal(object)      # GaitStepEvent, 步态模式的触地/离地
 
     # === 步态模式周期性状态快照 (节流: ~10Hz，供 UI 面板刷新) ===
     gait_status_snapshot = Signal(dict)   # 当前状态快照 dict
+    footprint_visual_frame = Signal(dict)  # canonical footprint visual frame
 
     # === 自动停止信号 ===
     test_finished = Signal(str)           # 结束原因: "jump_count_reached" | "time_up"
@@ -115,6 +122,7 @@ class GaitEngine(QObject):
 
         self._start_time: Optional[float] = None
         self._paused = False
+        self._pause_started_at: Optional[float] = None
         self._finished = False  # 防止重复发射 test_finished
 
         # ---- 处理器 ----
@@ -123,6 +131,7 @@ class GaitEngine(QObject):
         # ---- 步态模式内部状态 (仍直接持有，尚无步态 processor) ----
         self._cluster_tracker: Optional[ClusterTracker] = None
         self._contact_tracker: Optional[ContactBasedGaitTracker] = None
+        self._visual_recorder = FootprintTimelineRecorder()
 
         # 步态统计
         self.touch_count = 0
@@ -138,6 +147,7 @@ class GaitEngine(QObject):
 
         # ---- End of Time 倒计时 ----
         self._stop_timer: Optional[QTimer] = None
+        self._stop_timer_remaining_ms = 0
 
         # 初始化步态检测器
         self._init_gait_detectors()
@@ -174,7 +184,16 @@ class GaitEngine(QObject):
     def set_start_time(self, t: float):
         """设置时间基准（由 UI 在点击'开始分析'时调用），并启动倒计时。"""
         self._start_time = t
+        self._pause_started_at = None
+        self._stop_timer_remaining_ms = 0
         self._start_timer()
+
+    @Slot(float)
+    def begin_session(self, t: float):
+        """Enable processing and establish the time base immediately before capture."""
+        self._paused = False
+        self._pause_started_at = None
+        self.set_start_time(t)
 
     def set_mode(self, mode: str):
         """切换模式并重置内部状态"""
@@ -208,12 +227,48 @@ class GaitEngine(QObject):
 
     @paused.setter
     def paused(self, val: bool):
-        self._paused = val
-        # 暂停时重置检测器的连续帧计数器，避免恢复后读到过时的 streak
-        if val and self._processor is not None:
-            if hasattr(self._processor, '_detector') and self._processor._detector is not None:
-                self._processor._detector._touch_streak = 0
-                self._processor._detector._lift_streak = 0
+        if val:
+            self.pause_session()
+        else:
+            self.resume_session()
+
+    @Slot()
+    def pause_session(self):
+        """Freeze processing, the time limit, and the relative event clock."""
+        if self._paused:
+            return
+        self._paused = True
+        if self._start_time is not None:
+            self._pause_started_at = time.perf_counter()
+        if self._stop_timer is not None and self._stop_timer.isActive():
+            self._stop_timer_remaining_ms = max(
+                self._stop_timer.remainingTime(), 1
+            )
+            self._stop_timer.stop()
+
+        if self._processor is not None:
+            pause_boundary = getattr(self._processor, "pause_boundary", None)
+            if callable(pause_boundary):
+                pause_boundary()
+
+    @Slot()
+    def resume_session(self):
+        """Resume from the frozen remaining time without a timestamp jump."""
+        if not self._paused:
+            return
+        if self._pause_started_at is not None and self._start_time is not None:
+            paused_duration = max(
+                time.perf_counter() - self._pause_started_at, 0.0
+            )
+            self._start_time += paused_duration
+        self._pause_started_at = None
+        self._paused = False
+        if (
+            self._stop_timer is not None
+            and self._stop_timer_remaining_ms > 0
+            and not self._finished
+        ):
+            self._stop_timer.start(self._stop_timer_remaining_ms)
 
     def _init_gait_detectors(self):
         """初始化步态模式检测器（仅在非纵跳模式时）。"""
@@ -230,6 +285,9 @@ class GaitEngine(QObject):
         self.touch_count = 0
         self.lift_count = 0
         self._finished = False
+        self._paused = False
+        self._pause_started_at = None
+        self._start_time = None
 
         # 处理器（重新选择，丢弃旧实例）
         self._processor = self._select_processor()
@@ -244,11 +302,13 @@ class GaitEngine(QObject):
 
         # 快照节流
         self._last_snapshot_ts = 0.0
+        self._visual_recorder.reset()
 
         # 停止计时器
         if self._stop_timer is not None:
             self._stop_timer.stop()
             self._stop_timer = None
+        self._stop_timer_remaining_ms = 0
 
         # 重新初始化步态检测器
         self._init_gait_detectors()
@@ -303,10 +363,29 @@ class GaitEngine(QObject):
             if isinstance(self._processor, JumpProcessor):
                 for ev in events:
                     self.hop_event.emit(ev)
+                for notice in self._processor.pop_pending_quality_notices():
+                    self.jump_quality_notice.emit(
+                        {
+                            "kind": notice.kind,
+                            "time_s": notice.time_s,
+                            "cluster_length": notice.cluster_length,
+                            "ratio": notice.ratio,
+                        }
+                    )
                 self._check_stop_condition()
             else:
                 for ev in events:
                     self.gait_step_event.emit(ev)
+                if hasattr(self._processor, "pop_visual_frames"):
+                    for frame in self._processor.pop_visual_frames():
+                        self.footprint_visual_frame.emit(frame.to_dict())
+                if (
+                    hasattr(self._processor, "make_status_snapshot")
+                    and timestamp - self._last_snapshot_ts >= self._snapshot_interval
+                ):
+                    snapshot = self._processor.make_status_snapshot(rel_time)
+                    self.gait_status_snapshot.emit(snapshot)
+                    self._last_snapshot_ts = timestamp
         else:
             self._process_gait(contact_bits, rel_time, timestamp)
 
@@ -329,6 +408,14 @@ class GaitEngine(QObject):
         # 发射高级事件 (低频: 仅在 touch/lift 发生时)
         for ev in events:
             self.gait_step_event.emit(ev)  # → UI
+
+        frame = self._visual_recorder.record_if_due(
+            rel_time,
+            bits,
+            self._contact_tracker,
+        )
+        if frame is not None:
+            self.footprint_visual_frame.emit(frame.to_dict())
 
         # 周期性状态快照 (节流 ~10Hz)
         if abs_time - self._last_snapshot_ts >= self._snapshot_interval:
@@ -444,6 +531,7 @@ class GaitEngine(QObject):
             finish_reason=reason,
             export_frames=export_frames,
             export_timestamps=export_timestamps,
+            visual_timeline=self._visual_recorder.frames,
         )
 
     # ---------------------------------------------------------------
@@ -451,20 +539,19 @@ class GaitEngine(QObject):
     # ---------------------------------------------------------------
 
     def _check_stop_condition(self):
-        """在每次 touch 事件后检查是否满足自动结束条件。"""
+        """在已结算统计后检查是否满足自动结束条件。"""
         if self._finished:
             return
 
         cfg = self._config
 
         if cfg.stop_type == "Status change" and cfg.number_of_jumps:
-            # 从 processor 获取 lift_count
             if self._processor is not None:
-                lift_count = self._processor.lift_count
-                if lift_count >= cfg.number_of_jumps:
+                completed_jumps = getattr(self._processor, "completed_jumps", 0)
+                if completed_jumps >= cfg.number_of_jumps:
                     self._finished = True
                     log.info("自动停止: 已完成 %d/%d 次跳跃",
-                             lift_count, cfg.number_of_jumps)
+                             completed_jumps, cfg.number_of_jumps)
                     self.test_finished.emit("jump_count_reached")
 
     def _start_timer(self):
@@ -481,13 +568,15 @@ class GaitEngine(QObject):
         self._stop_timer = QTimer(self)
         self._stop_timer.setSingleShot(True)
         self._stop_timer.timeout.connect(self._on_timer_expired)
-        self._stop_timer.start(seconds * 1000)
+        self._stop_timer_remaining_ms = seconds * 1000
+        self._stop_timer.start(self._stop_timer_remaining_ms)
         log.info("倒计时启动: %d 秒", seconds)
 
     def _on_timer_expired(self):
         """End of Time 倒计时到期。"""
         if self._finished:
             return
+        self._stop_timer_remaining_ms = 0
         self._finished = True
         log.info("自动停止: 测试时间到")
         self.test_finished.emit("time_up")

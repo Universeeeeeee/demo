@@ -143,3 +143,23 @@ class TreadmillRunningConfig(TreadmillBaseConfig):
         data = super().to_dict()
         data["test_type"] = self.test_type
         return data
+
+
+def default_treadmill_gait_config() -> TreadmillGaitConfig:
+    """Create the schema-aligned default treadmill gait configuration."""
+    return TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.0,
+        direction="Opposite side",
+    )
+
+
+def default_treadmill_running_config() -> TreadmillRunningConfig:
+    """Create the schema-aligned default treadmill running configuration."""
+    return TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=6.0,
+        direction="Opposite side",
+    )

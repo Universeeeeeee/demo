@@ -73,6 +73,7 @@ class ContactState:
     velocity: Optional[float] = None
     contact_duration: Optional[float] = None
     matched_this_frame: bool = False
+    is_initial_baseline: bool = False
 
 
 @dataclass
@@ -107,6 +108,7 @@ class ContactBasedGaitTracker:
         min_cluster_length: float = 12.0,
         max_centroid_jitter: float = 2.5,
         jitter_window: int = 4,
+        ignore_initial_contacts: bool = False,
     ):
         self._contact_confirm_frames = contact_confirm_frames
         self._contact_lift_miss_frames = contact_lift_miss_frames
@@ -116,6 +118,7 @@ class ContactBasedGaitTracker:
         self._min_cluster_length = min_cluster_length
         self._max_centroid_jitter = max_centroid_jitter
         self._jitter_window = jitter_window
+        self._ignore_initial_contacts = ignore_initial_contacts
         self.reset()
 
     def reset(self):
@@ -123,6 +126,7 @@ class ContactBasedGaitTracker:
         # Armed 机制
         self._gait_armed = False
         self._no_contact_stable_frames = 0
+        self._startup_frame_seen = False
 
         # Contact 管理
         self._next_contact_id = 1
@@ -166,6 +170,7 @@ class ContactBasedGaitTracker:
         self.touch_extra_history: List[dict] = []
         self._last_touch_velocity_for_acc: Optional[float] = None
         self._last_touch_time_for_acc: Optional[float] = None
+        self._last_touch_foot_label: Optional[str] = None
 
     # ---------------------------------------------------------------
     #  公共 API
@@ -186,13 +191,17 @@ class ContactBasedGaitTracker:
         """
         events: List[GaitStepEvent] = []
 
-        # Step 1. Armed 机制：系统需经历无接触静态期才算就绪
-        if not active_tracks:
-            self._no_contact_stable_frames += 1
-        else:
-            self._no_contact_stable_frames = 0
-        if self._no_contact_stable_frames >= self._arm_frames:
+        # Step 1. Armed 机制：跑步机可忽略启动帧已有接触；
+        # 其他模式仍需经历无接触静态期才算就绪。
+        if self._ignore_initial_contacts:
             self._gait_armed = True
+        else:
+            if not active_tracks:
+                self._no_contact_stable_frames += 1
+            else:
+                self._no_contact_stable_frames = 0
+            if self._no_contact_stable_frames >= self._arm_frames:
+                self._gait_armed = True
 
         # Step 2. 标记所有 contact 为本帧未匹配
         for c in self.active_contacts.values():
@@ -202,6 +211,11 @@ class ContactBasedGaitTracker:
         for track in active_tracks:
             contact = self._find_or_create_contact(track, timestamp)
             self._update_contact_seen(contact, track, timestamp)
+
+        if self._ignore_initial_contacts and not self._startup_frame_seen:
+            for contact in self.active_contacts.values():
+                contact.is_initial_baseline = True
+        self._startup_frame_seen = True
 
         # Step 4. 未匹配的 active contact 增加 miss_count
         for contact in self.active_contacts.values():
@@ -284,6 +298,7 @@ class ContactBasedGaitTracker:
             c
             for c in self.active_contacts.values()
             if c.status == "candidate"
+            and not c.is_initial_baseline
             and c.seen_count >= self._contact_confirm_frames
         ]
         candidates.sort(key=lambda c: c.first_seen_time)
@@ -338,6 +353,8 @@ class ContactBasedGaitTracker:
         foot_label, confidence = self._infer_foot_label(contact)
         contact.foot_label = foot_label
         contact.label_confidence = confidence
+        if foot_label in ("A", "B") and confidence >= 0.7:
+            self._last_touch_foot_label = foot_label
 
         # 计算步长和步速
         if (
@@ -436,7 +453,10 @@ class ContactBasedGaitTracker:
             other = labeled[0]
             new_label = "B" if other.foot_label == "A" else "A"
             return new_label, 0.8
-        return None, 0.0
+        if self._last_touch_foot_label in ("A", "B"):
+            new_label = "B" if self._last_touch_foot_label == "A" else "A"
+            return new_label, 0.7
+        return "A", 0.7
 
     def _finalize_lost_contacts(
         self, timestamp: float

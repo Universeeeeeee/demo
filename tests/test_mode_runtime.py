@@ -21,6 +21,41 @@ def test_gait_engine_uses_jump_processor_for_jump_config():
     assert engine.processor_name == "jump"
 
 
+def test_gait_engine_pause_freezes_time_limit_and_relative_clock(
+    qtbot, monkeypatch
+):
+    import engine.gait_engine as gait_engine_module
+
+    config = default_jump_config()
+    config.stop_type = "End of Time"
+    config.test_length = "01:00"
+    engine = GaitEngine(config=config)
+    clock = iter((105.0, 110.0))
+    monkeypatch.setattr(
+        gait_engine_module.time,
+        "perf_counter",
+        lambda: next(clock),
+    )
+
+    engine.set_start_time(100.0)
+    assert engine._stop_timer is not None
+    assert engine._stop_timer.isActive()
+
+    engine.paused = True
+    remaining_ms = engine._stop_timer_remaining_ms
+    assert remaining_ms > 0
+    assert not engine._stop_timer.isActive()
+
+    engine.paused = False
+    assert engine._start_time == pytest.approx(105.0)
+    assert engine._stop_timer.isActive()
+    assert engine._stop_timer.remainingTime() <= remaining_ms
+    engine.process_raw_frame([0] * 96, 111.0)
+    assert engine.export_timestamps[-1] == pytest.approx(6.0)
+
+    engine._stop_timer.stop()
+
+
 def test_gait_engine_uses_treadmill_processor_for_treadmill_running_config():
     config = TreadmillRunningConfig(
         stop_type="Software command",
@@ -55,6 +90,53 @@ def test_treadmill_events_route_to_gait_step_event_not_hop_event(qtbot):
     assert hop_spy.count() == 0, f"hop_event emitted {hop_spy.count()} times for treadmill"
     # gait_step_event may or may not fire depending on whether a step event was generated
     # The key invariant: treadmill events must NOT go to hop_event
+
+
+def test_gait_engine_emits_treadmill_visual_frame(qtbot):
+    from qtpy.QtTest import QSignalSpy
+
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=5.0,
+        direction="Interface side",
+    )
+    engine = GaitEngine(config=config)
+    spy = QSignalSpy(engine.footprint_visual_frame)
+
+    engine.process_raw_frame([0] * 96, 0.001)
+
+    assert spy.count() == 1
+    payload = spy.at(0)[0]
+    assert payload["timestamp_s"] == 0.0
+    assert payload["contact_bits"] == [0] * 96
+
+
+def test_gait_engine_emits_treadmill_status_snapshot():
+    config = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+        treadmill_speed=3.6,
+        direction="Interface side",
+    )
+    engine = GaitEngine(config=config)
+    snapshots = []
+    engine.gait_status_snapshot.connect(lambda payload: snapshots.append(payload))
+
+    engine.process_raw_frame([0] * 96, 0.001)
+    engine.process_raw_frame([0] * 96, 0.200)
+
+    assert snapshots
+    assert snapshots[-1]["velocity_count"] == 1
+    assert snapshots[-1]["velocity_sum"] == pytest.approx(100.0)
+
+
+def test_session_controller_exposes_footprint_visual_signal(qtbot):
+    from ui.session_controller import SessionController
+
+    controller = SessionController()
+
+    assert hasattr(controller, "footprint_visual_frame")
 
 
 def test_jump_events_route_to_hop_event(qtbot):

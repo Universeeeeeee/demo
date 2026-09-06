@@ -1,11 +1,14 @@
 qtpy
-PySide2
+PySide6
 openpyxl
 numpy
 pyqtgraph
 opencv-python
 pydantic
-pydantic-ai
+pydantic-ai-slim[openai]
 python-dotenv
 pytest
 requests
+mediapipe
+fastembed==0.8.0
+pypdf==6.16.1

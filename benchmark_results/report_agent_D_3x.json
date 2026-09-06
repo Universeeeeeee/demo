@@ -1,0 +1,416 @@
+{
+  "repetitions": 3,
+  "case_count": 12,
+  "release_sample_requirement_met": true,
+  "hidden_pattern_recall": 0.30303030303030304,
+  "hidden_pattern_precision": 0.29411764705882354,
+  "runs": [
+    {
+      "case_id": "temporal_increase",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "descriptive_claim_without_fact",
+      "error_type": "ReportAnalysisError",
+      "error_message": "descriptive claims require a Fact",
+      "elapsed_ms": 19510
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 19356
+    },
+    {
+      "case_id": "temporal_increase",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "increase"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19452
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20918
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 21472
+    },
+    {
+      "case_id": "side_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21126
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "unbound_numeric_literal",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Claim text contains an unbound numeric literal",
+      "elapsed_ms": 21555
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 18688
+    },
+    {
+      "case_id": "left_late_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19835
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 20685
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "decrease",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19186
+    },
+    {
+      "case_id": "cross_metric",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 16720
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 23494
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 21088
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19594
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "unsupported_predicate",
+      "error_type": "ReportAnalysisError",
+      "error_message": "predicate is not supported: co_change",
+      "elapsed_ms": 17878
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 19407
+    },
+    {
+      "case_id": "single_outlier",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "numeric_placeholder_mismatch",
+      "error_type": "ReportAnalysisError",
+      "error_message": "numeric placeholders must exactly match NumericBindings",
+      "elapsed_ms": 25818
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "remains_after_exclusion"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "increase"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19495
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 24327
+    },
+    {
+      "case_id": "robust_after_exclusion",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 19335
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 19412
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 2,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 23814
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17796
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 27065
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "descriptive_claim_without_fact",
+      "error_type": "ReportAnalysisError",
+      "error_message": "descriptive claims require a Fact",
+      "elapsed_ms": 20844
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 16842
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "unbound_numeric_literal",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Claim text contains an unbound numeric literal",
+      "elapsed_ms": 24725
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "descriptive_claim_without_fact",
+      "error_type": "ReportAnalysisError",
+      "error_message": "descriptive claims require a Fact",
+      "elapsed_ms": 20356
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 3,
+      "status": "validated",
+      "expected_predicates": [],
+      "discovered_predicates": [],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 17768
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 20286
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "unbound_numeric_literal",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Claim text contains an unbound numeric literal",
+      "elapsed_ms": 19883
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 18885
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "derived_claim_without_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "derived claims require Evidence, Tool Run and Predicate",
+      "elapsed_ms": 22093
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 2,
+      "status": "failed",
+      "error_code": "descriptive_claim_without_fact",
+      "error_type": "ReportAnalysisError",
+      "error_message": "descriptive claims require a Fact",
+      "elapsed_ms": 22642
+    },
+    {
+      "case_id": "replan_required",
+      "repetition": 3,
+      "status": "failed",
+      "error_code": "synthesis_requires_multiple_evidence",
+      "error_type": "ReportAnalysisError",
+      "error_message": "synthesis claims require at least two Evidence items",
+      "elapsed_ms": 20919
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "benchmark_version": "v1-support/1.0",
+  "corpus_version": "sports-rag-corpus/1.4",
+  "enabled_scenarios": [
+    "jump:measurement_review",
+    "jump:general_training_focus",
+    "walk:measurement_review",
+    "run:measurement_review",
+    "run:general_training_focus"
+  ],
+  "scenario_count": 5,
+  "evidence_coverage": 1.0,
+  "metadata_leakage": 0,
+  "forbidden_population_leakage": 0,
+  "passed": true
+}

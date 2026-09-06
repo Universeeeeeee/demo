@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 _module_dir = Path(__file__).resolve().parent
@@ -75,6 +76,16 @@ TARGET_FPS = 100
 PREVIEW_FPS = 30
 PREVIEW_WIDTH = 960
 PREVIEW_HEIGHT = 540
+
+
+@dataclass(frozen=True)
+class TinySeFrameTiming:
+    """DirectShow sample metadata plus host callback and decode times."""
+
+    frame_index: int
+    sample_time_s: float
+    callback_time_s: float
+    decoded_at_s: float
 
 
 def mjpg_to_avi(
@@ -284,8 +295,11 @@ class TinySeCameraControl:
 
 class TinySeCameraCapture(QObject):
     frame_ready = Signal(np.ndarray)
+    analysis_frame_ready = Signal(object, float)
+    analysis_frame_timed_ready = Signal(object, object)
     stats_updated = Signal(float, float)
     recording_finished = Signal(str)
+    started = Signal()
     error = Signal(str)
 
     def __init__(
@@ -313,6 +327,8 @@ class TinySeCameraCapture(QObject):
         self._record_lock = threading.Lock()
         self._record_finalizing = False
         self._record_finalize_thread: threading.Thread | None = None
+        self._record_preserve_raw = False
+        self._last_record_stats = None
         self._mirror = True  # 软件镜像
         self._preview_enabled = True
 
@@ -336,7 +352,7 @@ class TinySeCameraCapture(QObject):
                 width=self._width,
                 height=self._height,
                 fps=self._fps,
-                on_frame=self._on_mjpg_frame,
+                on_timed_frame=self._on_mjpg_frame,
             )
             _log_timing(f"dshow.create={time.perf_counter() - start:.3f}s")
             return True
@@ -364,6 +380,7 @@ class TinySeCameraCapture(QObject):
             capture.start()
             _log_timing(f"dshow.start={time.perf_counter() - start:.3f}s")
             self._running = True
+            self.started.emit()
             _log_timing(f"capture.worker.ready={time.perf_counter() - total_start:.3f}s")
             while self._running:
                 stats = capture.stats()
@@ -385,13 +402,18 @@ class TinySeCameraCapture(QObject):
             self._capture.stop()
             _log_timing(f"dshow.stop={time.perf_counter() - start:.3f}s")
 
-    def start_record(self) -> str | None:
+    def start_record(
+        self,
+        stem: str | Path | None = None,
+        *,
+        preserve_raw: bool = False,
+    ) -> str | None:
         with self._record_lock:
             if self._capture is None or self._recording or self._record_finalizing:
                 return None
             capture = self._capture
         try:
-            mjpg_path, csv_path = capture.start_record()
+            mjpg_path, csv_path = capture.start_record(stem)
         except Exception as exc:
             self.error.emit(str(exc))
             return None
@@ -399,6 +421,7 @@ class TinySeCameraCapture(QObject):
             self._recording = True
             self._record_path = mjpg_path
             self._csv_path = csv_path
+            self._record_preserve_raw = preserve_raw
             self._record_start = time.perf_counter()
         return str(mjpg_path)
 
@@ -417,16 +440,18 @@ class TinySeCameraCapture(QObject):
                 capture = self._capture
                 mjpg_path = self._record_path
                 csv_path = self._csv_path
+                preserve_raw = self._record_preserve_raw
                 self._recording = False
                 self._record_path = None
                 self._csv_path = None
+                self._record_preserve_raw = False
                 self._record_finalizing = True
                 if wait:
                     thread_to_join = None
                 else:
                     thread = threading.Thread(
                         target=self._finalize_recording,
-                        args=(capture, mjpg_path, csv_path),
+                        args=(capture, mjpg_path, csv_path, preserve_raw),
                         name="TinySeRecordFinalize",
                         daemon=True,
                     )
@@ -439,7 +464,7 @@ class TinySeCameraCapture(QObject):
                 thread_to_join.join()
             return True
 
-        self._finalize_recording(capture, mjpg_path, csv_path)
+        self._finalize_recording(capture, mjpg_path, csv_path, preserve_raw)
         return True
 
     def _finalize_recording(
@@ -447,14 +472,15 @@ class TinySeCameraCapture(QObject):
         capture: TinySeDShowCapture,
         mjpg_path: Path | None,
         csv_path: Path | None,
+        preserve_raw: bool = False,
     ) -> None:
         try:
             try:
-                capture.stop_record()
+                self._last_record_stats = capture.stop_record()
             except Exception as exc:
                 self.error.emit(str(exc))
 
-            if mjpg_path is not None and csv_path is not None:
+            if not preserve_raw and mjpg_path is not None and csv_path is not None:
                 try:
                     avi_path = mjpg_to_avi(mjpg_path, csv_path)
                     self.recording_finished.emit(str(avi_path))
@@ -467,6 +493,10 @@ class TinySeCameraCapture(QObject):
                 if self._record_finalize_thread is threading.current_thread():
                     self._record_finalize_thread = None
 
+    @property
+    def last_record_stats(self):
+        return self._last_record_stats
+
     def set_mirror(self, on: bool):
         self._mirror = on
 
@@ -475,19 +505,33 @@ class TinySeCameraCapture(QObject):
         if enabled:
             self._last_preview_time = 0.0
 
-    def _on_mjpg_frame(self, data: bytes, _frame_index: int, _sample_time: float) -> None:
+    def _on_mjpg_frame(
+        self,
+        data: bytes,
+        frame_index: int,
+        sample_time: float,
+        callback_time_s: float,
+    ) -> None:
         if not self._preview_enabled:
             return
 
-        now = time.perf_counter()
-        if now - self._last_preview_time < self._preview_interval:
+        if callback_time_s - self._last_preview_time < self._preview_interval:
             return
-        self._last_preview_time = now
+        self._last_preview_time = callback_time_s
 
         encoded = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if frame is None:
             return
+        decoded_at_s = time.perf_counter()
+        timing = TinySeFrameTiming(
+            frame_index=frame_index,
+            sample_time_s=sample_time,
+            callback_time_s=callback_time_s,
+            decoded_at_s=decoded_at_s,
+        )
+        self.analysis_frame_timed_ready.emit(frame, timing)
+        self.analysis_frame_ready.emit(frame, decoded_at_s)
         if self._mirror:
             frame = cv2.flip(frame, 1)
         self.frame_ready.emit(frame)
@@ -624,8 +668,7 @@ class TinySeCameraWidget(QWidget):
         ctl.set_exposure_compensation(int(self._cmb_exp.currentData() or 0))
         ctl.set_anti_flicker(int(self._cmb_flicker.currentData() or 0))
         ctl.set_wdr(int(self._cmb_wdr.currentData() or 0))
-        ai_sub = int(self._cmb_ai.currentData() or 0)
-        ctl.set_ai_mode(ai_sub)
+        ctl.set_ai_off()
         _log_timing(f"control.apply={time.perf_counter() - start:.3f}s")
 
     def _ensure_control(self, apply_settings: bool = True) -> bool:

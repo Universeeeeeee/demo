@@ -79,9 +79,9 @@ def test_onset_mode_uses_raw_small_cluster_for_time_and_valid_cluster_for_confir
     )
     frames = [
         _frame(1, 0.00, _bits(20, 21)),  # raw onset, invalid for confirm
-        _frame(2, 0.01, _bits(20, 24)),  # still invalid for confirm
-        _frame(3, 0.02, _bits(20, 31)),  # valid confirm frame 1
-        _frame(4, 0.03, _bits(20, 31)),  # valid confirm frame 2
+        _frame(2, 0.01, _bits(20, 22)),  # still invalid for confirm
+        _frame(3, 0.02, _bits(20, 23)),  # valid confirm frame 1
+        _frame(4, 0.03, _bits(20, 23)),  # valid confirm frame 2
         _frame(5, 0.04, _bits(20, 21)),  # lift onset, still invalid/low
         _frame(6, 0.05, _bits()),
     ]
@@ -94,7 +94,7 @@ def test_onset_mode_uses_raw_small_cluster_for_time_and_valid_cluster_for_confir
     assert result.events[0].onset_time == 0.00
     assert result.traces[0].raw_primary_cluster_length == 2
     assert result.traces[0].valid_primary_cluster_length == 0
-    assert result.traces[2].valid_primary_cluster_length == 12
+    assert result.traces[2].valid_primary_cluster_length == 4
 
 
 def test_associated_mode_backfills_touch_to_same_raw_track_first_seen() -> None:
@@ -102,9 +102,9 @@ def test_associated_mode_backfills_touch_to_same_raw_track_first_seen() -> None:
     frames = [
         _frame(1, 0.00, _bits(20, 22)),  # first observable contact, not 1 LED
         _frame(2, 0.01, _bits()),  # short drop-out should not break the track
-        _frame(3, 0.02, _bits(20, 25)),
-        _frame(4, 0.03, _bits(20, 31)),  # confirm frame 1
-        _frame(5, 0.04, _bits(20, 31)),  # confirm frame 2
+        _frame(3, 0.02, _bits(20, 22)),
+        _frame(4, 0.03, _bits(20, 23)),  # confirm frame 1
+        _frame(5, 0.04, _bits(20, 23)),  # confirm frame 2
     ]
 
     result = run_detector(frames, "associated", config)
@@ -134,13 +134,24 @@ def test_associated_mode_does_not_attach_far_isolated_small_noise_to_touch() -> 
     assert result.events[0].time == 0.02
 
 
+def test_current_mode_does_not_oscillate_on_sustained_four_led_contact() -> None:
+    frames = [
+        _frame(index, index * 0.001, _bits(20, 23))
+        for index in range(20)
+    ]
+
+    result = run_detector(frames, "current", TimingConfig(confirm_samples=2))
+
+    assert [event.kind for event in result.events] == ["touch"]
+
+
 def test_lift_associated_mode_backfills_last_seen_without_upgrading_confirmation() -> None:
     config = TimingConfig(confirm_samples=2)
     frames = [
         _frame(1, 0.00, _bits(20, 31)),
         _frame(2, 0.01, _bits(20, 31)),  # touch confirm
         _frame(3, 0.02, _bits()),  # lift condition frame 1
-        _frame(4, 0.03, _bits(20, 24)),  # still cluster=None; lift confirms here
+        _frame(4, 0.03, _bits(20, 22)),  # below 4 LEDs; lift confirms here
         _frame(5, 0.04, _bits(20, 22)),  # too late to be bridged into lift
         _frame(6, 0.05, _bits()),
     ]

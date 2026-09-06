@@ -1,0 +1,84 @@
+{
+  "repetitions": 1,
+  "case_count": 6,
+  "release_sample_requirement_met": false,
+  "hidden_pattern_recall": 0.6,
+  "hidden_pattern_precision": 0.3333333333333333,
+  "runs": [
+    {
+      "case_id": "cross_metric",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "co_change"
+      ],
+      "discovered_predicates": [
+        "co_change",
+        "increase",
+        "remains_after_exclusion",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 37552
+    },
+    {
+      "case_id": "right_stable_left_change",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "concentrated_on_side"
+      ],
+      "discovered_predicates": [
+        "concentrated_on_side",
+        "increase",
+        "transient"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 19392
+    },
+    {
+      "case_id": "reversal_after_exclusion",
+      "repetition": 1,
+      "status": "validated",
+      "expected_predicates": [
+        "comparison_supported"
+      ],
+      "discovered_predicates": [
+        "comparison_supported",
+        "decrease"
+      ],
+      "cycle_count": 1,
+      "replan_count": 0,
+      "elapsed_ms": 40158
+    },
+    {
+      "case_id": "same_mean_dispersion",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "analysis_failed",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Connection error.",
+      "elapsed_ms": 144151
+    },
+    {
+      "case_id": "insufficient_sample",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "analysis_failed",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Connection error.",
+      "elapsed_ms": 11243
+    },
+    {
+      "case_id": "quality_limited",
+      "repetition": 1,
+      "status": "failed",
+      "error_code": "analysis_failed",
+      "error_type": "ReportAnalysisError",
+      "error_message": "Connection error.",
+      "elapsed_ms": 11132
+    }
+  ]
+}
