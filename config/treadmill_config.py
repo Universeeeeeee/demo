@@ -58,8 +58,8 @@ class TreadmillBaseConfig:
     """跑步机通用配置字段。"""
     stop_type: TreadmillStopType
     test_length: str | None
-    treadmill_speed: float
-    direction: Direction
+    treadmill_speed: float = 3.0
+    direction: Direction = "Opposite side"
     min_contact_time: int = 60
     min_flight_time: int = 0
     max_flight_time: int = 0

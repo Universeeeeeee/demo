@@ -62,6 +62,10 @@ class ContactState:
     centroid_history: List[float] = field(default_factory=list)
     cluster_length_at_touch: Optional[float] = None
     latest_cluster_length: Optional[float] = None
+    cluster_start_cm_at_touch: Optional[float] = None
+    cluster_end_cm_at_touch: Optional[float] = None
+    latest_cluster_start_cm: Optional[float] = None
+    latest_cluster_end_cm: Optional[float] = None
     foot_label: Optional[str] = None  # "A" / "B" / None
     label_confidence: float = 0.0
     step_length: Optional[float] = None
@@ -264,12 +268,25 @@ class ContactBasedGaitTracker:
     ):
         centroid = float(track["centroid_cm"])
         length_cm = float(track.get("length_cm", 0.0))
+        cluster_start_cm = track.get("cluster_start_cm")
+        cluster_end_cm = track.get("cluster_end_cm")
         contact.matched_this_frame = True
         contact.last_seen_time = timestamp
         contact.seen_count += 1
         contact.miss_count = 0
         contact.latest_centroid = centroid
         contact.latest_cluster_length = length_cm
+        contact.latest_cluster_start_cm = (
+            float(cluster_start_cm) if cluster_start_cm is not None else None
+        )
+        contact.latest_cluster_end_cm = (
+            float(cluster_end_cm) if cluster_end_cm is not None else None
+        )
+        if contact.seen_count == 1:
+            contact.centroid_at_touch = centroid
+            contact.cluster_length_at_touch = length_cm
+            contact.cluster_start_cm_at_touch = contact.latest_cluster_start_cm
+            contact.cluster_end_cm_at_touch = contact.latest_cluster_end_cm
         contact.centroid_history.append(centroid)
 
     def _confirm_new_contacts(self, timestamp: float) -> List[GaitStepEvent]:
@@ -310,8 +327,14 @@ class ContactBasedGaitTracker:
 
             contact.status = "confirmed"
             contact.touch_time = contact.first_seen_time
-            contact.centroid_at_touch = contact.latest_centroid
-            contact.cluster_length_at_touch = contact.latest_cluster_length
+            if contact.centroid_at_touch is None:
+                contact.centroid_at_touch = contact.latest_centroid
+            if contact.cluster_length_at_touch is None:
+                contact.cluster_length_at_touch = contact.latest_cluster_length
+            if contact.cluster_start_cm_at_touch is None:
+                contact.cluster_start_cm_at_touch = contact.latest_cluster_start_cm
+            if contact.cluster_end_cm_at_touch is None:
+                contact.cluster_end_cm_at_touch = contact.latest_cluster_end_cm
 
             self._handle_touch(contact)
 

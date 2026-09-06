@@ -47,6 +47,22 @@ def test_treadmill_running_config_uses_gap_not_min_step_length():
     assert "min_step_length" not in cfg.to_dict()
 
 
+def test_treadmill_configs_default_to_three_kmh_and_opposite_side():
+    gait = TreadmillGaitConfig(
+        stop_type="Software command",
+        test_length=None,
+    )
+    running = TreadmillRunningConfig(
+        stop_type="Software command",
+        test_length=None,
+    )
+
+    assert gait.treadmill_speed == 3.0
+    assert gait.direction == "Opposite side"
+    assert running.treadmill_speed == 3.0
+    assert running.direction == "Opposite side"
+
+
 def test_treadmill_speed_range_is_validated():
     with pytest.raises(ValueError, match="treadmill_speed"):
         TreadmillRunningConfig(
@@ -111,6 +127,17 @@ def test_treadmill_gait_schema_has_min_step_length_not_min_gap():
     assert "min_step_length" in names
     assert "automatic_data_filter" in names
     assert "min_gap_between_feet" not in names
+
+
+def test_treadmill_schema_defaults_to_three_kmh_and_opposite_side():
+    schema = get_schema()
+    speed = schema.get_param_def("treadmill_speed")
+    direction = schema.get_param_def("direction")
+
+    assert speed is not None
+    assert speed.default == 3.0
+    assert direction is not None
+    assert direction.default == "Opposite side"
 
 
 def test_treadmill_running_schema_has_min_gap_not_automatic_filter():
